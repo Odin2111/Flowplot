@@ -1,0 +1,23 @@
+[package]
+name = "fieldplot"
+version = "0.1.0"
+edition = "2021"
+description = "CFD post-processing library: Tecplot-like data model and format readers"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["cfd", "tecplot", "vtk", "mesh", "post-processing"]
+categories = ["science", "parsing"]
+
+[[bin]]
+name = "fieldplot"
+path = "src/bin/fieldplot.rs"
+
+[dependencies]
+thiserror = "2"
+
+[dev-dependencies]
+
+[features]
+default = []
+# Optional CGNS via system libcgns (requires lib/headers installed).
+cgns = []
