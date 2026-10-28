@@ -146,12 +146,51 @@ impl Zone {
     }
 }
 
+/// Tecplot SolutionTime / StrandID / AUXDATA (VisIt/Silo-like) for one zone.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ZoneMeta {
+    pub solution_time: Option<f64>,
+    pub strand_id: Option<i32>,
+    pub aux: Vec<(String, String)>,
+}
+
+impl ZoneMeta {
+    pub fn cycle(&self) -> Option<i64> {
+        for (k, v) in &self.aux {
+            if k.eq_ignore_ascii_case("cycle") || k.eq_ignore_ascii_case("ncycle") {
+                if let Ok(n) = v.trim().parse::<i64>() {
+                    return Some(n);
+                }
+            }
+        }
+        None
+    }
+
+    pub fn time_value(&self) -> Option<f64> {
+        if let Some(t) = self.solution_time {
+            return Some(t);
+        }
+        for (k, v) in &self.aux {
+            if k.eq_ignore_ascii_case("time") || k.eq_ignore_ascii_case("solutiontime") {
+                if let Ok(t) = v.trim().parse::<f64>() {
+                    return Some(t);
+                }
+            }
+        }
+        None
+    }
+}
+
 /// Full loaded file: shared variable names and one or more zones.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Dataset {
     pub title: Option<String>,
     pub variables: Vec<String>,
     pub zones: Vec<Zone>,
+    /// File-level AUXDATA / Silo-like metadata (DATASETAUXDATA).
+    pub aux: Vec<(String, String)>,
+    /// Parallel to [`Dataset::zones`] when present (readers pad as they load).
+    pub zone_meta: Vec<ZoneMeta>,
 }
 
 impl Dataset {
@@ -160,11 +199,28 @@ impl Dataset {
             title: None,
             variables: Vec::new(),
             zones: Vec::new(),
+            aux: Vec::new(),
+            zone_meta: Vec::new(),
         }
     }
 
     pub fn zone_count(&self) -> usize {
         self.zones.len()
+    }
+
+    pub fn meta(&self, zone: usize) -> ZoneMeta {
+        self.zone_meta.get(zone).cloned().unwrap_or_default()
+    }
+
+    pub fn cycle(&self) -> Option<i64> {
+        for (k, v) in &self.aux {
+            if k.eq_ignore_ascii_case("cycle") || k.eq_ignore_ascii_case("ncycle") {
+                if let Ok(n) = v.trim().parse::<i64>() {
+                    return Some(n);
+                }
+            }
+        }
+        self.zone_meta.first().and_then(|m| m.cycle())
     }
 }
 

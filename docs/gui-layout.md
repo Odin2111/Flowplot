@@ -8,7 +8,7 @@ Native **tkinter** shell under `gui/flowplot_gui.py`. The viewport previews PNGs
 |--------|----------|
 | Top | Wordmark, menus **File / Plot / Style / Agents / Help**, tool strip **Open · Redraw · Export PNG** |
 | Left | **Plot** panel: plot type (2D/3D Cartesian…), **Show Zone Layers** (Mesh / Contour / Shade / Vector / Edge / Scatter), **Show Derived Objects** (Pathlines), contour variable combo from `flowplot info` |
-| Center | Viewport — Mesh PNG by default; Contour / Pathlines when those layers are on |
+| Center | Viewport — Mesh PNG by default; Contour / Pathlines when those layers are on. **Drag** warps the last settled frame (no CLI); **settle** runs preview then full fill |
 | Right | Nondim scales **U_ref, Lx, Ly, Lz, T_ref** → CLI flags, plus a short log |
 
 ## Defaults (match Tecplot)

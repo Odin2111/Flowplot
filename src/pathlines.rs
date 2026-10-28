@@ -6,7 +6,8 @@
 use crate::contour::{draw_frame, draw_line, world_to_pixel, ContourImage, PlotStyle};
 use crate::dataset::Dataset;
 use crate::error::{Error, Result};
-use crate::field::{extract_scalar_grid, find_var, Grid2D, PlaneSpec};
+use crate::field::{extract_scalar_grid_view, find_var, Grid2D, PlaneSpec};
+use crate::view::ViewSpec;
 
 /// Seed and integration controls.
 #[derive(Debug, Clone)]
@@ -16,6 +17,7 @@ pub struct PathlineOptions {
     pub w_var: Option<String>,
     pub zone: usize,
     pub plane: PlaneSpec,
+    pub view: ViewSpec,
     pub seeds: Vec<[f64; 2]>,
     pub max_steps: usize,
     pub step_size: f64,
@@ -31,6 +33,7 @@ impl Default for PathlineOptions {
             w_var: None,
             zone: 0,
             plane: PlaneSpec::Auto,
+            view: ViewSpec::Auto,
             seeds: Vec::new(),
             max_steps: 200,
             step_size: 0.02,
@@ -91,9 +94,9 @@ pub fn trace_pathlines(ds: &Dataset, opts: &PathlineOptions) -> Result<Vec<Pathl
         first_var(ds, &["W", "Vz", "VZ", "VelocityZ"]).and_then(|name| find_var(ds, &name).ok())
     };
 
-    let base = extract_scalar_grid(ds, opts.zone, u_idx, opts.plane)?;
+    let base = extract_scalar_grid_view(ds, opts.zone, u_idx, opts.plane, opts.view)?;
     let u_field = base.values.clone();
-    let v_grid = extract_scalar_grid(ds, opts.zone, v_idx, opts.plane)?;
+    let v_grid = extract_scalar_grid_view(ds, opts.zone, v_idx, opts.plane, opts.view)?;
     if v_grid.ni != base.ni || v_grid.nj != base.nj {
         return Err(Error::plot("U/V grids disagree after plane extract"));
     }
@@ -229,7 +232,7 @@ pub fn render_pathlines_png_styled(
     style: PlotStyle,
 ) -> Result<ContourImage> {
     let u_idx = find_var(ds, &opts.u_var)?;
-    let grid = extract_scalar_grid(ds, opts.zone, u_idx, opts.plane)?;
+    let grid = extract_scalar_grid_view(ds, opts.zone, u_idx, opts.plane, opts.view)?;
     let bg = match style {
         PlotStyle::Jfm => [255u8, 255, 255, 255],
         PlotStyle::Default => [245u8, 245, 245, 255],
@@ -312,6 +315,7 @@ mod tests {
                     },
                 ],
             }],
+            ..Default::default()
         }
     }
 

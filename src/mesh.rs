@@ -3,18 +3,23 @@
 //! Default Tecplot-like first view: show the mesh with **equal aspect**
 //! (no stretch), Contour off. Uses ordered IJ / IJK plane extraction.
 
+use crate::annotate::{draw_annotations, AnnotationInfo};
 use crate::contour::{
     draw_frame, draw_line, put_pixel, write_png, ContourImage, PlotStyle,
 };
 use crate::dataset::Dataset;
 use crate::error::{Error, Result};
-use crate::field::{extract_scalar_grid, find_var, guess_coord_vars, Grid2D, PlaneSpec};
+use crate::field::{
+    extract_scalar_grid_view, find_var, guess_coord_vars, Grid2D, PlaneSpec,
+};
+use crate::view::ViewSpec;
 
 /// Options for a mesh (wireframe) PNG.
 #[derive(Debug, Clone)]
 pub struct MeshOptions {
     pub zone: usize,
     pub plane: PlaneSpec,
+    pub view: ViewSpec,
     pub width: u32,
     pub height: u32,
     pub style: PlotStyle,
@@ -24,6 +29,9 @@ pub struct MeshOptions {
     pub bg_rgba: [u8; 4],
     /// Margin in pixels around the fitted domain.
     pub margin: u32,
+    /// VisIt-like title / time / zone overlay (default on).
+    pub annotate: bool,
+    pub path_hint: Option<String>,
 }
 
 /// Default mesh wireframe color (green).
@@ -34,12 +42,15 @@ impl Default for MeshOptions {
         Self {
             zone: 0,
             plane: PlaneSpec::Auto,
+            view: ViewSpec::Auto,
             width: 800,
             height: 600,
             style: PlotStyle::Default,
             line_rgba: DEFAULT_MESH_RGBA,
             bg_rgba: [255, 255, 255, 255],
             margin: 24,
+            annotate: true,
+            path_hint: None,
         }
     }
 }
@@ -148,6 +159,16 @@ impl AspectMap {
 
 /// Extract coordinate grid for mesh drawing (values unused; prefer X if present).
 pub fn extract_mesh_grid(ds: &Dataset, zone: usize, plane: PlaneSpec) -> Result<Grid2D> {
+    extract_mesh_grid_view(ds, zone, plane, ViewSpec::Auto)
+}
+
+/// Extract coordinate grid and project with `view`.
+pub fn extract_mesh_grid_view(
+    ds: &Dataset,
+    zone: usize,
+    plane: PlaneSpec,
+    view: ViewSpec,
+) -> Result<Grid2D> {
     let (x_i, _y_i, _) = guess_coord_vars(ds);
     let var_idx = x_i.unwrap_or(0);
     if ds.variables.is_empty() {
@@ -160,7 +181,7 @@ pub fn extract_mesh_grid(ds: &Dataset, zone: usize, plane: PlaneSpec) -> Result<
         0
     };
     let _ = find_var(ds, &ds.variables[idx])?;
-    extract_scalar_grid(ds, zone, idx, plane)
+    extract_scalar_grid_view(ds, zone, idx, plane, view)
 }
 
 /// Render a wireframe mesh PNG with undistorted (equal) aspect.
@@ -168,7 +189,7 @@ pub fn render_mesh(ds: &Dataset, opts: &MeshOptions) -> Result<ContourImage> {
     if opts.width == 0 || opts.height == 0 {
         return Err(Error::plot("mesh width/height must be > 0"));
     }
-    let grid = extract_mesh_grid(ds, opts.zone, opts.plane)?;
+    let grid = extract_mesh_grid_view(ds, opts.zone, opts.plane, opts.view)?;
     if grid.ni < 1 || grid.nj < 1 {
         return Err(Error::plot("mesh grid is empty"));
     }
@@ -201,6 +222,17 @@ pub fn render_mesh(ds: &Dataset, opts: &MeshOptions) -> Result<ContourImage> {
 
     if opts.style.draw_frame() {
         draw_frame(&mut img, opts.style.frame_rgba(), opts.style.frame_thickness());
+    }
+    if opts.annotate {
+        let mut info =
+            AnnotationInfo::from_dataset(ds, opts.zone, None, opts.path_hint.as_deref());
+        info.colorbar = false;
+        info.view = Some(opts.view.label());
+        info.plane = Some(match opts.plane {
+            PlaneSpec::Auto => "auto".into(),
+            PlaneSpec::Index { axis, index } => format!("{axis}={index}"),
+        });
+        draw_annotations(&mut img, &info);
     }
     Ok(img)
 }
@@ -323,6 +355,7 @@ mod tests {
                     },
                 ],
             }],
+            ..Default::default()
         }
     }
 

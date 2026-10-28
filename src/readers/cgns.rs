@@ -389,6 +389,7 @@ mod ffi {
                     topology: Topology::Ordered(dims),
                     fields,
                 });
+                dataset.zone_meta.push(Default::default());
             }
 
             if dataset.zones.is_empty() {

@@ -10,11 +10,13 @@ Show Derived Objects order (Tecplot’s “Streamtraces” → Flowplot “Pathl
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -80,6 +82,7 @@ class FlowplotGui(tk.Tk):
         self.last_png: Path | None = None
         self.variables: list[str] = []
         self.effectively_2d: bool = True
+        self.zone_ordered: dict[str, int] | None = None
         self.flowplot = find_flowplot_bin()
         self.status_var = tk.StringVar(value=self._status_idle())
         self.var_name = tk.StringVar(value="")
@@ -97,6 +100,29 @@ class FlowplotGui(tk.Tk):
         self.layer_scatter = tk.BooleanVar(value=False)
         self.layer_pathlines = tk.BooleanVar(value=False)
 
+        # Cut / track plane + Tecplot-like view orientation.
+        self.plane_axis = tk.StringVar(value="auto")
+        self.plane_index = tk.IntVar(value=0)
+        self.view_mode = tk.StringVar(value="auto")  # auto|+x|-x|+y|-y|+z|-z|free
+        self.azimuth_deg = 0.0
+        self.elevation_deg = 90.0
+        self._drag_last: tuple[int, int] | None = None
+        self._dragging = False
+        self._redraw_after: str | None = None
+        self._fullres_after: str | None = None
+        self._settle_after: str | None = None
+        self._cli_proc: subprocess.Popen[str] | None = None
+        self._render_cache: dict[str, Path] = {}
+        self._render_gen = 0
+        # Tecplot-like display-list: last settled frame + angles for cheap drag warp.
+        self._settle_image = None  # PIL.Image.Image | None
+        self._settle_az = 0.0
+        self._settle_el = 90.0
+        self._settle_plane: tuple[str, int] | None = None
+        self._warp_photo = None
+        self._in_redraw = False
+        self._settle_running = False
+
         self.scale_vars = {
             "U_ref": tk.StringVar(value=""),
             "Lx": tk.StringVar(value=""),
@@ -111,6 +137,7 @@ class FlowplotGui(tk.Tk):
         self._build_chrome()
         self._build_body()
         self._build_status()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _status_idle(self) -> str:
         if self.flowplot:
@@ -293,9 +320,20 @@ class FlowplotGui(tk.Tk):
             bg=VIEWPORT_BG,
             highlightthickness=1,
             highlightbackground="#9aa3ab",
+            cursor="fleur",
         )
         self.viewport.pack(fill=tk.BOTH, expand=True)
         self.viewport.bind("<Configure>", self._on_viewport_configure)
+        self.viewport.bind("<ButtonPress-1>", self._on_view_press)
+        self.viewport.bind("<B1-Motion>", self._on_view_drag)
+        self.viewport.bind("<ButtonRelease-1>", self._on_view_release)
+        tip = ttk.Label(
+            view_wrap,
+            text="Drag = cheap last-frame warp · settle = preview then full · Cut/Track sets plane",
+            font=("Helvetica", 8),
+            foreground=MUTED,
+        )
+        tip.pack(anchor="w", pady=(4, 0))
 
         # Right nondim column
         right = ttk.Frame(body, style="Panel.TFrame", width=200)
@@ -394,13 +432,85 @@ class FlowplotGui(tk.Tk):
         self.var_combo.pack(anchor="w", padx=12, pady=(2, 8))
         self.var_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_var_changed())
 
+        # Cut / track plane (I/J/K index).
+        plane_box = ttk.LabelFrame(parent, text="Cut / Track plane", padding=(8, 6))
+        plane_box.pack(fill=tk.X, padx=10, pady=(0, 8))
+        axis_row = ttk.Frame(plane_box, style="Panel.TFrame")
+        axis_row.pack(fill=tk.X)
+        ttk.Label(axis_row, text="Axis", style="Muted.TLabel").pack(side=tk.LEFT)
+        self.plane_axis_combo = ttk.Combobox(
+            axis_row,
+            textvariable=self.plane_axis,
+            values=("auto", "i", "j", "k"),
+            state="readonly",
+            width=8,
+        )
+        self.plane_axis_combo.pack(side=tk.LEFT, padx=(6, 0))
+        self.plane_axis_combo.bind("<<ComboboxSelected>>", lambda _e: self._schedule_settle(delay_ms=60))
+        idx_row = ttk.Frame(plane_box, style="Panel.TFrame")
+        idx_row.pack(fill=tk.X, pady=(6, 0))
+        ttk.Label(idx_row, text="Index", style="Muted.TLabel").pack(side=tk.LEFT)
+        self.plane_spin = tk.Spinbox(
+            idx_row,
+            from_=0,
+            to=9999,
+            textvariable=self.plane_index,
+            width=6,
+            command=lambda: self._schedule_settle(delay_ms=80),
+        )
+        self.plane_spin.pack(side=tk.LEFT, padx=(6, 4))
+        ttk.Button(idx_row, text="−", style="Tool.TButton", width=2, command=lambda: self._track_plane(-1)).pack(
+            side=tk.LEFT, padx=1
+        )
+        ttk.Button(idx_row, text="+", style="Tool.TButton", width=2, command=lambda: self._track_plane(+1)).pack(
+            side=tk.LEFT, padx=1
+        )
+        ttk.Label(
+            plane_box,
+            text="Track ± steps the cut index.",
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(4, 0))
+
+        # Tecplot-like XYZ orientation + rotate.
+        view_box = ttk.LabelFrame(parent, text="View (XYZ)", padding=(8, 6))
+        view_box.pack(fill=tk.X, padx=10, pady=(0, 8))
+        btn_row = ttk.Frame(view_box, style="Panel.TFrame")
+        btn_row.pack(fill=tk.X)
+        for label in ("+X", "-X", "+Y", "-Y", "+Z", "-Z"):
+            ttk.Button(
+                btn_row,
+                text=label,
+                style="Tool.TButton",
+                width=3,
+                command=lambda v=label.lower(): self._set_axis_view(v),
+            ).pack(side=tk.LEFT, padx=1, pady=1)
+        rot_row = ttk.Frame(view_box, style="Panel.TFrame")
+        rot_row.pack(fill=tk.X, pady=(6, 0))
+        ttk.Button(rot_row, text="↺", style="Tool.TButton", width=3, command=lambda: self._nudge_view(-15, 0)).pack(
+            side=tk.LEFT, padx=1
+        )
+        ttk.Button(rot_row, text="↻", style="Tool.TButton", width=3, command=lambda: self._nudge_view(+15, 0)).pack(
+            side=tk.LEFT, padx=1
+        )
+        ttk.Button(rot_row, text="↑", style="Tool.TButton", width=3, command=lambda: self._nudge_view(0, +10)).pack(
+            side=tk.LEFT, padx=1
+        )
+        ttk.Button(rot_row, text="↓", style="Tool.TButton", width=3, command=lambda: self._nudge_view(0, -10)).pack(
+            side=tk.LEFT, padx=1
+        )
+        ttk.Button(rot_row, text="Reset", style="Tool.TButton", command=self._reset_view).pack(
+            side=tk.LEFT, padx=(6, 0)
+        )
+        self.view_label = ttk.Label(view_box, text="view: auto", style="Muted.TLabel")
+        self.view_label.pack(anchor="w", pady=(4, 0))
+
         ttk.Button(parent, text="Redraw layers", style="Tool.TButton", command=self.action_redraw).pack(
             padx=12, pady=(4, 8), anchor="w"
         )
 
         ttk.Label(
             parent,
-            text="Mesh on = grid first.\nContour is optional.",
+            text="Mesh on = grid first.\nContour on active plane.\nDrag = warp; settle = fill.",
             style="Muted.TLabel",
             justify=tk.LEFT,
         ).pack(anchor="w", padx=12, pady=(4, 12))
@@ -428,6 +538,9 @@ class FlowplotGui(tk.Tk):
         )
 
     def _on_viewport_configure(self, _event: tk.Event | None = None) -> None:
+        if self._dragging and self._settle_image is not None:
+            self._warp_last_frame()
+            return
         if self.last_png and self.last_png.is_file():
             self._show_png_preview(self.last_png)
         else:
@@ -504,41 +617,309 @@ class FlowplotGui(tk.Tk):
                 args.extend([flag, raw])
         return args
 
+    def _on_close(self) -> None:
+        self._kill_cli()
+        self.destroy()
+
+    def _kill_cli(self) -> None:
+        proc = self._cli_proc
+        self._cli_proc = None
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            os.killpg(proc.pid, 15)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
     def _run_cli(self, args: list[str]) -> subprocess.CompletedProcess[str] | None:
         bin_path = self._require_cli()
         if not bin_path:
             return None
+        self._kill_cli()
         cmd = [bin_path, *args]
         self._log("$ " + " ".join(cmd))
         self._set_status("Running…")
         self.update_idletasks()
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=180,
-                check=False,
+                start_new_session=True,
             )
-        except subprocess.TimeoutExpired:
-            self._log("error: flowplot timed out")
-            self._set_status("Timed out")
-            return None
+            self._cli_proc = proc
+            # Pump Tk so drag/press can cancel in-flight (Tecplot-like interrupt).
+            deadline = time.monotonic() + 120.0
+            while proc.poll() is None:
+                if time.monotonic() > deadline:
+                    self._log("error: flowplot timed out — killing hung CLI")
+                    self._kill_cli()
+                    self._set_status("Timed out (CLI killed)")
+                    return None
+                try:
+                    self.update()
+                except tk.TclError:
+                    break
+                if self._cli_proc is not proc:
+                    # Killed / superseded by drag or newer settle.
+                    return None
+                time.sleep(0.02)
+            if self._cli_proc is not proc:
+                return None
+            stdout, stderr = proc.communicate(timeout=1)
+            self._cli_proc = None
+            result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
         except OSError as exc:
+            self._cli_proc = None
             self._log(f"error: {exc}")
             self._set_status("Failed to launch CLI")
             return None
-        out = (proc.stdout or "").strip()
-        err = (proc.stderr or "").strip()
+        out = (result.stdout or "").strip()
+        err = (result.stderr or "").strip()
         if out:
             self._log(out if len(out) < 2000 else out[:2000] + "…")
         if err:
             self._log(err)
-        if proc.returncode != 0:
-            self._set_status(f"CLI exit {proc.returncode}")
+        if result.returncode != 0:
+            self._set_status(f"CLI exit {result.returncode}")
         else:
             self._set_status("Done")
-        return proc
+        return result
+
+    def _plane_cli_arg(self) -> list[str]:
+        axis = self.plane_axis.get().strip().lower()
+        if axis in ("", "auto"):
+            return []
+        try:
+            idx = int(self.plane_index.get())
+        except (tk.TclError, ValueError, TypeError):
+            idx = 0
+        return ["--plane", f"{axis}={idx}"]
+
+    def _view_cli_arg(self) -> list[str]:
+        mode = self.view_mode.get().strip().lower()
+        if mode in ("", "auto"):
+            return []
+        if mode == "free":
+            return ["--view", f"az={self.azimuth_deg:.2f},el={self.elevation_deg:.2f}"]
+        return ["--view", mode]
+
+    def _update_view_label(self) -> None:
+        mode = self.view_mode.get()
+        if mode == "free":
+            text = f"view: az={self.azimuth_deg:.0f}° el={self.elevation_deg:.0f}°"
+        else:
+            text = f"view: {mode}"
+        if hasattr(self, "view_label"):
+            self.view_label.configure(text=text)
+
+    def _set_axis_view(self, tag: str) -> None:
+        self.view_mode.set(tag)
+        # Match Rust ViewSpec::to_free_angles for drag handoff.
+        angles = {
+            "+x": (0.0, 0.0),
+            "-x": (180.0, 0.0),
+            "+y": (90.0, 0.0),
+            "-y": (-90.0, 0.0),
+            "+z": (0.0, 90.0),
+            "-z": (180.0, -90.0),
+        }
+        self.azimuth_deg, self.elevation_deg = angles.get(tag, (0.0, 90.0))
+        self._update_view_label()
+        # Axis snaps need a real redraw (warp alone cannot invent a new orthographic face).
+        self._schedule_settle(delay_ms=20)
+
+    def _reset_view(self) -> None:
+        self.view_mode.set("auto")
+        self.azimuth_deg = 0.0
+        self.elevation_deg = 90.0
+        self._update_view_label()
+        self._schedule_settle(delay_ms=20)
+
+    def _nudge_view(self, daz: float, del_: float) -> None:
+        self.view_mode.set("free")
+        self.azimuth_deg = (self.azimuth_deg + daz) % 360.0
+        self.elevation_deg = max(-90.0, min(90.0, self.elevation_deg + del_))
+        self._update_view_label()
+        # Tecplot feel: warp last frame immediately, CLI only after settle.
+        self._warp_last_frame()
+        self._schedule_settle(delay_ms=120)
+
+    def _track_plane(self, step: int) -> None:
+        axis = self.plane_axis.get().strip().lower()
+        if axis == "auto":
+            # Prefer K, then J, then I when starting track from Auto.
+            if self.zone_ordered:
+                if "k" in self.zone_ordered and self.zone_ordered["k"] > 1:
+                    self.plane_axis.set("k")
+                elif "j" in self.zone_ordered and self.zone_ordered["j"] > 1:
+                    self.plane_axis.set("j")
+                elif "i" in self.zone_ordered:
+                    self.plane_axis.set("i")
+                else:
+                    self.plane_axis.set("k")
+            else:
+                self.plane_axis.set("k")
+            axis = self.plane_axis.get()
+        try:
+            idx = int(self.plane_index.get()) + step
+        except (tk.TclError, ValueError, TypeError):
+            idx = 0
+        lo, hi = 0, self._plane_max_index(axis)
+        idx = max(lo, min(hi, idx))
+        self.plane_index.set(idx)
+        # Keep last frame on screen while cutting; redraw only after settle.
+        self._set_status(f"Cutting {axis}={idx}…")
+        self._schedule_settle(delay_ms=90)
+
+    def _plane_max_index(self, axis: str) -> int:
+        if not self.zone_ordered:
+            return 9999
+        n = int(self.zone_ordered.get(axis, 1))
+        return max(0, n - 1)
+
+    def _cancel_redraw_timers(self) -> None:
+        for attr in ("_redraw_after", "_fullres_after", "_settle_after"):
+            handle = getattr(self, attr, None)
+            if handle is not None:
+                try:
+                    self.after_cancel(handle)
+                except tk.TclError:
+                    pass
+                setattr(self, attr, None)
+
+    def _schedule_settle(self, *, delay_ms: int = 80) -> None:
+        """After interaction stops: cancel in-flight CLI, then preview → full."""
+        self._cancel_redraw_timers()
+        self._kill_cli()
+        self._render_gen += 1  # invalidate any in-flight result
+        self._settle_after = self.after(delay_ms, self._do_settle)
+
+    def _do_settle(self) -> None:
+        """Progressive refine: cheap preview first, then full contour fill."""
+        self._settle_after = None
+        if self._dragging or self._settle_running:
+            return
+        self._settle_running = True
+        try:
+            self.action_redraw(interactive=True)
+            if self._dragging:
+                return
+            # Second tier — full fill (cancelable if user starts dragging again).
+            self._fullres_after = self.after(30, self._do_settle_full)
+        finally:
+            self._settle_running = False
+
+    def _do_settle_full(self) -> None:
+        self._fullres_after = None
+        if self._dragging or self._in_redraw:
+            return
+        self.action_redraw(interactive=False)
+
+    def _on_view_press(self, event: tk.Event) -> None:
+        self._drag_last = (event.x, event.y)
+        self._dragging = True
+        # Cancel any settle / CLI — drag uses display-list warp only.
+        self._cancel_redraw_timers()
+        self._kill_cli()
+        self._render_gen += 1
+
+    def _on_view_drag(self, event: tk.Event) -> None:
+        if self._drag_last is None:
+            return
+        dx = event.x - self._drag_last[0]
+        dy = event.y - self._drag_last[1]
+        self._drag_last = (event.x, event.y)
+        if self.view_mode.get() != "free":
+            self.view_mode.set("free")
+        self.azimuth_deg = (self.azimuth_deg + dx * 0.4) % 360.0
+        self.elevation_deg = max(-90.0, min(90.0, self.elevation_deg - dy * 0.4))
+        self._update_view_label()
+        # Tecplot / GPU display-list style: transform last frame — no CLI.
+        self._warp_last_frame()
+
+    def _on_view_release(self, _event: tk.Event) -> None:
+        self._drag_last = None
+        self._dragging = False
+        self._schedule_settle(delay_ms=50)
+
+    def _plane_key(self) -> tuple[str, int]:
+        axis = self.plane_axis.get().strip().lower() or "auto"
+        try:
+            idx = int(self.plane_index.get())
+        except (tk.TclError, ValueError, TypeError):
+            idx = 0
+        return (axis, idx)
+
+    def _remember_settle_frame(self, img) -> None:
+        """Store last good raster + view state for drag-time warping."""
+        try:
+            self._settle_image = img.copy()
+        except Exception:
+            self._settle_image = img
+        self._settle_az = float(self.azimuth_deg)
+        self._settle_el = float(self.elevation_deg)
+        self._settle_plane = self._plane_key()
+
+    def _warp_last_frame(self) -> None:
+        """Cheap screen-space transform of the last settled PNG (no CLI)."""
+        if self._settle_image is None:
+            self._set_status("Rotating… (no settle frame yet)")
+            return
+        try:
+            from PIL import Image, ImageTk
+        except ImportError:
+            return
+
+        daz = self.azimuth_deg - self._settle_az
+        # Shortest-path wrap so a 350° jump does not spin the bitmap the long way.
+        if daz > 180.0:
+            daz -= 360.0
+        elif daz < -180.0:
+            daz += 360.0
+        del_ = self.elevation_deg - self._settle_el
+
+        base = self._settle_image
+        fill = (0xF7, 0xF8, 0xF9, 255)
+        # Rotate in screen space (view azimuth) — display-list feel.
+        warped = base.rotate(-daz, resample=Image.Resampling.BILINEAR, expand=False, fillcolor=fill)
+        # Elevation: foreshorten + light vertical shear (billboard approximation).
+        w, h = warped.size
+        scale_y = max(0.35, abs(math.cos(math.radians(del_ * 0.55))))
+        new_h = max(8, int(round(h * scale_y)))
+        if new_h != h:
+            warped = warped.resize((w, new_h), Image.Resampling.BILINEAR)
+            canvas = Image.new("RGBA", (w, h), fill)
+            canvas.paste(warped, (0, (h - new_h) // 2), warped)
+            warped = canvas
+        shear = math.tan(math.radians(max(-25.0, min(25.0, del_ * 0.35))))
+        if abs(shear) > 1e-3:
+            # AFFINE: x' = x + shear*(y - cy), y' = y
+            cy = h * 0.5
+            warped = warped.transform(
+                (w, h),
+                Image.Transform.AFFINE,
+                (1, shear, -shear * cy, 0, 1, 0),
+                resample=Image.Resampling.BILINEAR,
+                fillcolor=fill,
+            )
+
+        cw = max(self.viewport.winfo_width(), 2)
+        ch = max(self.viewport.winfo_height(), 2)
+        max_w = max(cw - 16, 16)
+        max_h = max(ch - 16, 16)
+        show = warped.copy()
+        show.thumbnail((max_w, max_h), Image.Resampling.BILINEAR)
+        self.viewport.delete("placeholder")
+        self.viewport.delete("preview")
+        self._warp_photo = ImageTk.PhotoImage(show)
+        self._preview_photo = self._warp_photo
+        self.viewport.create_image(cw // 2, ch // 2, image=self._warp_photo, tags="preview")
+        self._set_status(f"Warping az={self.azimuth_deg:.0f}° el={self.elevation_deg:.0f}°")
 
     def _show_png_preview(self, path: Path) -> None:
         """Best-effort PNG preview in the viewport (Pillow optional)."""
@@ -584,6 +965,12 @@ class FlowplotGui(tk.Tk):
             )
         self._preview_photo = ImageTk.PhotoImage(img)
         self.viewport.create_image(cw // 2, ch // 2, image=self._preview_photo, tags="preview")
+        # Keep a full-res settle copy for drag-time warping (before thumbnail).
+        try:
+            settle_src = Image.open(preview_path).convert("RGBA")
+            self._remember_settle_frame(settle_src)
+        except OSError:
+            self._remember_settle_frame(img)
         prev = getattr(self, "_preview_logged", None)
         key = (str(path), img.width, img.height)
         if prev != key:
@@ -656,6 +1043,12 @@ class FlowplotGui(tk.Tk):
         self.layer_vector.set(False)
         self.layer_edge.set(False)
         self.layer_scatter.set(False)
+        self.plane_axis.set("auto")
+        self.plane_index.set(0)
+        self._cancel_redraw_timers()
+        self._kill_cli()
+        self._render_cache.clear()
+        self._reset_view_state()
 
         proc = self._run_cli(["--json", "info", str(self.dataset_path)])
         if proc and proc.returncode == 0 and proc.stdout:
@@ -665,6 +1058,20 @@ class FlowplotGui(tk.Tk):
                 if isinstance(vars_, list):
                     self._set_variables([str(v) for v in vars_])
                 self.effectively_2d = bool(payload.get("effectively_2d", True))
+                self.zone_ordered = None
+                zones = payload.get("zones") or []
+                if isinstance(zones, list) and zones:
+                    ordered = zones[0].get("ordered") if isinstance(zones[0], dict) else None
+                    if isinstance(ordered, dict):
+                        self.zone_ordered = {
+                            str(k).lower(): int(v)
+                            for k, v in ordered.items()
+                            if str(k).lower() in ("i", "j", "k")
+                        }
+                        self._log(
+                            "ordered dims: "
+                            + ", ".join(f"{k}={v}" for k, v in sorted(self.zone_ordered.items()))
+                        )
                 if self.plot_type.get() == "3D Cartesian" and self.effectively_2d:
                     self._log(
                         "Dataset is effectively 2D — using 2D Cartesian "
@@ -675,15 +1082,34 @@ class FlowplotGui(tk.Tk):
                 self._log("warning: could not parse info JSON; variable list empty")
                 self._set_variables([])
                 self.effectively_2d = True
+                self.zone_ordered = None
         else:
             self._set_variables([])
             self.effectively_2d = True
+            self.zone_ordered = None
 
         self.action_redraw()
 
-    def action_redraw(self) -> None:
+    def _reset_view_state(self) -> None:
+        self.view_mode.set("auto")
+        self.azimuth_deg = 0.0
+        self.elevation_deg = 90.0
+        self._settle_image = None
+        self._settle_az = 0.0
+        self._settle_el = 90.0
+        self._settle_plane = None
+        self._update_view_label()
+
+    def action_redraw(self, interactive: bool = False) -> None:
+        # Re-entrancy guard: _run_cli pumps Tk events; avoid nested redraws.
+        if self._in_redraw:
+            return
         ds = self._require_dataset()
         if not ds:
+            return
+        # While rotating/cutting, never spawn CLI — warp last frame instead.
+        if self._dragging:
+            self._warp_last_frame()
             return
         if self.plot_type.get() == "3D Cartesian" and self.effectively_2d:
             self._log("3D Cartesian on 2D data → 2D Cartesian fallback")
@@ -698,19 +1124,114 @@ class FlowplotGui(tk.Tk):
 
         if not want_mesh and not want_contour and not want_pathlines:
             self.last_png = None
+            self._settle_image = None
             self._draw_viewport_placeholder()
             self._set_status("No layers enabled")
             return
 
-        out = Path(tempfile.gettempdir()) / "flowplot_gui_view.png"
+        # Two-tier: preview (downsampled) then full contour fill on settle.
+        if interactive:
+            width, height = 360, 270
+            quality = "preview"
+        else:
+            width, height = 800, 600
+            quality = "full"
+
+        out = Path(tempfile.gettempdir()) / f"flowplot_gui_view_{quality}.png"
         style = self.plot_style.get()
         nondim = self._nondim_args()
+        plane = self._plane_cli_arg()
+        view = self._view_cli_arg()
         var = self.var_name.get().strip()
+        size = ["--width", str(width), "--height", str(height)]
 
+        cache_key = "|".join(
+            [
+                str(ds),
+                f"m={want_mesh}",
+                f"c={want_contour}",
+                f"p={want_pathlines}",
+                var,
+                style,
+                *plane,
+                *view,
+                *size,
+                *nondim,
+            ]
+        )
+        cached = self._render_cache.get(cache_key)
+        if cached and cached.is_file():
+            self._show_png_preview(cached)
+            self._set_status(f"Cached {quality}")
+            return
+
+        self._render_gen += 1
+        gen = self._render_gen
+        self._set_status("Preview…" if quality == "preview" else "Rendering…")
+        self._in_redraw = True
+        proc = None
+        try:
+            proc = self._redraw_cli(
+                ds=ds,
+                out=out,
+                style=style,
+                nondim=nondim,
+                plane=plane,
+                view=view,
+                var=var,
+                size=size,
+                want_mesh=want_mesh,
+                want_contour=want_contour,
+                want_pathlines=want_pathlines,
+                interactive=interactive,
+            )
+        finally:
+            self._in_redraw = False
+
+        # Drop stale results if a newer redraw started (cancel/supersede).
+        if gen != self._render_gen:
+            return
+
+        if proc and proc.returncode == 0 and out.is_file():
+            stable = Path(tempfile.gettempdir()) / f"flowplot_cache_{abs(hash(cache_key)) & 0xFFFFFFFF:08x}.png"
+            try:
+                shutil.copyfile(out, stable)
+                self._render_cache[cache_key] = stable
+                while len(self._render_cache) > 24:
+                    self._render_cache.pop(next(iter(self._render_cache)))
+            except OSError:
+                stable = out
+            self._show_png_preview(stable)
+            layers = []
+            if want_mesh:
+                layers.append("Mesh")
+            if want_contour:
+                layers.append(f"Contour({var})")
+            if want_pathlines and not interactive:
+                layers.append("Pathlines")
+            tag = "preview" if quality == "preview" else "full"
+            self._set_status((" + ".join(layers) if layers else "Done") + f" [{tag}]")
+
+    def _redraw_cli(
+        self,
+        *,
+        ds: Path,
+        out: Path,
+        style: str,
+        nondim: list[str],
+        plane: list[str],
+        view: list[str],
+        var: str,
+        size: list[str],
+        want_mesh: bool,
+        want_contour: bool,
+        want_pathlines: bool,
+        interactive: bool,
+    ) -> subprocess.CompletedProcess[str] | None:
         if want_contour:
             if not var:
                 messagebox.showwarning("Contour", "Select a contour variable (e.g. Pressure).")
-                return
+                return None
             args = [
                 "contour",
                 str(ds),
@@ -720,14 +1241,17 @@ class FlowplotGui(tk.Tk):
                 str(out),
                 "--style",
                 style,
+                *size,
+                *plane,
+                *view,
                 *nondim,
             ]
             if want_mesh:
                 args.append("--mesh")
-            if want_pathlines:
+            if want_pathlines and not interactive:
                 args.append("--pathlines")
-            proc = self._run_cli(args)
-        elif want_pathlines:
+            return self._run_cli(args)
+        if want_pathlines:
             args = [
                 "pathlines",
                 str(ds),
@@ -735,34 +1259,27 @@ class FlowplotGui(tk.Tk):
                 str(out),
                 "--style",
                 style,
+                *size,
+                *plane,
+                *view,
                 *nondim,
             ]
             if var:
                 args.extend(["--var", var])
-            proc = self._run_cli(args)
-        else:
-            # Mesh only — equal-aspect wireframe crate.
-            args = [
-                "mesh",
-                str(ds),
-                "-o",
-                str(out),
-                "--style",
-                style,
-                *nondim,
-            ]
-            proc = self._run_cli(args)
-
-        if proc and proc.returncode == 0 and out.is_file():
-            self._show_png_preview(out)
-            layers = []
-            if want_mesh:
-                layers.append("Mesh")
-            if want_contour:
-                layers.append(f"Contour({var})")
-            if want_pathlines:
-                layers.append("Pathlines")
-            self._set_status(" + ".join(layers) if layers else "Done")
+            return self._run_cli(args)
+        args = [
+            "mesh",
+            str(ds),
+            "-o",
+            str(out),
+            "--style",
+            style,
+            *size,
+            *plane,
+            *view,
+            *nondim,
+        ]
+        return self._run_cli(args)
 
     def action_enable_contour(self) -> None:
         self.layer_contour.set(True)

@@ -2,12 +2,23 @@
 
 use crate::dataset::{Dataset, Location, OrderedDims, Topology, Zone};
 use crate::error::{Error, Result};
+use crate::view::ViewSpec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Axis {
     I,
     J,
     K,
+}
+
+impl std::fmt::Display for Axis {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::I => write!(f, "i"),
+            Self::J => write!(f, "j"),
+            Self::K => write!(f, "k"),
+        }
+    }
 }
 
 /// Slice specification for extracting a 2D plane from an ordered zone.
@@ -256,12 +267,23 @@ pub fn dataset_is_effectively_2d(ds: &Dataset) -> bool {
     }
 }
 
-/// Extract a nodal 2D grid of `var_idx` from an ordered zone.
+/// Extract a nodal 2D grid of `var_idx` from an ordered zone (Auto view).
 pub fn extract_scalar_grid(
     ds: &Dataset,
     zone_idx: usize,
     var_idx: usize,
     plane: PlaneSpec,
+) -> Result<Grid2D> {
+    extract_scalar_grid_view(ds, zone_idx, var_idx, plane, ViewSpec::Auto)
+}
+
+/// Extract a nodal 2D grid and project world XYZ with `view`.
+pub fn extract_scalar_grid_view(
+    ds: &Dataset,
+    zone_idx: usize,
+    var_idx: usize,
+    plane: PlaneSpec,
+    view: ViewSpec,
 ) -> Result<Grid2D> {
     let zone = ds
         .zones
@@ -285,18 +307,32 @@ pub fn extract_scalar_grid(
 
     let (x_i, y_i, z_i) = guess_coord_vars(ds);
     let (ni, nj, node_indices) = plane_nodes(*dims, plane)?;
-    let (plot_x, plot_y) = pick_plot_coord_indices(zone, &node_indices, x_i, y_i, z_i);
     let n = ni * nj;
     let mut values = Vec::with_capacity(n);
     let mut x = Vec::with_capacity(n);
     let mut y = Vec::with_capacity(n);
 
-    for (local, &node) in node_indices.iter().enumerate() {
-        let i = local % ni;
-        let j = local / ni;
-        values.push(*field.values.get(node).unwrap_or(&f64::NAN));
-        x.push(coord_at(zone, plot_x, node, i));
-        y.push(coord_at(zone, plot_y, node, j));
+    if matches!(view, ViewSpec::Auto) {
+        let (plot_x, plot_y) = pick_plot_coord_indices(zone, &node_indices, x_i, y_i, z_i);
+        for (local, &node) in node_indices.iter().enumerate() {
+            let i = local % ni;
+            let j = local / ni;
+            values.push(*field.values.get(node).unwrap_or(&f64::NAN));
+            x.push(coord_at(zone, plot_x, node, i));
+            y.push(coord_at(zone, plot_y, node, j));
+        }
+    } else {
+        for (local, &node) in node_indices.iter().enumerate() {
+            let i = local % ni;
+            let j = local / ni;
+            values.push(*field.values.get(node).unwrap_or(&f64::NAN));
+            let wx = coord_at(zone, x_i, node, i);
+            let wy = coord_at(zone, y_i, node, j);
+            let wz = coord_at(zone, z_i, node, 0);
+            let (u, v) = view.project(wx, wy, wz);
+            x.push(u);
+            y.push(v);
+        }
     }
 
     Ok(Grid2D {
@@ -474,6 +510,7 @@ mod tests {
                     },
                 ],
             }],
+            ..Default::default()
         };
         let g = extract_scalar_grid(&ds, 0, 2, PlaneSpec::Auto).unwrap();
         assert_eq!(g.ni, 2);
@@ -556,6 +593,7 @@ mod tests {
                     },
                 ],
             }],
+            ..Default::default()
         };
         assert!(dataset_is_effectively_2d(&ds));
         let g = extract_scalar_grid(&ds, 0, 3, PlaneSpec::Auto).unwrap();
@@ -563,5 +601,49 @@ mod tests {
         let (xmin, xmax, ymin, ymax) = g.bounds();
         assert!((xmin - 0.1).abs() < 1e-12 && (xmax - 0.2).abs() < 1e-12);
         assert!((ymin - 0.0).abs() < 1e-12 && (ymax - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn plus_x_view_projects_neg_y_z() {
+        use crate::view::ViewSpec;
+        let ds = Dataset {
+            title: None,
+            variables: vec!["X".into(), "Y".into(), "Z".into(), "P".into()],
+            zones: vec![Zone {
+                name: "box".into(),
+                topology: Topology::Ordered(OrderedDims::Ij { i: 2, j: 2 }),
+                fields: vec![
+                    VariableData {
+                        location: Location::Nodal,
+                        values: vec![0.0, 1.0, 0.0, 1.0],
+                    },
+                    VariableData {
+                        location: Location::Nodal,
+                        values: vec![0.0, 0.0, 2.0, 2.0],
+                    },
+                    VariableData {
+                        location: Location::Nodal,
+                        values: vec![0.0, 0.0, 0.0, 3.0],
+                    },
+                    VariableData {
+                        location: Location::Nodal,
+                        values: vec![1.0; 4],
+                    },
+                ],
+            }],
+            ..Default::default()
+        };
+        let g = extract_scalar_grid_view(
+            &ds,
+            0,
+            3,
+            PlaneSpec::Auto,
+            ViewSpec::parse("+x").unwrap(),
+        )
+        .unwrap();
+        // +X view: u=-Y, v=Z. Y in {0,2} → u in {0,-2}; Z in {0,3}.
+        let (xmin, xmax, ymin, ymax) = g.bounds();
+        assert!(xmin <= -2.0 + 1e-12 && xmax >= 0.0 - 1e-12);
+        assert!(ymin <= 0.0 + 1e-12 && ymax >= 3.0 - 1e-12);
     }
 }

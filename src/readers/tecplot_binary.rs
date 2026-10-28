@@ -9,6 +9,7 @@ use std::path::Path;
 
 use crate::dataset::{
     Connectivity, Dataset, ElementType, Location, OrderedDims, Topology, VariableData, Zone,
+    ZoneMeta,
 };
 use crate::error::{Error, Result};
 use crate::readers::Reader;
@@ -110,6 +111,14 @@ pub fn parse_tecplot_binary<R: Read + Seek>(r: &mut R) -> Result<Dataset> {
         zones.push(read_zone_data(r, header, num_var)?);
     }
 
+    let zone_meta: Vec<_> = zone_headers
+        .iter()
+        .map(|h| ZoneMeta {
+            solution_time: h.solution_time,
+            strand_id: h.strand_id,
+            aux: h.aux.clone(),
+        })
+        .collect();
     Ok(Dataset {
         title: if title.is_empty() {
             None
@@ -118,6 +127,8 @@ pub fn parse_tecplot_binary<R: Read + Seek>(r: &mut R) -> Result<Dataset> {
         },
         variables,
         zones,
+        aux: Vec::new(),
+        zone_meta,
     })
 }
 
@@ -145,6 +156,9 @@ struct ZoneHeader {
     dims: Option<[usize; 3]>,
     num_points: usize,
     num_elements: usize,
+    solution_time: Option<f64>,
+    strand_id: Option<i32>,
+    aux: Vec<(String, String)>,
 }
 
 fn ordered_cell_count(i: usize, j: usize, k: usize) -> usize {
@@ -163,10 +177,19 @@ fn read_zone_header<R: Read>(r: &mut R, version: u32, num_var: usize) -> Result<
     if version >= 107 {
         let _parent = read_i32(r)?;
     }
+    let mut strand_id = None;
+    let mut solution_time = None;
     if version >= 102 {
-        let _strand = read_i32(r)?;
-        let _sol = read_f64(r)?;
+        let strand = read_i32(r)?;
+        let sol = read_f64(r)?;
         let _color = read_i32(r)?;
+        // Tecplot uses -1 / 0 for “no strand”; keep any non-negative id.
+        if strand >= 0 {
+            strand_id = Some(strand);
+        }
+        if sol.is_finite() {
+            solution_time = Some(sol);
+        }
     }
     let zone_type = read_i32(r)?;
     // DataPacking present through TDV111; TDV112+ is always block.
@@ -234,6 +257,7 @@ fn read_zone_header<R: Read>(r: &mut R, version: u32, num_var: usize) -> Result<
         ));
     };
 
+    let mut aux = Vec::new();
     loop {
         let flag = read_i32(r)?;
         if flag == 0 {
@@ -245,9 +269,12 @@ fn read_zone_header<R: Read>(r: &mut R, version: u32, num_var: usize) -> Result<
                 format!("zone {name:?}: bad aux flag {flag}"),
             ));
         }
-        let _aux_name = read_tec_string(r)?;
+        let aux_name = read_tec_string(r)?;
         let _fmt = read_i32(r)?;
-        let _aux_val = read_tec_string(r)?;
+        let aux_val = read_tec_string(r)?;
+        if !aux_name.is_empty() {
+            aux.push((aux_name, aux_val));
+        }
     }
 
     Ok(ZoneHeader {
@@ -257,6 +284,9 @@ fn read_zone_header<R: Read>(r: &mut R, version: u32, num_var: usize) -> Result<
         dims,
         num_points,
         num_elements,
+        solution_time,
+        strand_id,
+        aux,
     })
 }
 

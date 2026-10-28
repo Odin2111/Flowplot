@@ -6,12 +6,14 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+use flowplot::annotate::{draw_annotations, AnnotationInfo};
 use flowplot::contour::{render_contour, write_png, ContourOptions, PlotStyle};
-use flowplot::field::{extract_scalar_grid, find_var, PlaneSpec};
+use flowplot::field::{extract_scalar_grid_view, find_var, PlaneSpec};
 use flowplot::menu::{
     format_item_text, format_menu_text, format_stub_run, MenuItem, PostprocessMenu,
 };
-use flowplot::mesh::{extract_mesh_grid, overlay_mesh, render_mesh, MeshOptions};
+use flowplot::mesh::{extract_mesh_grid_view, overlay_mesh, render_mesh, MeshOptions};
+use flowplot::view::ViewSpec;
 use flowplot::nondim::{
     apply_nondim, format_suggestions, suggest_scales, NondimScales, NondimSuggestion,
 };
@@ -65,6 +67,9 @@ enum Commands {
         /// Plane/slice, e.g. k=0, i=1, j=2 (default: auto).
         #[arg(long)]
         plane: Option<String>,
+        /// View: auto|+x|-x|+y|-y|+z|-z|az=deg,el=deg (Tecplot-like).
+        #[arg(long)]
+        view: Option<String>,
         #[arg(long, default_value_t = 800)]
         width: u32,
         #[arg(long, default_value_t = 600)]
@@ -90,6 +95,9 @@ enum Commands {
         /// Plane/slice, e.g. k=0, i=1, j=2 (default: auto).
         #[arg(long)]
         plane: Option<String>,
+        /// View: auto|+x|-x|+y|-y|+z|-z|az=deg,el=deg (Tecplot-like).
+        #[arg(long)]
+        view: Option<String>,
         /// Color-range minimum (default: data min).
         #[arg(long)]
         vmin: Option<f64>,
@@ -135,6 +143,9 @@ enum Commands {
         zone: usize,
         #[arg(long)]
         plane: Option<String>,
+        /// View: auto|+x|-x|+y|-y|+z|-z|az=deg,el=deg.
+        #[arg(long)]
+        view: Option<String>,
         #[arg(long, default_value_t = 512)]
         width: u32,
         #[arg(long, default_value_t = 512)]
@@ -314,6 +325,7 @@ fn dispatch(
             out,
             zone,
             plane,
+            view,
             width,
             height,
             style,
@@ -323,6 +335,7 @@ fn dispatch(
             &out,
             zone,
             plane.as_deref(),
+            view.as_deref(),
             width,
             height,
             style,
@@ -335,6 +348,7 @@ fn dispatch(
             out,
             zone,
             plane,
+            view,
             vmin,
             vmax,
             width,
@@ -351,6 +365,7 @@ fn dispatch(
             &out,
             zone,
             plane.as_deref(),
+            view.as_deref(),
             vmin,
             vmax,
             width,
@@ -373,6 +388,7 @@ fn dispatch(
             out,
             zone,
             plane,
+            view,
             width,
             height,
             style,
@@ -386,6 +402,7 @@ fn dispatch(
             &out,
             zone,
             plane.as_deref(),
+            view.as_deref(),
             width,
             height,
             style,
@@ -744,14 +761,27 @@ fn suggestions_json(suggestions: &[NondimSuggestion]) -> String {
     format!("[{}]", parts.join(","))
 }
 
+fn zone_ordered_json(zone: &flowplot::Zone) -> String {
+    use flowplot::{OrderedDims, Topology};
+    match &zone.topology {
+        Topology::Ordered(OrderedDims::I { i }) => format!("{{\"i\":{i}}}"),
+        Topology::Ordered(OrderedDims::Ij { i, j }) => format!("{{\"i\":{i},\"j\":{j}}}"),
+        Topology::Ordered(OrderedDims::Ijk { i, j, k }) => {
+            format!("{{\"i\":{i},\"j\":{j},\"k\":{k}}}")
+        }
+        Topology::FiniteElement { .. } => "null".into(),
+    }
+}
+
 fn dataset_load_json(path: &PathBuf, ds: &Dataset, suggestions: &[NondimSuggestion]) -> String {
     let mut zones = Vec::new();
     for (i, zone) in ds.zones.iter().enumerate() {
         zones.push(format!(
-            "{{\"index\":{i},\"name\":{},\"nodes\":{},\"cells\":{}}}",
+            "{{\"index\":{i},\"name\":{},\"nodes\":{},\"cells\":{},\"ordered\":{}}}",
             json_string(&zone.name),
             zone.node_count(),
-            zone.cell_count()
+            zone.cell_count(),
+            zone_ordered_json(zone)
         ));
     }
     let effectively_2d = flowplot::dataset_is_effectively_2d(ds);
@@ -844,10 +874,18 @@ fn parse_plane(plane: Option<&str>) -> flowplot::Result<PlaneSpec> {
     }
 }
 
+fn parse_view(view: Option<&str>) -> flowplot::Result<ViewSpec> {
+    match view {
+        None => Ok(ViewSpec::Auto),
+        Some(s) => ViewSpec::parse(s),
+    }
+}
+
 fn build_pathline_opts(
     ds: &Dataset,
     zone: usize,
     plane: PlaneSpec,
+    view: ViewSpec,
     args: &PathlineArgs,
 ) -> flowplot::Result<PathlineOptions> {
     let (gu, gv) = guess_velocity_vars(ds).unwrap_or_else(|_| ("U".into(), "V".into()));
@@ -859,7 +897,7 @@ fn build_pathline_opts(
     }
     if seeds.is_empty() {
         let u_idx = find_var(ds, &u_var)?;
-        let grid = extract_scalar_grid(ds, zone, u_idx, plane)?;
+        let grid = extract_scalar_grid_view(ds, zone, u_idx, plane, view)?;
         seeds = default_seeds(&grid, args.seed_count);
     }
     Ok(PathlineOptions {
@@ -868,6 +906,7 @@ fn build_pathline_opts(
         w_var: args.w_var.clone(),
         zone,
         plane,
+        view,
         seeds,
         max_steps: args.max_steps,
         step_size: args.dt,
@@ -910,6 +949,7 @@ fn run_mesh(
     out: &PathBuf,
     zone: usize,
     plane: Option<&str>,
+    view: Option<&str>,
     width: u32,
     height: u32,
     style: PlotStyle,
@@ -922,6 +962,7 @@ fn run_mesh(
     }
     let ds = maybe_nondim(load_path(path)?, &nondim_args, nondim_args.suggest)?;
     let plane = parse_plane(plane)?;
+    let view = parse_view(view)?;
     let (width, height) = if style == PlotStyle::Jfm && width == 800 && height == 600 {
         (PlotStyle::JFM_WIDTH, PlotStyle::JFM_HEIGHT)
     } else {
@@ -932,9 +973,11 @@ fn run_mesh(
         &MeshOptions {
             zone,
             plane,
+            view,
             width,
             height,
             style,
+            path_hint: Some(path.display().to_string()),
             ..Default::default()
         },
     )?;
@@ -942,12 +985,13 @@ fn run_mesh(
     let (xmin, xmax, ymin, ymax) = img.grid.bounds();
     if json {
         println!(
-            "{{\"status\":\"ok\",\"command\":\"mesh\",\"path\":{},\"zone\":{},\"out\":{},\"ni\":{},\"nj\":{},\"bounds\":[{},{},{},{}]}}",
+            "{{\"status\":\"ok\",\"command\":\"mesh\",\"path\":{},\"zone\":{},\"out\":{},\"ni\":{},\"nj\":{},\"view\":{},\"bounds\":[{},{},{},{}]}}",
             json_string(&path.display().to_string()),
             zone,
             json_string(&out.display().to_string()),
             img.grid.ni,
             img.grid.nj,
+            json_string(&view.label()),
             json_f64(xmin),
             json_f64(xmax),
             json_f64(ymin),
@@ -955,11 +999,12 @@ fn run_mesh(
         );
     } else {
         println!(
-            "wrote mesh {} (zone={}, {}×{}, equal-aspect bounds=[{}, {}]×[{}, {}])",
+            "wrote mesh {} (zone={}, {}×{}, view={}, equal-aspect bounds=[{}, {}]×[{}, {}])",
             out.display(),
             zone,
             img.grid.ni,
             img.grid.nj,
+            view.label(),
             xmin,
             xmax,
             ymin,
@@ -975,6 +1020,7 @@ fn run_contour(
     out: &PathBuf,
     zone: usize,
     plane: Option<&str>,
+    view: Option<&str>,
     vmin: Option<f64>,
     vmax: Option<f64>,
     width: u32,
@@ -994,6 +1040,7 @@ fn run_contour(
     }
     let ds = maybe_nondim(load_path(path)?, &nondim_args, nondim_args.suggest)?;
     let plane = parse_plane(plane)?;
+    let view = parse_view(view)?;
     let (width, height) = resolve_raster_size(style, width, height);
     let mut img = render_contour(
         &ds,
@@ -1001,16 +1048,20 @@ fn run_contour(
             variable: variable.to_string(),
             zone,
             plane,
+            view,
             vmin,
             vmax,
             width,
             height,
             style,
+            // Annotate after mesh/pathline overlays so the legend stays on top.
+            annotate: false,
+            path_hint: Some(path.display().to_string()),
         },
     )?;
 
     if do_mesh {
-        let mesh_grid = extract_mesh_grid(&ds, zone, plane)?;
+        let mesh_grid = extract_mesh_grid_view(&ds, zone, plane, view)?;
         let line = match style {
             // JFM print style keeps black wires; default GUI/CLI mesh is green.
             PlotStyle::Jfm => [0, 0, 0, 255],
@@ -1023,7 +1074,7 @@ fn run_contour(
     let mut n_traces = 0usize;
     let mut pathlines_out_written: Option<String> = None;
     if do_pathlines || pathlines_out.is_some() {
-        let pl_opts = build_pathline_opts(&ds, zone, plane, pl_args)?;
+        let pl_opts = build_pathline_opts(&ds, zone, plane, view, pl_args)?;
         let lines = trace_pathlines(&ds, &pl_opts)?;
         n_traces = lines.len();
         if !json {
@@ -1040,6 +1091,26 @@ fn run_contour(
                 println!("wrote pathlines {}", pout.display());
             }
         }
+    }
+
+    // VisIt-style legend on top of mesh/pathline overlays.
+    {
+        let mut info = AnnotationInfo::from_dataset(
+            &ds,
+            zone,
+            Some(variable),
+            Some(&path.display().to_string()),
+        );
+        info.colorbar = true;
+        info.vmin = Some(img.vmin);
+        info.vmax = Some(img.vmax);
+        info.style = style;
+        info.view = Some(view.label());
+        info.plane = Some(match plane {
+            PlaneSpec::Auto => "auto".into(),
+            PlaneSpec::Index { axis, index } => format!("{axis}={index}"),
+        });
+        draw_annotations(&mut img, &info);
     }
 
     write_png(out, &img)?;
@@ -1148,6 +1219,7 @@ fn run_pathlines_cmd(
     out: &PathBuf,
     zone: usize,
     plane: Option<&str>,
+    view: Option<&str>,
     width: u32,
     height: u32,
     style: PlotStyle,
@@ -1164,8 +1236,9 @@ fn run_pathlines_cmd(
     }
     let ds = maybe_nondim(load_path(path)?, &nondim_args, nondim_args.suggest)?;
     let plane = parse_plane(plane)?;
+    let view = parse_view(view)?;
     let (width, height) = resolve_raster_size(style, width, height);
-    let pl_opts = build_pathline_opts(&ds, zone, plane, pl_args)?;
+    let pl_opts = build_pathline_opts(&ds, zone, plane, view, pl_args)?;
     let lines = trace_pathlines(&ds, &pl_opts)?;
     if !json {
         println!("pathlines: {} traces", lines.len());
@@ -1178,14 +1251,29 @@ fn run_pathlines_cmd(
                 variable: var.to_string(),
                 zone,
                 plane,
+                view,
                 vmin,
                 vmax,
                 width,
                 height,
                 style,
+                annotate: false,
+                path_hint: Some(path.display().to_string()),
             },
         )?;
         overlay_pathlines_styled(&mut img, &lines, style);
+        let mut info = AnnotationInfo::from_dataset(
+            &ds,
+            zone,
+            Some(var),
+            Some(&path.display().to_string()),
+        );
+        info.colorbar = true;
+        info.vmin = Some(img.vmin);
+        info.vmax = Some(img.vmax);
+        info.style = style;
+        info.view = Some(view.label());
+        draw_annotations(&mut img, &info);
         img
     } else {
         render_pathlines_png_styled(&ds, &pl_opts, width, height, style)?
