@@ -76,13 +76,14 @@ Agents (lehar-agent / MCP): prefer `--json` or `FLOWPLOT_BIN=… python3 agents/
 
 | Format | Extensions | Status |
 |--------|------------|--------|
-| Tecplot ASCII | `.dat`, `.tp` | **Working** (minimal: `TITLE` / `VARIABLES` / ordered or FE `ZONE`) |
+| Tecplot ASCII | `.dat`, `.tp`, ASCII `.plt` | **Working** (minimal: `TITLE` / `VARIABLES` / ordered or FE `ZONE`) |
+| Tecplot binary | `.plt` (`#!TDV111` / `#!TDV112`) | **Working** — public Data Format Guide layout (block packing; ordered + basic FE) |
 | VTK legacy ASCII | `.vtk` | **Working** (structured grid + unstructured grid subset) |
 | VTK XML | `.vtu`, `.vtp`, … | **Stub** — clear `Unimplemented` error |
-| CGNS | `.cgns` | **Stub** — documents FFI via system `libcgns` / future `cgns-sys`; optional feature `cgns` |
+| CGNS | `.cgns`, `.cgz` | **Working** when system `libcgns` is found at build; else clear stub (`apt install libcgns-dev`, `--features cgns`) |
 | Fluent case/data | `.cas`, `.dat` | **Stub** — documents public section layout; binary returns `Unimplemented` |
 
-**Not in scope (no reverse engineering):** proprietary Tecplot binary (`.plt`) and Fluent binary case/data decoding. Public format specifications / ASCII layouts only.
+**Not in scope (no reverse engineering):** Tecplot SZL (`.szplt`) and Fluent binary case/data decoding.
 
 ## Crate layout
 
