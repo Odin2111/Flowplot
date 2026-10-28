@@ -64,7 +64,9 @@ Agents (lehar-agent / MCP): prefer `--json` or `FLOWPLOT_BIN=… python3 agents/
 - `src/nondim.rs` — reference scales + name suggestions
 - `src/pathlines.rs` — velocity-field particle traces
 - `src/field.rs` — ordered-plane extract + bilinear sample
-- `src/bin/flowplot.rs` — CLI
+- `src/bin/flowplot.rs` — CLI (`load` / `contour` / `nondim` / `pathlines`, `--json`)
+- `agents/flowplot_mcp.py` — stdio MCP wrapper for lehar agents
+- `docs/agent-bridge.md` — lehar ↔ Flowplot contract
 - `tests/fixtures/` — synthetic Tecplot / VTK ASCII (incl. `flow.dat` for contour/pathlines)
 
 ## License
