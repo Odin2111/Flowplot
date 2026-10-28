@@ -89,7 +89,7 @@ flowplot menu run bow-shock-field   # stub: requires agent + planned flags
 `--pathlines` overlays traces on the contour PNG; `--pathlines-out` writes a second PNG.
 `--style jfm` uses a restrained coolwarm map, white exterior, black frame, and (if size left at 512×512) a single-column 700×525 raster.
 
-GUI: **Agents → Post-process agents…** opens an interactive panel that runs menu items against the currently loaded file (`gui/agents_panel.py`).
+GUI: **Analyze** runs validation/correction (field sanity, positivity, profiles, shock polar) with side charts (`gui/agents_panel.py`). Tecplot-ordered top menus: File … Analyze … Help.
 
 Agents (lehar-agent / MCP): prefer `--json` or `FLOWPLOT_BIN=… python3 agents/flowplot_mcp.py` — see [`docs/agent-bridge.md`](docs/agent-bridge.md) and [`docs/postprocess-menu.md`](docs/postprocess-menu.md).
 
@@ -123,7 +123,7 @@ Agents (lehar-agent / MCP): prefer `--json` or `FLOWPLOT_BIN=… python3 agents/
 - `agents/flowplot_mcp.py` — stdio MCP wrapper for lehar agents
 - `docs/agent-bridge.md` — lehar ↔ Flowplot contract
 - `docs/postprocess-menu.md` — human-facing menu (groups ↔ lehar ↔ CLI/MCP)
-- `gui/` — Tecplot-like Plot panel (mesh-first) + Agents panel + SVG wordmark
+- `gui/` — Tecplot-like menus + Plot panel (mesh-first) + Analyze charts + SVG wordmark
 - `packaging/windows/` — MSI packaging (MinGW + wixl)
 - `tests/fixtures/` — synthetic Tecplot / VTK ASCII (incl. `flow.dat` for contour/pathlines)
 

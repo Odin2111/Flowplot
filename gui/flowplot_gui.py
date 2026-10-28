@@ -24,6 +24,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from agents_panel import AgentsPanel
 from contour_details_dialog import ContourDetailsDialog, ContourDetailsState
+from legend_options_dialog import LegendOptionsDialog, LegendOptionsState
+from probe_dialog import ProbeDialog
 from zone_style_dialog import (
     DEFAULT_MESH_COLOR,
     ZoneStyleDialog,
@@ -104,6 +106,8 @@ class FlowplotGui(tk.Tk):
         self._preview_after: str | None = None
         self._zone_style_dialog: ZoneStyleDialog | None = None
         self._contour_details_dialog: ContourDetailsDialog | None = None
+        self._legend_options_dialog: LegendOptionsDialog | None = None
+        self._probe_dialog: ProbeDialog | None = None
         self.contour_details = ContourDetailsState()
         self.tool_mode = tk.StringVar(value="orbit")  # orbit | probe | label
         self.probe_marks: list[tuple[int, int, str]] = []
@@ -118,6 +122,9 @@ class FlowplotGui(tk.Tk):
         self.layer_vector = tk.BooleanVar(value=False)
         self.layer_edge = tk.BooleanVar(value=False)
         self.layer_scatter = tk.BooleanVar(value=False)
+        # Show Derived Objects
+        self.layer_isosurfaces = tk.BooleanVar(value=False)
+        self.layer_slices = tk.BooleanVar(value=False)
         self.layer_pathlines = tk.BooleanVar(value=False)
 
         # Cut / track plane + Tecplot-like view orientation.
@@ -192,49 +199,120 @@ class FlowplotGui(tk.Tk):
         style.configure("TCheckbutton", background=PANEL, foreground=FG)
         style.configure("TCombobox", fieldbackground="#ffffff", foreground=FG)
 
+    def _stub_menu(self, name: str):
+        return lambda: self.stub_plot(name)
+
+    def _file_menu_items(self, menu: tk.Menu) -> None:
+        menu.add_command(label="Open…", command=self.action_load, accelerator="Ctrl+O")
+        menu.add_command(label="Export PNG…", command=self.action_export_png)
+        menu.add_separator()
+        menu.add_command(label="Quit", command=self.destroy)
+
+    def _edit_menu_items(self, menu: tk.Menu) -> None:
+        menu.add_command(label="Clear probe markers", command=self.clear_probe_marks)
+        menu.add_command(label="Redraw", command=self.action_redraw)
+
+    def _view_menu_items(self, menu: tk.Menu) -> None:
+        for label in ("+X", "-X", "+Y", "-Y", "+Z", "-Z"):
+            menu.add_command(
+                label=f"Look {label}",
+                command=lambda v=label.lower(): self._set_axis_view(v),
+            )
+        menu.add_separator()
+        menu.add_command(label="Reset view", command=self._reset_view)
+        menu.add_separator()
+        menu.add_radiobutton(label="Style · Default", variable=self.plot_style, value="default")
+        menu.add_radiobutton(label="Style · JFM", variable=self.plot_style, value="jfm")
+
     def _plot_menu_items(self, menu: tk.Menu) -> None:
-        """Tecplot Plot menu order (stubs where not yet implemented)."""
-        menu.add_command(label="Axis…", command=lambda: self.stub_plot("Axis"))
-        menu.add_command(label="Assign XY…", command=lambda: self.stub_plot("Assign XY"))
+        """Tecplot-like Plot menu (Flowplot names)."""
+        menu.add_command(label="Axes…", command=self._stub_menu("Axes"))
+        menu.add_command(label="Assign XY…", command=self._stub_menu("Assign XY"))
         menu.add_command(label="Zone Style…", command=self.action_zone_style)
         menu.add_separator()
+        menu.add_command(label="Contour Details…", command=self.action_contour_details)
+        menu.add_command(label="Legend Options…", command=self.action_legend_options)
         menu.add_command(label="Pathlines…", command=self.action_pathlines_dialog)
-        menu.add_command(label="Contour…", command=self.action_contour_details)
-        menu.add_command(label="Vector…", command=lambda: self.stub_plot("Vector"))
-        menu.add_command(label="Scatter…", command=lambda: self.stub_plot("Scatter"))
+        menu.add_command(label="Iso-Surfaces…", command=self.action_isosurfaces)
+        menu.add_command(label="Slices…", command=self.action_slices_focus)
+        menu.add_command(label="Vector…", command=self._stub_menu("Vector"))
+        menu.add_command(label="Scatter…", command=self._stub_menu("Scatter"))
         menu.add_separator()
-        menu.add_command(label="Blanking…", command=lambda: self.stub_plot("Blanking"))
-        menu.add_command(label="Label Points…", command=lambda: self.stub_plot("Label Points"))
+        menu.add_command(label="Blanking…", command=self._stub_menu("Blanking"))
+        menu.add_command(label="Label Points…", command=self._stub_menu("Label Points"))
         menu.add_separator()
         menu.add_command(label="Redraw", command=self.action_redraw)
         menu.add_command(label="Apply nondim scales", command=self.action_nondim)
 
+    def _insert_menu_items(self, menu: tk.Menu) -> None:
+        menu.add_command(label="Text…", command=self._stub_menu("Insert Text"))
+        menu.add_command(label="Geometry…", command=self._stub_menu("Insert Geometry"))
+        menu.add_command(label="Image…", command=self._stub_menu("Insert Image"))
+
+    def _animate_menu_items(self, menu: tk.Menu) -> None:
+        menu.add_command(label="Animate zones…", command=self._stub_menu("Animate zones"))
+        menu.add_command(label="Movie…", command=self._stub_menu("Movie"))
+
+    def _data_menu_items(self, menu: tk.Menu) -> None:
+        menu.add_command(label="Dataset info…", command=self.action_dataset_info)
+        menu.add_command(label="Probe…", command=self.action_open_probe_window)
+        menu.add_separator()
+        menu.add_command(label="Extract profile…", command=lambda: self.open_analyze_panel("extract-profile"))
+        menu.add_command(label="Apply nondim scales", command=self.action_nondim)
+
+    def _frame_menu_items(self, menu: tk.Menu) -> None:
+        menu.add_command(label="Fit to Viewport", command=self.action_redraw)
+        menu.add_command(label="Frame style…", command=self._stub_menu("Frame style"))
+
+    def _options_menu_items(self, menu: tk.Menu) -> None:
+        menu.add_command(label="Legend Options…", command=self.action_legend_options)
+        menu.add_command(label="Contour Details…", command=self.action_contour_details)
+        menu.add_separator()
+        menu.add_radiobutton(label="Plot style · Default", variable=self.plot_style, value="default")
+        menu.add_radiobutton(label="Plot style · JFM", variable=self.plot_style, value="jfm")
+
+    def _scripting_menu_items(self, menu: tk.Menu) -> None:
+        menu.add_command(label="PyMacro…", command=self._stub_menu("PyMacro"))
+        menu.add_command(label="Run script…", command=self._stub_menu("Run script"))
+
+    def _tools_menu_items(self, menu: tk.Menu) -> None:
+        menu.add_command(label="Probe tool", command=self.action_toggle_probe)
+        menu.add_command(label="Contour ± Level", command=self.action_contour_add_level)
+        menu.add_command(label="Contour Abc Label", command=self.action_toggle_contour_labels)
+
+    def _analyze_menu_items(self, menu: tk.Menu) -> None:
+        menu.add_command(label="Field sanity…", command=lambda: self.open_analyze_panel("field-sanity"))
+        menu.add_command(label="Positivity check…", command=lambda: self.open_analyze_panel("positivity-check"))
+        menu.add_command(label="Extract profile…", command=lambda: self.open_analyze_panel("extract-profile"))
+        menu.add_separator()
+        menu.add_command(label="Shock polar…", command=lambda: self.open_analyze_panel("shock-polar-field"))
+        menu.add_separator()
+        menu.add_command(label="All Analyze actions…", command=self.open_agents_panel)
+
+    def _help_menu_items(self, menu: tk.Menu) -> None:
+        menu.add_command(label="About Flowplot", command=self.show_about)
+
     def _build_menu(self) -> None:
         menubar = tk.Menu(self, tearoff=0, bg=MENU_BG, fg=FG, activebackground=ACCENT, activeforeground="#fff")
-        file_m = tk.Menu(menubar, tearoff=0)
-        file_m.add_command(label="Open…", command=self.action_load, accelerator="Ctrl+O")
-        file_m.add_command(label="Export PNG…", command=self.action_export_png)
-        file_m.add_separator()
-        file_m.add_command(label="Quit", command=self.destroy)
-        menubar.add_cascade(label="File", menu=file_m)
-
-        plot_m = tk.Menu(menubar, tearoff=0)
-        self._plot_menu_items(plot_m)
-        menubar.add_cascade(label="Plot", menu=plot_m)
-
-        style_m = tk.Menu(menubar, tearoff=0)
-        style_m.add_radiobutton(label="Default", variable=self.plot_style, value="default")
-        style_m.add_radiobutton(label="JFM", variable=self.plot_style, value="jfm")
-        menubar.add_cascade(label="Style", menu=style_m)
-
-        agents_m = tk.Menu(menubar, tearoff=0)
-        agents_m.add_command(label="Post-process agents…", command=self.open_agents_panel)
-        menubar.add_cascade(label="Agents", menu=agents_m)
-
-        help_m = tk.Menu(menubar, tearoff=0)
-        help_m.add_command(label="About Flowplot", command=self.show_about)
-        menubar.add_cascade(label="Help", menu=help_m)
-
+        builders = (
+            ("File", self._file_menu_items),
+            ("Edit", self._edit_menu_items),
+            ("View", self._view_menu_items),
+            ("Plot", self._plot_menu_items),
+            ("Insert", self._insert_menu_items),
+            ("Animate", self._animate_menu_items),
+            ("Data", self._data_menu_items),
+            ("Frame", self._frame_menu_items),
+            ("Options", self._options_menu_items),
+            ("Scripting", self._scripting_menu_items),
+            ("Tools", self._tools_menu_items),
+            ("Analyze", self._analyze_menu_items),
+            ("Help", self._help_menu_items),
+        )
+        for label, fill in builders:
+            m = tk.Menu(menubar, tearoff=0)
+            fill(m)
+            menubar.add_cascade(label=label, menu=m)
         self.config(menu=menubar)
         self.bind("<Control-o>", lambda _e: self.action_load())
 
@@ -253,40 +331,32 @@ class FlowplotGui(tk.Tk):
                 activeforeground="#ffffff",
                 relief=tk.FLAT,
                 font=("Helvetica", 9),
-                padx=8,
+                padx=6,
                 pady=3,
             )
             b.pack(side=tk.LEFT)
             return b
 
-        mb_file = menubutton("File")
-        file_m = tk.Menu(mb_file, tearoff=0)
-        file_m.add_command(label="Open…", command=self.action_load)
-        file_m.add_command(label="Export PNG…", command=self.action_export_png)
-        file_m.add_separator()
-        file_m.add_command(label="Quit", command=self.destroy)
-        mb_file.configure(menu=file_m)
-
-        mb_plot = menubutton("Plot")
-        plot_m = tk.Menu(mb_plot, tearoff=0)
-        self._plot_menu_items(plot_m)
-        mb_plot.configure(menu=plot_m)
-
-        mb_style = menubutton("Style")
-        style_m = tk.Menu(mb_style, tearoff=0)
-        style_m.add_radiobutton(label="Default", variable=self.plot_style, value="default")
-        style_m.add_radiobutton(label="JFM", variable=self.plot_style, value="jfm")
-        mb_style.configure(menu=style_m)
-
-        mb_agents = menubutton("Agents")
-        agents_m = tk.Menu(mb_agents, tearoff=0)
-        agents_m.add_command(label="Post-process agents…", command=self.open_agents_panel)
-        mb_agents.configure(menu=agents_m)
-
-        mb_help = menubutton("Help")
-        help_m = tk.Menu(mb_help, tearoff=0)
-        help_m.add_command(label="About Flowplot", command=self.show_about)
-        mb_help.configure(menu=help_m)
+        builders = (
+            ("File", self._file_menu_items),
+            ("Edit", self._edit_menu_items),
+            ("View", self._view_menu_items),
+            ("Plot", self._plot_menu_items),
+            ("Insert", self._insert_menu_items),
+            ("Animate", self._animate_menu_items),
+            ("Data", self._data_menu_items),
+            ("Frame", self._frame_menu_items),
+            ("Options", self._options_menu_items),
+            ("Scripting", self._scripting_menu_items),
+            ("Tools", self._tools_menu_items),
+            ("Analyze", self._analyze_menu_items),
+            ("Help", self._help_menu_items),
+        )
+        for label, fill in builders:
+            mb = menubutton(label)
+            m = tk.Menu(mb, tearoff=0)
+            fill(m)
+            mb.configure(menu=m)
 
         tk.Frame(self, bg="#b8c0c8", height=1).pack(side=tk.TOP, fill=tk.X)
 
@@ -313,6 +383,7 @@ class FlowplotGui(tk.Tk):
         self._probe_btn = tool_btn("✎ Probe", self.action_toggle_probe)
         ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=6)
         tool_btn("Details…", self.action_contour_details)
+        tool_btn("Legend…", self.action_legend_options)
         self.levels_label = tk.Label(
             bar,
             text=self._levels_status_text(),
@@ -405,7 +476,7 @@ class FlowplotGui(tk.Tk):
         self.viewport.bind("<ButtonRelease-1>", self._on_view_release)
         tip = ttk.Label(
             view_wrap,
-            text="Contour toolbar above · Drag = orbit · ✎ Probe click prints values · Viewport full width",
+            text="Menus · Contour ±/Label/Probe/Legend · Analyze charts · Drag=orbit · Viewport full width",
             font=("Helvetica", 8),
             foreground=MUTED,
         )
@@ -438,21 +509,41 @@ class FlowplotGui(tk.Tk):
             ("Edge", self.layer_edge),
             ("Scatter", self.layer_scatter),
         ):
+            cmd = (
+                self.action_redraw
+                if label in ("Mesh", "Contour", "Shade")
+                else self._layer_stub(label)
+            )
             ttk.Checkbutton(
                 layers,
                 text=label,
                 variable=var,
-                command=self.action_redraw if label in ("Mesh", "Contour") else self._layer_stub(label),
+                command=cmd,
             ).pack(anchor="w", pady=1)
 
         derived = ttk.LabelFrame(parent, text="Show Derived Objects", padding=(8, 6))
         derived.pack(fill=tk.X, padx=10, pady=(0, 8))
         ttk.Checkbutton(
             derived,
+            text="Iso-Surfaces",
+            variable=self.layer_isosurfaces,
+            command=self.action_isosurfaces,
+        ).pack(anchor="w")
+        ttk.Checkbutton(
+            derived,
+            text="Slices",
+            variable=self.layer_slices,
+            command=self.action_slices_focus,
+        ).pack(anchor="w")
+        ttk.Checkbutton(
+            derived,
             text="Pathlines",
             variable=self.layer_pathlines,
             command=self.action_redraw,
         ).pack(anchor="w")
+        ttk.Button(
+            derived, text="Redraw", style="Tool.TButton", command=self.action_redraw
+        ).pack(anchor="w", pady=(6, 0))
 
         ttk.Label(parent, text="Contour variable", style="Muted.TLabel").pack(anchor="w", padx=12, pady=(4, 0))
         self.var_combo = ttk.Combobox(
@@ -547,13 +638,13 @@ class FlowplotGui(tk.Tk):
             padx=12, pady=(4, 8), anchor="w"
         )
 
-        # Collapsible Nondim (was a right column — Viewport now full width).
-        self.nondim_expanded = tk.BooleanVar(value=False)
+        # Discoverable Nondim under Plot (expanded by default).
+        self.nondim_expanded = tk.BooleanVar(value=True)
         self._nondim_hdr = ttk.Frame(parent, style="Panel.TFrame")
         self._nondim_hdr.pack(fill=tk.X, padx=10, pady=(4, 0))
         ttk.Checkbutton(
             self._nondim_hdr,
-            text="Nondim scales ▸",
+            text="Nondim scales ▾",
             variable=self.nondim_expanded,
             command=self._toggle_nondim_panel,
         ).pack(side=tk.LEFT)
@@ -570,6 +661,7 @@ class FlowplotGui(tk.Tk):
         ttk.Button(
             self.nondim_body, text="Apply nondim", style="Tool.TButton", command=self.action_nondim
         ).pack(pady=(4, 2), anchor="w")
+        self.nondim_body.pack(fill=tk.X, padx=10, pady=(2, 4), after=self._nondim_hdr)
 
         self._log_label = ttk.Label(parent, text="Log", style="Muted.TLabel")
         self._log_label.pack(anchor="w", padx=12, pady=(8, 0))
@@ -610,7 +702,6 @@ class FlowplotGui(tk.Tk):
         def _cb() -> None:
             # Keep unchecked unimplemented layers from sticking on.
             var_map = {
-                "Shade": self.layer_shade,
                 "Vector": self.layer_vector,
                 "Edge": self.layer_edge,
                 "Scatter": self.layer_scatter,
@@ -1251,7 +1342,9 @@ class FlowplotGui(tk.Tk):
             return
 
         want_mesh = self.layer_mesh.get()
-        want_contour = self.layer_contour.get()
+        want_shade = self.layer_shade.get()
+        # Shade = continuous flood under mesh (first slice); Contour may add bands/labels.
+        want_contour = self.layer_contour.get() or want_shade
         want_pathlines = self.layer_pathlines.get()
         zone_idx = self._active_zone_index()
         zone_args = ["--zone", str(zone_idx)]
@@ -1289,6 +1382,7 @@ class FlowplotGui(tk.Tk):
                 str(ds),
                 f"m={want_mesh}",
                 f"c={want_contour}",
+                f"s={want_shade}",
                 f"p={want_pathlines}",
                 f"z={zone_idx}",
                 f"mc={','.join(mesh_color_args)}",
@@ -1349,7 +1443,9 @@ class FlowplotGui(tk.Tk):
             layers = []
             if want_mesh:
                 layers.append("Mesh")
-            if want_contour:
+            if want_shade and not self.layer_contour.get():
+                layers.append(f"Shade({var})")
+            elif self.layer_contour.get():
                 layers.append(f"Contour({var})")
             if want_pathlines and not interactive:
                 layers.append("Pathlines")
@@ -1397,7 +1493,8 @@ class FlowplotGui(tk.Tk):
                 *nondim,
                 *self._contour_cli_args(),
             ]
-            if want_mesh:
+            # Shade / Contour flood sits under mesh wires when Mesh (or Shade) is on.
+            if want_mesh or self.layer_shade.get():
                 args.append("--mesh")
                 args.extend(mesh_color_args)
             if want_pathlines and not interactive:
@@ -1441,20 +1538,30 @@ class FlowplotGui(tk.Tk):
 
     def _contour_cli_args(self) -> list[str]:
         cd = self.contour_details
+        # Shade alone prefers continuous flood; Contour Details coloring wins when Contour on.
+        coloring = cd.cli_coloring()
+        if self.layer_shade.get() and not self.layer_contour.get():
+            coloring = "continuous"
         args = [
             "--coloring",
-            cd.cli_coloring(),
+            coloring,
             "--levels",
             str(max(2, int(cd.nlevels))),
             "--colormap",
             cd.cli_colormap(),
             "--margin",
             "2",
+            "--legend-align",
+            cd.cli_legend_align(),
+            "--legend-font",
+            str(float(cd.legend_font_px or 0.0)),
         ]
         if cd.legend:
             args.append("--legend")
         else:
             args.append("--no-legend")
+        if cd.show_labels:
+            args.append("--labels")
         return args
 
     def action_enable_contour(self) -> None:
@@ -1510,11 +1617,39 @@ class FlowplotGui(tk.Tk):
 
     def action_toggle_contour_labels(self) -> None:
         self.contour_details.show_labels = not self.contour_details.show_labels
+        if self.contour_details.show_labels and self.contour_details.coloring.lower().startswith(
+            "cont"
+        ):
+            self.contour_details.coloring = "Banded"
         self._refresh_levels_label()
-        self._log(
-            "Contour labels "
-            + ("on (placement stub — use probe for values)" if self.contour_details.show_labels else "off")
+        self._log("Contour labels " + ("on" if self.contour_details.show_labels else "off"))
+        self.layer_contour.set(True)
+        self._render_cache.clear()
+        self.action_redraw()
+
+    def action_legend_options(self) -> None:
+        cd = self.contour_details
+        state = LegendOptionsState(
+            show=cd.legend,
+            align=cd.legend_align,
+            font_px=cd.legend_font_px,
+            colorbar=cd.legend,
         )
+        existing = self._legend_options_dialog
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            existing.focus_force()
+            return
+
+        def on_apply(st: LegendOptionsState) -> None:
+            self.contour_details.legend = bool(st.show and st.colorbar)
+            self.contour_details.legend_align = st.align
+            self.contour_details.legend_font_px = float(st.font_px or 0.0)
+            self.layer_contour.set(True)
+            self._render_cache.clear()
+            self.action_redraw()
+
+        self._legend_options_dialog = LegendOptionsDialog(self, state, on_apply=on_apply)
 
     def action_toggle_probe(self) -> None:
         if self.tool_mode.get() == "probe":
@@ -1524,18 +1659,40 @@ class FlowplotGui(tk.Tk):
         else:
             self.tool_mode.set("probe")
             self.viewport.configure(cursor="crosshair")
-            self._set_status("Probe — click the Viewport to print values")
+            self._set_status("Probe — click the Viewport; Probe window lists all variables")
+            self.action_open_probe_window()
         self._refresh_levels_label()
+
+    def action_open_probe_window(self) -> None:
+        existing = self._probe_dialog
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            existing.focus_force()
+            return
+        self._probe_dialog = ProbeDialog(
+            self,
+            on_clear=self.clear_probe_marks,
+            on_close=self.clear_probe_marks,
+        )
+
+    def clear_probe_marks(self) -> None:
+        self.probe_marks.clear()
+        self.viewport.delete("probe")
+        self._log("Probe markers cleared")
 
     def _draw_probe_overlays(self) -> None:
         self.viewport.delete("probe")
         for cx, cy, text in self.probe_marks:
+            short = text if len(text) < 28 else text[:25] + "…"
             self.viewport.create_line(cx - 6, cy, cx + 6, cy, fill="#1f2a33", width=1, tags="probe")
             self.viewport.create_line(cx, cy - 6, cx, cy + 6, fill="#1f2a33", width=1, tags="probe")
+            self.viewport.create_oval(
+                cx - 3, cy - 3, cx + 3, cy + 3, outline="#c00000", width=1, tags="probe"
+            )
             self.viewport.create_rectangle(
                 cx + 8,
                 cy - 18,
-                cx + 8 + max(70, 7 * len(text)),
+                cx + 8 + max(70, 7 * len(short)),
                 cy + 2,
                 fill="#fafbfc",
                 outline="#5c6b76",
@@ -1544,7 +1701,7 @@ class FlowplotGui(tk.Tk):
             self.viewport.create_text(
                 cx + 12,
                 cy - 8,
-                text=text,
+                text=short,
                 anchor="w",
                 fill="#1f2a33",
                 font=("DejaVu Sans", 9),
@@ -1555,17 +1712,13 @@ class FlowplotGui(tk.Tk):
         ds = self._require_dataset()
         if not ds:
             return
-        var = self.var_name.get().strip() or first_scalar(self.variables)
-        if not var:
-            messagebox.showwarning("Probe", "Select a contour variable first.")
-            return
+        self.action_open_probe_window()
         ox, oy = self._preview_offset
         pw, ph = self._preview_size
         nw, nh = self._preview_native
         if pw < 2 or ph < 2 or nw < 2 or nh < 2:
             self._log("Probe: no preview mapped yet — redraw first")
             return
-        # Canvas → displayed image → native raster pixels.
         lx = cx - ox
         ly = cy - oy
         if lx < 0 or ly < 0 or lx >= pw or ly >= ph:
@@ -1573,11 +1726,10 @@ class FlowplotGui(tk.Tk):
             return
         px = int(lx * nw / pw)
         py = int(ly * nh / ph)
+        # Omit --var so CLI samples every variable at the point.
         args = [
             "probe",
             str(ds),
-            "--var",
-            var,
             "--px",
             str(px),
             "--py",
@@ -1592,28 +1744,35 @@ class FlowplotGui(tk.Tk):
             str(self._active_zone_index()),
             "--json",
         ]
+        # Prefer active contour var as primary stamp when set.
+        var = self.var_name.get().strip()
+        if var:
+            args.extend(["--var", var])
         result = self._run_cli(args)
         if not result or result.returncode != 0:
             return
-        label = f"{var}=?"
+        label = "probe"
+        payload: dict = {}
         try:
             payload = json.loads(result.stdout.strip().splitlines()[-1])
             if payload.get("status") == "ok":
                 label = str(payload.get("label") or label)
+                nvals = len(payload.get("values") or {})
                 self._log(
-                    f"probe {label} @ world=({payload.get('x')}, {payload.get('y')}) "
-                    f"px=({payload.get('px')}, {payload.get('py')})"
+                    f"probe {label} (+{max(0, nvals - 1)} vars) @ "
+                    f"world=({payload.get('x')}, {payload.get('y')})"
                 )
             else:
                 self._log(result.stdout.strip())
                 return
         except (json.JSONDecodeError, IndexError, TypeError):
-            # Plain-text fallback.
             for line in result.stdout.strip().splitlines():
-                if "→" in line or "probe" in line.lower():
+                if "probe" in line.lower() or "=" in line:
                     label = line.strip()
                     break
             self._log(label)
+        if payload and self._probe_dialog is not None and self._probe_dialog.winfo_exists():
+            self._probe_dialog.update_probe(payload)
         self.probe_marks.append((cx, cy, label))
         if len(self.probe_marks) > 12:
             self.probe_marks = self.probe_marks[-12:]
@@ -1623,6 +1782,44 @@ class FlowplotGui(tk.Tk):
     def action_pathlines_dialog(self) -> None:
         self.layer_pathlines.set(True)
         self.action_redraw()
+
+    def action_isosurfaces(self) -> None:
+        """Iso-Surfaces derived object — first slice uses banded Contour levels."""
+        if self.layer_isosurfaces.get():
+            self.layer_contour.set(True)
+            self.contour_details.coloring = "Banded"
+            if not self.var_name.get().strip() and self.variables:
+                self.var_name.set(first_scalar(self.variables))
+            self._refresh_levels_label()
+            self._render_cache.clear()
+            self.action_redraw()
+            self._log("Iso-Surfaces on → banded Contour levels (volume isosurfaces later)")
+        else:
+            self._log("Iso-Surfaces off")
+
+    def action_slices_focus(self) -> None:
+        """Slices derived object — drives the Cut / Track plane controls."""
+        if not self.layer_slices.get():
+            # Checkbox toggled off from derived list.
+            self._log("Slices off")
+            return
+        self.layer_slices.set(True)
+        if self.plane_axis.get() == "auto":
+            self.plane_axis.set("k")
+        self._schedule_settle(delay_ms=60)
+        self._log("Slices on — use Cut / Track plane Index ±")
+        messagebox.showinfo(
+            "Slices",
+            "Slices use the Cut / Track plane controls in the Plot panel.\n"
+            "Pick Axis (i/j/k) and step Index with − / +.",
+            parent=self,
+        )
+
+    def action_dataset_info(self) -> None:
+        ds = self._require_dataset()
+        if not ds:
+            return
+        self._run_cli(["--json", "info", str(ds)])
 
     def action_zone_style(self) -> None:
         """Plot → Zone Style… (Tecplot-like per-zone Mesh/Contour table)."""
@@ -1786,10 +1983,12 @@ class FlowplotGui(tk.Tk):
         )
 
     def open_agents_panel(self) -> None:
+        self.open_analyze_panel(None)
+
+    def open_analyze_panel(self, select_id: str | None = None) -> None:
         bin_path = self._require_cli()
         if not bin_path:
             return
-        # Reuse an existing panel if still open.
         existing = getattr(self, "_agents_panel", None)
         if existing is not None and existing.winfo_exists():
             existing.dataset_path = self.dataset_path
@@ -1805,6 +2004,7 @@ class FlowplotGui(tk.Tk):
             )
             existing.lift()
             existing.focus_force()
+            self._select_analyze_item(existing, select_id)
             return
         panel = AgentsPanel(
             self,
@@ -1816,15 +2016,33 @@ class FlowplotGui(tk.Tk):
             plot_style=self.plot_style.get(),
             on_png=self._show_png_preview,
             repo_root=ROOT.parent,
+            title="Analyze",
+            focus_group="validation",
         )
         self._agents_panel = panel
+        self._select_analyze_item(panel, select_id)
+
+    def _select_analyze_item(self, panel: AgentsPanel, select_id: str | None) -> None:
+        if not select_id:
+            return
+        iid = f"i:{select_id}"
+        try:
+            # Expand parents then select.
+            parent = panel.tree.parent(iid)
+            if parent:
+                panel.tree.item(parent, open=True)
+            panel.tree.selection_set(iid)
+            panel.tree.see(iid)
+            panel._on_select()
+        except tk.TclError:
+            pass
 
     def show_about(self) -> None:
         messagebox.showinfo(
             "About Flowplot",
             "Flowplot — CFD post-processor\n"
-            "Tecplot-like Plot panel: Mesh first, Contour optional.\n"
-            f"Wordmark: {self._wordmark_path}\n"
+            "Tecplot-like menus + Plot panel (Mesh first).\n"
+            "Analyze hosts field sanity, positivity, profiles, shock polar.\n"
             f"CLI: {self.flowplot or '(not found)'}",
         )
 

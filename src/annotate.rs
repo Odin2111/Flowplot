@@ -31,6 +31,20 @@ pub struct AnnotationInfo {
     pub colorbar: bool,
     /// Contour level count shown in the HUD (when banded / labeled).
     pub nlevels: Option<u32>,
+    /// Stamp iso-level value labels on the flood (Contour Abc Label).
+    pub show_labels: bool,
+    /// Colorbar tick / variable font size in pixels (0 = auto from width).
+    pub legend_font_px: f32,
+    /// `right` (default) or `left` colorbar alignment.
+    pub legend_align: LegendAlign,
+}
+
+/// Colorbar side (Tecplot Contour Details → Legend).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LegendAlign {
+    #[default]
+    Right,
+    Left,
 }
 
 impl Default for AnnotationInfo {
@@ -51,6 +65,9 @@ impl Default for AnnotationInfo {
             colormap: crate::contour::ColorMapName::StyleDefault,
             colorbar: false,
             nlevels: None,
+            show_labels: false,
+            legend_font_px: 0.0,
+            legend_align: LegendAlign::Right,
         }
     }
 }
@@ -166,6 +183,11 @@ pub fn draw_annotations(img: &mut ContourImage, info: &AnnotationInfo) {
 
     if info.colorbar {
         if let (Some(vmin), Some(vmax)) = (info.vmin, info.vmax) {
+            let label_px = if info.legend_font_px > 0.0 {
+                info.legend_font_px
+            } else {
+                body_px
+            };
             draw_colorbar(
                 img,
                 info.style,
@@ -173,8 +195,17 @@ pub fn draw_annotations(img: &mut ContourImage, info: &AnnotationInfo) {
                 vmin,
                 vmax,
                 info.variable.as_deref(),
-                body_px,
+                label_px,
+                info.legend_align,
+                info.nlevels,
             );
+        }
+    }
+
+    if info.show_labels {
+        if let (Some(vmin), Some(vmax)) = (info.vmin, info.vmax) {
+            let n = info.nlevels.unwrap_or(8).max(2);
+            draw_level_labels(img, vmin, vmax, n);
         }
     }
 }
@@ -241,6 +272,8 @@ fn draw_colorbar(
     vmax: f64,
     variable: Option<&str>,
     label_px: f32,
+    align: LegendAlign,
+    nlevels: Option<u32>,
 ) {
     let bar_w = (img.width / 28).clamp(14, 28) as i32;
     let margin = 10i32;
@@ -256,15 +289,19 @@ fn draw_colorbar(
     let (tw_mid, _) = measure_text(&mid, tick_px);
     let (tw_var, _) = measure_text(var_label, label_px);
     let label_w = tw_hi.max(tw_lo).max(tw_mid).max(tw_var).max(36);
-    let x0 = img.width as i32 - margin - bar_w - label_w - 10;
-    if x0 < 40 || bot - top < 40 {
+    let block_w = bar_w + label_w + 22;
+    let x0 = match align {
+        LegendAlign::Right => img.width as i32 - margin - bar_w - label_w - 10,
+        LegendAlign::Left => margin + 4,
+    };
+    if x0 < 4 || bot - top < 40 {
         return;
     }
     fill_rect(
         img,
         x0 - 8,
         top - 24,
-        bar_w + label_w + 22,
+        block_w,
         bot - top + 48,
         PANEL,
     );
@@ -284,9 +321,78 @@ fn draw_colorbar(
     draw_line(img, x0 + bar_w, top, x0 + bar_w, bot, BAR_FRAME);
 
     let tx = (x0 + bar_w + 6) as f32;
-    draw_text_aa(img, tx, top as f32, &hi, tick_px, FG);
-    draw_text_aa(img, tx, ((top + bot) / 2) as f32, &mid, tick_px, FG_SOFT);
-    draw_text_aa(img, tx, (bot - 14) as f32, &lo, tick_px, FG);
+    let ticks = nlevels.unwrap_or(2).clamp(2, 16);
+    if ticks <= 3 {
+        draw_text_aa(img, tx, top as f32, &hi, tick_px, FG);
+        draw_text_aa(img, tx, ((top + bot) / 2) as f32, &mid, tick_px, FG_SOFT);
+        draw_text_aa(img, tx, (bot - 14) as f32, &lo, tick_px, FG);
+    } else {
+        for i in 0..ticks {
+            let t = i as f64 / (ticks - 1) as f64;
+            let y = (bot as f64 - t * (bot - top) as f64).round() as i32;
+            let v = vmin + t * (vmax - vmin);
+            draw_text_aa(img, tx, (y - 6) as f32, &format_tick(v), tick_px, FG);
+        }
+    }
+}
+
+/// Place iso-level value stamps along a mid-j scan (Contour Abc Label).
+fn draw_level_labels(img: &mut ContourImage, vmin: f64, vmax: f64, nlevels: u32) {
+    let n = nlevels.max(2) as usize;
+    let levels: Vec<f64> = (0..n)
+        .map(|i| vmin + (i as f64 + 0.5) / n as f64 * (vmax - vmin))
+        .collect();
+    let ni = img.grid.ni;
+    let nj = img.grid.nj;
+    if ni < 2 || nj < 2 {
+        return;
+    }
+    let j = nj / 2;
+    let font_px = if img.width >= 700 { 11.0 } else { 10.0 };
+    let legend_reserve = ((img.width as f64) * 0.10).round().clamp(48.0, 88.0) as u32;
+    let plot_w = img.width.saturating_sub(legend_reserve).max(32);
+    let margin = 2u32;
+    // Collect world hits without holding a grid borrow across draws.
+    let mut world_hits: Vec<(f64, f64, String)> = Vec::new();
+    for i in 0..ni.saturating_sub(1) {
+        let v0 = img.grid.value(i, j);
+        let v1 = img.grid.value(i + 1, j);
+        if !v0.is_finite() || !v1.is_finite() {
+            continue;
+        }
+        for &lev in &levels {
+            let cross = (v0 - lev) * (v1 - lev) <= 0.0 && (v0 - v1).abs() > 1e-30;
+            if !cross {
+                continue;
+            }
+            let t = ((lev - v0) / (v1 - v0)).clamp(0.0, 1.0);
+            let (x0, y0) = img.grid.xy(i, j);
+            let (x1, y1) = img.grid.xy(i + 1, j);
+            world_hits.push((
+                x0 + t * (x1 - x0),
+                y0 + t * (y1 - y0),
+                format_tick(lev),
+            ));
+            if world_hits.len() >= n.min(12) {
+                break;
+            }
+        }
+        if world_hits.len() >= n.min(12) {
+            break;
+        }
+    }
+    let mut stamps: Vec<(i32, i32, String)> = Vec::with_capacity(world_hits.len());
+    for (wx, wy, text) in world_hits {
+        let (px, py) = crate::contour::world_to_pixel_plot(img, wx, wy, plot_w, margin);
+        stamps.push((px, py, text));
+    }
+    for (px, py, text) in stamps {
+        let (tw, th) = measure_text(&text, font_px);
+        let tx = px + 4;
+        let ty = py - th - 2;
+        fill_rect(img, tx - 2, ty - 1, tw + 4, th + 2, PANEL);
+        draw_text_aa(img, tx as f32, ty as f32, &text, font_px, FG);
+    }
 }
 
 fn format_tick(v: f64) -> String {

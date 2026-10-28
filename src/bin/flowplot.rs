@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use flowplot::annotate::{draw_annotations, draw_probe_label, AnnotationInfo};
+use flowplot::annotate::{draw_annotations, draw_probe_label, AnnotationInfo, LegendAlign};
 use flowplot::contour::{
     pixel_to_world, render_contour, write_png, ColorMapName, ContourColoring, ContourOptions,
     PlotStyle,
@@ -154,15 +154,25 @@ enum Commands {
         /// Suppress the colorbar legend.
         #[arg(long, default_value_t = false)]
         no_legend: bool,
+        /// Stamp iso-level value labels on the flood (Contour Abc Label).
+        #[arg(long, default_value_t = false)]
+        labels: bool,
+        /// Colorbar font size in pixels (0 = auto from raster width).
+        #[arg(long, default_value_t = 0.0)]
+        legend_font: f32,
+        /// Colorbar side: `right` (default) or `left`.
+        #[arg(long, default_value = "right")]
+        legend_align: String,
         /// Pixel margin around the filled plot area.
         #[arg(long, default_value_t = 4)]
         margin: u32,
     },
-    /// Probe a scalar at world or pixel coordinates (Tecplot-like probe).
+    /// Probe all (or one) variables at world or pixel coordinates (Tecplot-like).
     Probe {
         path: PathBuf,
+        /// Optional single variable; omit to sample every variable at the point.
         #[arg(long = "var", short = 'v')]
-        variable: String,
+        variable: Option<String>,
         #[arg(long, default_value_t = 0)]
         zone: usize,
         #[arg(long)]
@@ -438,6 +448,9 @@ fn dispatch(
             colormap,
             legend,
             no_legend,
+            labels,
+            legend_font,
+            legend_align,
             margin,
         }) => run_contour(
             &path,
@@ -461,6 +474,9 @@ fn dispatch(
             levels,
             colormap,
             legend && !no_legend,
+            labels,
+            legend_font,
+            parse_legend_align(&legend_align),
             margin,
             json,
         ),
@@ -481,7 +497,7 @@ fn dispatch(
             nondim,
         }) => run_probe(
             &path,
-            &variable,
+            variable.as_deref(),
             zone,
             plane.as_deref(),
             view.as_deref(),
@@ -793,6 +809,28 @@ fn dispatch_ready_item(item: &MenuItem, args: Vec<String>, json: bool) -> flowpl
     // Allow `menu run <id> -- <args>`; clap may leave a literal "--".
     if forwarded.first().map(String::as_str) == Some("--") {
         forwarded.remove(0);
+    }
+    // Shock polar chart lives in Analyze (matplotlib θ–β–M); CLI documents how.
+    if item.id == "shock-polar-field" || item.flowplot.command == "shock-polar" {
+        if json {
+            let payload = serde_json::json!({
+                "status": "ok",
+                "command": "shock-polar",
+                "id": item.id,
+                "note": "Open Analyze → Shock polar for the θ–β–M chart (gui/shock_polar.py). CFD-coupled polars remain in lehar shock_polar.",
+                "how": "python3 -c \"from gui.shock_polar import plot_polar_png; plot_polar_png('/tmp/polar.png', mach=2.0, gamma=1.4)\"",
+                "template": item.flowplot.template,
+            });
+            println!("{payload}");
+        } else {
+            println!(
+                "shock polar: use Analyze → Shock polar (gui/shock_polar.py θ–β–M).\n\
+                 CFD-coupled polars: lehar agent shock_polar.\n\
+                 template: {}",
+                item.flowplot.template
+            );
+        }
+        return Ok(());
     }
     // contour-pathlines always overlays traces.
     if item.id == "contour-pathlines"
@@ -1192,6 +1230,14 @@ fn run_mesh(
     Ok(())
 }
 
+fn parse_legend_align(s: &str) -> LegendAlign {
+    if s.eq_ignore_ascii_case("left") {
+        LegendAlign::Left
+    } else {
+        LegendAlign::Right
+    }
+}
+
 fn run_contour(
     path: &PathBuf,
     variable: &str,
@@ -1214,6 +1260,9 @@ fn run_contour(
     levels: u32,
     colormap: ColorMapName,
     legend: bool,
+    show_labels: bool,
+    legend_font_px: f32,
+    legend_align: LegendAlign,
     margin: u32,
     json: bool,
 ) -> flowplot::Result<()> {
@@ -1245,6 +1294,9 @@ fn run_contour(
             nlevels: levels,
             colormap,
             legend,
+            show_labels,
+            legend_font_px,
+            legend_align,
             margin,
         },
     )?;
@@ -1291,11 +1343,14 @@ fn run_contour(
         info.vmax = Some(img.vmax);
         info.style = style;
         info.colormap = colormap;
-        info.nlevels = if coloring == ContourColoring::Banded {
+        info.nlevels = if coloring == ContourColoring::Banded || show_labels {
             Some(levels.max(2))
         } else {
             None
         };
+        info.show_labels = show_labels;
+        info.legend_font_px = legend_font_px;
+        info.legend_align = legend_align;
         info.view = Some(view.label());
         info.plane = Some(match plane {
             PlaneSpec::Auto => "auto".into(),
@@ -1307,7 +1362,7 @@ fn run_contour(
     write_png(out, &img)?;
     if json {
         println!(
-            "{{\"status\":\"ok\",\"command\":\"contour\",\"path\":{},\"var\":{},\"zone\":{},\"out\":{},\"vmin\":{},\"vmax\":{},\"mesh\":{},\"coloring\":{},\"levels\":{},\"colormap\":{},\"legend\":{},\"pathline_traces\":{},\"pathlines_out\":{}}}",
+            "{{\"status\":\"ok\",\"command\":\"contour\",\"path\":{},\"var\":{},\"zone\":{},\"out\":{},\"vmin\":{},\"vmax\":{},\"mesh\":{},\"coloring\":{},\"levels\":{},\"colormap\":{},\"legend\":{},\"labels\":{},\"pathline_traces\":{},\"pathlines_out\":{}}}",
             json_string(&path.display().to_string()),
             json_string(variable),
             zone,
@@ -1328,6 +1383,7 @@ fn run_contour(
                 ColorMapName::Grayscale => "grayscale",
             }),
             if legend { "true" } else { "false" },
+            if show_labels { "true" } else { "false" },
             n_traces,
             pathlines_out_written
                 .as_ref()
@@ -1352,7 +1408,7 @@ fn run_contour(
 
 fn run_probe(
     path: &PathBuf,
-    variable: &str,
+    variable: Option<&str>,
     zone: usize,
     plane: Option<&str>,
     view: Option<&str>,
@@ -1374,20 +1430,24 @@ fn run_probe(
     let ds = maybe_nondim(load_path(path)?, &nondim_args, nondim_args.suggest)?;
     let plane = parse_plane(plane)?;
     let view = parse_view(view)?;
-    let var_idx = find_var(&ds, variable)?;
-    let grid = extract_scalar_grid_view(&ds, zone, var_idx, plane, view)?;
+    // Use the first variable (or requested) only to establish the pixel↔world map.
+    let map_name = variable
+        .map(|s| s.to_string())
+        .or_else(|| ds.variables.first().cloned())
+        .ok_or_else(|| flowplot::Error::plot("probe: dataset has no variables"))?;
+    let map_idx = find_var(&ds, &map_name)?;
+    let map_grid = extract_scalar_grid_view(&ds, zone, map_idx, plane, view)?;
     let legend_reserve = ((width as f64) * 0.14).round().clamp(56.0, 110.0) as u32;
     let plot_w = width.saturating_sub(legend_reserve).max(32);
     let margin = 4u32;
     let (wx, wy, pix_x, pix_y) = if let (Some(px), Some(py)) = (px, py) {
-        // Build a throwaway ContourImage for pixel→world with the fill mapping.
         let img = flowplot::ContourImage {
             width,
             height,
             rgba: vec![0; (width as usize) * (height as usize) * 4],
             vmin: 0.0,
             vmax: 1.0,
-            grid: grid.clone(),
+            grid: map_grid.clone(),
         };
         let (wx, wy) = pixel_to_world(&img, px, py, plot_w, margin);
         (wx, wy, px, py)
@@ -1398,7 +1458,7 @@ fn run_probe(
             rgba: vec![0; (width as usize) * (height as usize) * 4],
             vmin: 0.0,
             vmax: 1.0,
-            grid: grid.clone(),
+            grid: map_grid.clone(),
         };
         let (px, py) = flowplot::world_to_pixel_plot(&img, wx, wy, plot_w, margin);
         (wx, wy, px, py)
@@ -1407,17 +1467,42 @@ fn run_probe(
             "probe requires --x/--y or --px/--py",
         ));
     };
-    let value = grid.sample(wx, wy).ok_or_else(|| {
-        flowplot::Error::plot(format!(
+
+    // Sample every variable at (wx, wy); optional --var still reported as primary.
+    let mut values: Vec<(String, Option<f64>)> = Vec::with_capacity(ds.variables.len());
+    for (vi, name) in ds.variables.iter().enumerate() {
+        let g = extract_scalar_grid_view(&ds, zone, vi, plane, view)?;
+        values.push((name.clone(), g.sample(wx, wy)));
+    }
+    if values.iter().all(|(_, v)| v.is_none()) {
+        return Err(flowplot::Error::plot(format!(
             "probe ({wx}, {wy}) is outside the active plane"
-        ))
-    })?;
-    let label = format!("{variable}={value:.6}");
+        )));
+    }
+
+    let primary_name = variable.unwrap_or(map_name.as_str());
+    let primary_val = values
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(primary_name))
+        .and_then(|(_, v)| *v);
+    let label = match primary_val {
+        Some(v) => format!("{primary_name}={v:.6}"),
+        None => format!("{primary_name}=n/a"),
+    };
+
+    let zone_name = ds
+        .zones
+        .get(zone)
+        .map(|z| z.name.clone())
+        .unwrap_or_else(|| format!("zone_{zone}"));
+    let (xmin, xmax, ymin, ymax) = map_grid.bounds();
+
     if let Some(out_path) = out {
+        let stamp_var = primary_name.to_string();
         let mut img = render_contour(
             &ds,
             &ContourOptions {
-                variable: variable.to_string(),
+                variable: stamp_var,
                 zone,
                 plane,
                 view,
@@ -1432,23 +1517,53 @@ fn run_probe(
         draw_probe_label(&mut img, pix_x, pix_y, &label);
         write_png(out_path, &img)?;
     }
+
     if json {
+        let mut vals_json = String::from("{");
+        for (i, (name, val)) in values.iter().enumerate() {
+            if i > 0 {
+                vals_json.push(',');
+            }
+            vals_json.push_str(&json_string(name));
+            vals_json.push(':');
+            match val {
+                Some(v) => vals_json.push_str(&json_f64(*v)),
+                None => vals_json.push_str("null"),
+            }
+        }
+        vals_json.push('}');
         println!(
-            "{{\"status\":\"ok\",\"command\":\"probe\",\"path\":{},\"var\":{},\"zone\":{},\"x\":{},\"y\":{},\"px\":{},\"py\":{},\"value\":{},\"label\":{}}}",
+            "{{\"status\":\"ok\",\"command\":\"probe\",\"path\":{},\"var\":{},\"zone\":{},\"zone_name\":{},\"x\":{},\"y\":{},\"px\":{},\"py\":{},\"value\":{},\"label\":{},\"values\":{},\"bounds\":{{\"xmin\":{},\"xmax\":{},\"ymin\":{},\"ymax\":{}}},\"ni\":{},\"nj\":{}}}",
             json_string(&path.display().to_string()),
-            json_string(variable),
+            json_string(primary_name),
             zone,
+            json_string(&zone_name),
             json_f64(wx),
             json_f64(wy),
             pix_x,
             pix_y,
-            json_f64(value),
-            json_string(&label)
+            primary_val
+                .map(json_f64)
+                .unwrap_or_else(|| "null".into()),
+            json_string(&label),
+            vals_json,
+            json_f64(xmin),
+            json_f64(xmax),
+            json_f64(ymin),
+            json_f64(ymax),
+            map_grid.ni,
+            map_grid.nj
         );
     } else {
         println!(
-            "probe {variable} @ ({wx:.6}, {wy:.6}) px=({pix_x},{pix_y}) → {value:.8}"
+            "probe @ ({wx:.6}, {wy:.6}) px=({pix_x},{pix_y}) zone={zone_name}"
         );
+        for (name, val) in &values {
+            match val {
+                Some(v) => println!("  {name} = {v:.8}"),
+                None => println!("  {name} = n/a"),
+            }
+        }
     }
     Ok(())
 }

@@ -276,16 +276,21 @@ groups:
         mcp: flowplot_contour
 
       - id: shock-polar-field
-        title: Shock-polar field
-        summary: Contour Mach/pressure while polar construction stays in lehar.
-        status: stub
+        title: Shock polar (θ–β–M)
+        summary: >
+          Analytic ideal-gas shock polar chart in Analyze. CFD-coupled polars
+          remain in lehar shock_polar; Flowplot draws the textbook θ–β curve.
+        status: ready
         lehar:
           agent: shock_polar
         flowplot:
-          command: contour
-          template: "flowplot contour {path} --var {var} -o {out} --u-ref {Uinf} --json"
-          planned_flags: ["--var", "-o", "--u-ref", "--json"]
-          notes: "requires agent shock_polar (or shock_interaction_polar)."
+          command: shock-polar
+          template: "Analyze → Shock polar (matplotlib θ–β–M); optional contour Mach/p separately"
+          required_args: [path]
+          optional_flags: ["--mach", "--gamma", "-o"]
+          notes: >
+            GUI runs gui/shock_polar.py (γ-law). For CFD-coupled / multi-shock
+            polars use lehar agent shock_polar; then optionally contour Mach or p.
         mcp: flowplot_contour
 
       - id: shock-tracking-field

@@ -191,6 +191,12 @@ pub struct ContourOptions {
     pub colormap: ColorMapName,
     /// Draw the colorbar legend when annotating.
     pub legend: bool,
+    /// Stamp iso-level labels on the flood (Contour Abc Label).
+    pub show_labels: bool,
+    /// Colorbar font size in pixels (0 = auto).
+    pub legend_font_px: f32,
+    /// `right` or `left` colorbar side.
+    pub legend_align: crate::annotate::LegendAlign,
     /// Pixel margin around the filled plot (tight → no letterbox waste).
     pub margin: u32,
 }
@@ -213,6 +219,9 @@ impl Default for ContourOptions {
             nlevels: 16,
             colormap: ColorMapName::StyleDefault,
             legend: true,
+            show_labels: false,
+            legend_font_px: 0.0,
+            legend_align: crate::annotate::LegendAlign::Right,
             margin: 2,
         }
     }
@@ -313,11 +322,14 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
         info.vmax = Some(vmax);
         info.style = opts.style;
         info.colormap = opts.colormap;
-        info.nlevels = if opts.coloring == ContourColoring::Banded {
+        info.nlevels = if opts.coloring == ContourColoring::Banded || opts.show_labels {
             Some(opts.nlevels.max(2))
         } else {
             None
         };
+        info.show_labels = opts.show_labels;
+        info.legend_font_px = opts.legend_font_px;
+        info.legend_align = opts.legend_align;
         info.view = Some(opts.view.label());
         info.plane = Some(match opts.plane {
             PlaneSpec::Auto => "auto".into(),
