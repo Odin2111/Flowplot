@@ -18,7 +18,7 @@ Native **tkinter** shell under `gui/flowplot_gui.py`. The viewport previews PNGs
 - Plot menu: Axis…, Assign XY…, **Zone Style…** (Mesh + Contour working; other tabs stub), Pathlines…, **Contour…** (Contour Details), Vector…, Scatter…, Blanking…, Label Points… (stubs where not yet implemented; Pathlines = Tecplot “Streamtraces”)
 - Zone Style Apply → per-zone Show Zone / Show Mesh / Contour + mesh color → CLI `--zone` / `--mesh-color`
 - Contour Details (Levels and Color / Bands / Lines / Labels / Legend): working slice = levels, colormap, banded vs continuous, legend; other tabs stub
-- Annotation HUD uses 2× supersampled DejaVu Sans (no stretch artifacts); colorbar labels sized to fit
+- Annotation HUD uses native fontdue AA at 1:1 Viewport size (no stretch); colorbar labels sized to fit
 
 ## Run
 
