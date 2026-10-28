@@ -20,25 +20,29 @@ Requires a recent stable Rust toolchain (`edition = "2021"`).
 ## CLI
 
 ```bash
-# Summary + name-based nondim suggestions
-flowplot <path>
-flowplot info <path>
+# Summary + name-based nondim suggestions (agent entry: load --json)
+flowplot load <path> [--json]
+flowplot <path> [--json]          # same as load
+flowplot info <path> [--json]
 
 # Contour any scalar to PNG
 flowplot contour <path> --var P -o out.png [--plane k=0] [--vmin 0] [--vmax 1] \
   [--width 512] [--height 512] [--zone 0] \
   [--u-ref U] [--lx Lx] [--ly Ly] [--lz Lz] [--t-ref T] \
-  [--pathlines] [--pathlines-out lines.png] [--seed x,y] [--u-var U] [--v-var V] [--dt 0.02]
+  [--pathlines] [--pathlines-out lines.png] [--seed x,y] [--u-var U] [--v-var V] [--dt 0.02] \
+  [--json]
 
 # Nondim suggestions / apply scales (no invented physics)
 flowplot nondim <path> [--u-ref U] [--lx Lx] [--ly Ly] [--lz Lz] [--t-ref T] \
-  [--x-var X] [--y-var Y] [--z-var Z]
+  [--x-var X] [--y-var Y] [--z-var Z] [--json]
 
 # Pathlines (particle traces / streamlines)
-flowplot pathlines <path> -o lines.png [--var P] [--seed x,y] [--u-var U] [--v-var V]
+flowplot pathlines <path> -o lines.png [--var P] [--seed x,y] [--u-var U] [--v-var V] [--json]
 ```
 
 `--pathlines` overlays traces on the contour PNG; `--pathlines-out` writes a second PNG.
+
+Agents (lehar-agent / MCP): prefer `--json` or `FLOWPLOT_BIN=… python3 agents/flowplot_mcp.py` — see [`docs/agent-bridge.md`](docs/agent-bridge.md).
 
 ## Format support
 

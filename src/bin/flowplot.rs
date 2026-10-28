@@ -1,4 +1,5 @@
 //! CLI: load CFD files; summarize; contour PNG; nondim scales; pathlines.
+//! Agent contract: every subcommand accepts `--json` and emits a stable JSON object.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -8,7 +9,7 @@ use clap::{Parser, Subcommand};
 use flowplot::contour::{render_contour, write_png, ContourOptions};
 use flowplot::field::{extract_scalar_grid, find_var, PlaneSpec};
 use flowplot::nondim::{
-    apply_nondim, format_suggestions, suggest_scales, NondimScales,
+    apply_nondim, format_suggestions, suggest_scales, NondimScales, NondimSuggestion,
 };
 use flowplot::pathlines::{
     default_seeds, guess_velocity_vars, overlay_pathlines, render_pathlines_png, trace_pathlines,
@@ -23,17 +24,25 @@ use flowplot::{load_path, Dataset};
     arg_required_else_help = true
 )]
 struct Cli {
+    /// Emit a machine-readable JSON object (for lehar / MCP agents).
+    #[arg(long, global = true)]
+    json: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Path to a CFD file (summary mode when no subcommand).
+    /// Path to a CFD file (summary / load mode when no subcommand).
     path: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Print zone / variable / size summary (same as bare `flowplot <path>`).
+    /// Print zone / variable / size summary (alias of `load`).
     Info {
+        path: PathBuf,
+    },
+    /// Load a CFD file and summarize zones / variables (preferred agent entry).
+    Load {
         path: PathBuf,
     },
     /// Contour (pseudocolor) any scalar variable to PNG.
@@ -168,15 +177,18 @@ struct PathlineArgs {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let json = cli.json;
     let result = match cli.command {
         None => {
             let Some(path) = cli.path else {
-                eprintln!("usage: flowplot <path> | flowplot <info|contour|nondim|pathlines> ...");
+                eprintln!(
+                    "usage: flowplot [--json] <path> | flowplot [--json] <load|info|contour|nondim|pathlines> ..."
+                );
                 return ExitCode::from(2);
             };
-            run_info(&path)
+            run_info(&path, json)
         }
-        Some(Commands::Info { path }) => run_info(&path),
+        Some(Commands::Info { path }) | Some(Commands::Load { path }) => run_info(&path, json),
         Some(Commands::Contour {
             path,
             variable,
@@ -205,12 +217,13 @@ fn main() -> ExitCode {
             pathlines,
             pathlines_out.as_ref(),
             &pl_args,
+            json,
         ),
         Some(Commands::Nondim {
             path,
             nondim,
             summary,
-        }) => run_nondim(&path, &nondim, summary),
+        }) => run_nondim(&path, &nondim, summary, json),
         Some(Commands::Pathlines {
             path,
             out,
@@ -235,22 +248,107 @@ fn main() -> ExitCode {
             contour_var.as_deref(),
             vmin,
             vmax,
+            json,
         ),
     };
 
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("error: {e}");
+            if json {
+                println!(
+                    "{{\"status\":\"error\",\"error\":{}}}",
+                    json_string(&e.to_string())
+                );
+            } else {
+                eprintln!("error: {e}");
+            }
             ExitCode::FAILURE
         }
     }
 }
 
-fn run_info(path: &PathBuf) -> flowplot::Result<()> {
+fn json_string(s: &str) -> String {
+    let mut out = String::from('"');
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn json_string_list(items: &[String]) -> String {
+    let parts: Vec<_> = items.iter().map(|s| json_string(s)).collect();
+    format!("[{}]", parts.join(","))
+}
+
+fn json_f64(v: f64) -> String {
+    if v.is_finite() {
+        // Keep a compact but parseable representation.
+        format!("{v}")
+    } else if v.is_nan() {
+        "null".into()
+    } else if v.is_sign_positive() {
+        "null".into()
+    } else {
+        "null".into()
+    }
+}
+
+fn suggestions_json(suggestions: &[NondimSuggestion]) -> String {
+    let parts: Vec<_> = suggestions
+        .iter()
+        .map(|s| {
+            format!(
+                "{{\"variable\":{},\"kind\":{},\"message\":{}}}",
+                json_string(&s.variable),
+                json_string(&format!("{:?}", s.kind)),
+                json_string(&s.message)
+            )
+        })
+        .collect();
+    format!("[{}]", parts.join(","))
+}
+
+fn dataset_load_json(path: &PathBuf, ds: &Dataset, suggestions: &[NondimSuggestion]) -> String {
+    let mut zones = Vec::new();
+    for (i, zone) in ds.zones.iter().enumerate() {
+        zones.push(format!(
+            "{{\"index\":{i},\"name\":{},\"nodes\":{},\"cells\":{}}}",
+            json_string(&zone.name),
+            zone.node_count(),
+            zone.cell_count()
+        ));
+    }
+    format!(
+        "{{\"status\":\"ok\",\"command\":\"load\",\"path\":{},\"title\":{},\"variables\":{},\"zones\":[{}],\"nondim_suggestions\":{}}}",
+        json_string(&path.display().to_string()),
+        ds.title
+            .as_ref()
+            .map(|t| json_string(t))
+            .unwrap_or_else(|| "null".into()),
+        json_string_list(&ds.variables),
+        zones.join(","),
+        suggestions_json(suggestions)
+    )
+}
+
+fn run_info(path: &PathBuf, json: bool) -> flowplot::Result<()> {
     let ds = load_path(path)?;
-    print_summary(path, &ds);
     let suggestions = suggest_scales(&ds.variables);
+    if json {
+        println!("{}", dataset_load_json(path, &ds, &suggestions));
+        return Ok(());
+    }
+    print_summary(path, &ds);
     if !suggestions.is_empty() {
         println!("{}", format_suggestions(&suggestions));
     }
@@ -379,8 +477,14 @@ fn run_contour(
     do_pathlines: bool,
     pathlines_out: Option<&PathBuf>,
     pl_args: &PathlineArgs,
+    json: bool,
 ) -> flowplot::Result<()> {
-    let ds = maybe_nondim(load_path(path)?, nondim, nondim.suggest)?;
+    // Avoid human-only suggestion prints when agents request JSON.
+    let mut nondim_args = nondim.clone();
+    if json {
+        nondim_args.suggest = false;
+    }
+    let ds = maybe_nondim(load_path(path)?, &nondim_args, nondim_args.suggest)?;
     let plane = parse_plane(plane)?;
     let mut img = render_contour(
         &ds,
@@ -395,35 +499,63 @@ fn run_contour(
         },
     )?;
 
+    let mut n_traces = 0usize;
+    let mut pathlines_out_written: Option<String> = None;
     if do_pathlines || pathlines_out.is_some() {
         let pl_opts = build_pathline_opts(&ds, zone, plane, pl_args)?;
         let lines = trace_pathlines(&ds, &pl_opts)?;
-        println!("pathlines: {} traces", lines.len());
+        n_traces = lines.len();
+        if !json {
+            println!("pathlines: {} traces", lines.len());
+        }
         if do_pathlines {
             overlay_pathlines(&mut img, &lines);
         }
         if let Some(pout) = pathlines_out {
             let separate = render_pathlines_png(&ds, &pl_opts, width, height)?;
             write_png(pout, &separate)?;
-            println!("wrote pathlines {}", pout.display());
+            pathlines_out_written = Some(pout.display().to_string());
+            if !json {
+                println!("wrote pathlines {}", pout.display());
+            }
         }
     }
 
     write_png(out, &img)?;
-    println!(
-        "wrote contour {} (var={}, range=[{}, {}])",
-        out.display(),
-        variable,
-        img.vmin,
-        img.vmax
-    );
+    if json {
+        println!(
+            "{{\"status\":\"ok\",\"command\":\"contour\",\"path\":{},\"var\":{},\"zone\":{},\"out\":{},\"vmin\":{},\"vmax\":{},\"pathline_traces\":{},\"pathlines_out\":{}}}",
+            json_string(&path.display().to_string()),
+            json_string(variable),
+            zone,
+            json_string(&out.display().to_string()),
+            json_f64(img.vmin),
+            json_f64(img.vmax),
+            n_traces,
+            pathlines_out_written
+                .as_ref()
+                .map(|p| json_string(p))
+                .unwrap_or_else(|| "null".into())
+        );
+    } else {
+        println!(
+            "wrote contour {} (var={}, range=[{}, {}])",
+            out.display(),
+            variable,
+            img.vmin,
+            img.vmax
+        );
+    }
     Ok(())
 }
 
-fn run_nondim(path: &PathBuf, nondim: &NondimArgs, summary: bool) -> flowplot::Result<()> {
+fn run_nondim(path: &PathBuf, nondim: &NondimArgs, summary: bool, json: bool) -> flowplot::Result<()> {
     let ds = load_path(path)?;
-    print_summary(path, &ds);
-    println!("{}", format_suggestions(&suggest_scales(&ds.variables)));
+    let suggestions = suggest_scales(&ds.variables);
+    if !json {
+        print_summary(path, &ds);
+        println!("{}", format_suggestions(&suggestions));
+    }
     let scales = scales_from_args(nondim);
     if scales.u_ref.is_none()
         && scales.lx.is_none()
@@ -431,12 +563,24 @@ fn run_nondim(path: &PathBuf, nondim: &NondimArgs, summary: bool) -> flowplot::R
         && scales.lz.is_none()
         && scales.t_ref.is_none()
     {
-        println!("no scales passed; suggestions only (never invent physics)");
+        if json {
+            println!(
+                "{{\"status\":\"ok\",\"command\":\"nondim\",\"path\":{},\"applied\":false,\"message\":{},\"nondim_suggestions\":{}}}",
+                json_string(&path.display().to_string()),
+                json_string("no scales passed; suggestions only (never invent physics)"),
+                suggestions_json(&suggestions)
+            );
+        } else {
+            println!("no scales passed; suggestions only (never invent physics)");
+        }
         return Ok(());
     }
     let out = apply_nondim(&ds, &scales)?;
+    let mut field_summaries = Vec::new();
     if summary {
-        println!("after nondim:");
+        if !json {
+            println!("after nondim:");
+        }
         for (i, name) in out.variables.iter().enumerate() {
             let mut vmin = f64::INFINITY;
             let mut vmax = f64::NEG_INFINITY;
@@ -451,9 +595,26 @@ fn run_nondim(path: &PathBuf, nondim: &NondimArgs, summary: bool) -> flowplot::R
                 }
             }
             if vmin.is_finite() {
-                println!("  {name}: min={vmin} max={vmax}");
+                if json {
+                    field_summaries.push(format!(
+                        "{{\"variable\":{},\"min\":{},\"max\":{}}}",
+                        json_string(name),
+                        json_f64(vmin),
+                        json_f64(vmax)
+                    ));
+                } else {
+                    println!("  {name}: min={vmin} max={vmax}");
+                }
             }
         }
+    }
+    if json {
+        println!(
+            "{{\"status\":\"ok\",\"command\":\"nondim\",\"path\":{},\"applied\":true,\"nondim_suggestions\":{},\"fields\":[{}]}}",
+            json_string(&path.display().to_string()),
+            suggestions_json(&suggestions),
+            field_summaries.join(",")
+        );
     }
     Ok(())
 }
@@ -470,12 +631,19 @@ fn run_pathlines_cmd(
     contour_var: Option<&str>,
     vmin: Option<f64>,
     vmax: Option<f64>,
+    json: bool,
 ) -> flowplot::Result<()> {
-    let ds = maybe_nondim(load_path(path)?, nondim, nondim.suggest)?;
+    let mut nondim_args = nondim.clone();
+    if json {
+        nondim_args.suggest = false;
+    }
+    let ds = maybe_nondim(load_path(path)?, &nondim_args, nondim_args.suggest)?;
     let plane = parse_plane(plane)?;
     let pl_opts = build_pathline_opts(&ds, zone, plane, pl_args)?;
     let lines = trace_pathlines(&ds, &pl_opts)?;
-    println!("pathlines: {} traces", lines.len());
+    if !json {
+        println!("pathlines: {} traces", lines.len());
+    }
 
     let mut img = if let Some(var) = contour_var {
         let mut img = render_contour(
@@ -495,9 +663,23 @@ fn run_pathlines_cmd(
     } else {
         render_pathlines_png(&ds, &pl_opts, width, height)?
     };
-    // silence unused mut if overlay already done
     let _ = &mut img;
     write_png(out, &img)?;
-    println!("wrote pathlines {}", out.display());
+    if json {
+        println!(
+            "{{\"status\":\"ok\",\"command\":\"pathlines\",\"path\":{},\"out\":{},\"zone\":{},\"traces\":{},\"u_var\":{},\"v_var\":{},\"contour_var\":{}}}",
+            json_string(&path.display().to_string()),
+            json_string(&out.display().to_string()),
+            zone,
+            lines.len(),
+            json_string(&pl_opts.u_var),
+            json_string(&pl_opts.v_var),
+            contour_var
+                .map(json_string)
+                .unwrap_or_else(|| "null".into())
+        );
+    } else {
+        println!("wrote pathlines {}", out.display());
+    }
     Ok(())
 }
