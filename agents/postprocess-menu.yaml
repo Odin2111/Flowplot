@@ -53,6 +53,53 @@ groups:
             then call flowplot load on each public ASCII file.
         mcp: flowplot_load
 
+  - id: validation
+    title: Validation & correction
+    summary: >
+      Field sanity, positivity, and profile extracts against the loaded
+      dataset (lehar validation ideas that operate on a single field file).
+    items:
+      - id: field-sanity
+        title: Field sanity (NaN / Inf / extrema)
+        summary: Scan every zone/variable for NaN, Inf, and report min/max/mean.
+        status: ready
+        lehar:
+          agent: positivity_health
+          surface: validation / data inspect
+        flowplot:
+          command: validate
+          template: "flowplot validate {path} --json"
+          required_args: [path]
+          optional_flags: ["--zone", "--positivity"]
+        mcp: flowplot_validate
+
+      - id: positivity-check
+        title: Positivity check (ρ / p / T)
+        summary: Flag negative density, pressure, or temperature samples by name.
+        status: ready
+        lehar:
+          agent: positivity_health
+        flowplot:
+          command: validate
+          template: "flowplot validate {path} --positivity --json"
+          required_args: [path]
+          optional_flags: ["--zone"]
+          planned_flags: ["--positivity"]
+        mcp: flowplot_validate
+
+      - id: extract-profile
+        title: Extract centerline / profile
+        summary: Sample a scalar along mid-j (or i=N / j=N); optional RMSE vs ref CSV.
+        status: ready
+        lehar:
+          surface: data extract-line / plot-velocity-profile
+        flowplot:
+          command: profile
+          template: "flowplot profile {path} --var {var} [--line mid-j] [--ref ref.csv] --json"
+          required_args: [path, var]
+          optional_flags: ["--line", "--zone", "--plane", "--ref", "-o"]
+        mcp: flowplot_profile
+
   - id: contours
     title: Contours
     summary: Scalar pseudocolor PNGs from named field variables.
@@ -98,15 +145,16 @@ groups:
 
       - id: positivity-field
         title: Positivity scalar contour
-        summary: Contour ρ / p / T (or min-field exports) for positivity health.
-        status: stub
+        summary: Contour ρ / p / T after a positivity scan (GUI picks the scalar).
+        status: ready
         lehar:
           agent: positivity_health
         flowplot:
           command: contour
           template: "flowplot contour {path} --var {var} -o {out} --json"
-          planned_flags: ["--var", "-o", "--vmin", "--json"]
-          notes: "requires agent positivity_health."
+          required_args: [path, var, out]
+          optional_flags: ["--vmin", "--vmax", "--plane", "--zone"]
+          notes: "Run positivity-check first; contour the named thermo/density scalar."
         mcp: flowplot_contour
 
       - id: mesh-solution-field
@@ -154,16 +202,17 @@ groups:
 
       - id: plot-agent-scales
         title: Plot-agent / ERCOFTAC scales
-        summary: Nondim suggestions for JFM / ERCOFTAC-style audits.
-        status: stub
+        summary: Nondim suggestions for JFM / ERCOFTAC-style audits on the loaded file.
+        status: ready
         lehar:
           agent: plot-agent
           surface: plot-agent SKILL
         flowplot:
           command: nondim
-          template: "flowplot nondim {path} --u-ref {U} --lx {L} --json"
-          planned_flags: ["--u-ref", "--lx", "--ly", "--lz", "--t-ref", "--json"]
-          notes: "requires plot-agent; contour only if the sim ASCII field is plotted."
+          template: "flowplot nondim {path} [--u-ref U] [--lx L] --json"
+          required_args: [path]
+          optional_flags: ["--u-ref", "--lx", "--ly", "--lz", "--t-ref", "--x-var", "--y-var", "--z-var"]
+          notes: "Name-based suggestions; apply panel nondim scales when set."
         mcp: flowplot_nondim
 
   - id: pathlines

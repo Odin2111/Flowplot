@@ -1,16 +1,19 @@
 //! Format readers. Each module implements loading into [`crate::Dataset`].
 //!
-//! Detection is by file extension (case-insensitive). Binary proprietary
-//! layouts are not reverse-engineered; stubs return clear errors.
+//! Detection is by file extension (case-insensitive). Tecplot binary `.plt`
+//! uses the public Data Format Guide (`#!TDV111` / `#!TDV112`). CGNS uses
+//! system `libcgns` when available at build time.
 
 mod cgns;
 mod fluent;
 mod tecplot;
+mod tecplot_binary;
 mod vtk;
 
 pub use cgns::CgnsReader;
 pub use fluent::FluentReader;
 pub use tecplot::TecplotAsciiReader;
+pub use tecplot_binary::TecplotBinaryReader;
 pub use vtk::{VtkLegacyAsciiReader, VtkXmlReader};
 
 use std::path::Path;
@@ -41,14 +44,21 @@ pub fn load_path(path: &Path) -> Result<Dataset> {
             } else if looks_like_fluent_cas_dat(path)? {
                 FluentReader.read_path(path)
             } else {
-                // Default: Tecplot ASCII attempt (clear parse error if wrong).
+                TecplotAsciiReader.read_path(path)
+            }
+        }
+        // `.plt` may be binary (`#!TDV…`) or Tecplot ASCII (TITLE/VARIABLES).
+        "plt" => {
+            if tecplot_binary::is_tecplot_binary(path)? {
+                TecplotBinaryReader.read_path(path)
+            } else {
                 TecplotAsciiReader.read_path(path)
             }
         }
         "cas" => FluentReader.read_path(path),
         "vtk" => VtkLegacyAsciiReader.read_path(path),
         "vtu" | "vtp" | "vti" | "vts" | "vtr" | "pvtu" | "pvtp" => VtkXmlReader.read_path(path),
-        "cgns" => CgnsReader.read_path(path),
+        "cgns" | "cgz" => CgnsReader.read_path(path),
         _ => Err(Error::UnsupportedFormat {
             path: path.to_path_buf(),
         }),
@@ -56,15 +66,14 @@ pub fn load_path(path: &Path) -> Result<Dataset> {
 }
 
 fn looks_like_tecplot_ascii(path: &Path) -> Result<bool> {
-    let text = std::fs::read_to_string(path).map_err(|e| Error::io(path, e))?;
-    let head: String = text.chars().take(4096).collect();
+    let bytes = std::fs::read(path).map_err(|e| Error::io(path, e))?;
+    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]);
     let upper = head.to_ascii_uppercase();
     Ok(upper.contains("VARIABLES") || upper.contains("ZONE") || upper.contains("TITLE"))
 }
 
 fn looks_like_fluent_cas_dat(path: &Path) -> Result<bool> {
     let bytes = std::fs::read(path).map_err(|e| Error::io(path, e))?;
-    // Fluent case/data often start with "(0 " comments or binary markers.
     let head = String::from_utf8_lossy(&bytes[..bytes.len().min(256)]);
     Ok(head.starts_with("(0 ") || head.starts_with("(1 ") || head.contains("Fluent"))
 }

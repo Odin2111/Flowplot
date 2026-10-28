@@ -6,6 +6,8 @@ Tools mirror lehar-facing Flowplot commands:
   flowplot_contour   — `flowplot contour … --json`
   flowplot_nondim    — `flowplot nondim … --json`
   flowplot_pathlines — `flowplot pathlines … --json`
+  flowplot_validate  — `flowplot validate … --json`
+  flowplot_profile   — `flowplot profile … --json`
   flowplot_menu      — `flowplot menu [--group …] --json`
   flowplot_menu_run  — `flowplot menu run <id> -- … --json`
 
@@ -116,6 +118,40 @@ TOOLS = [
                 "t_ref": {"type": "number"},
             },
             "required": ["path"],
+        },
+    },
+    {
+        "name": "flowplot_validate",
+        "description": (
+            "Field sanity scan (NaN/Inf/extrema); optional positivity on ρ/p/T names."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "positivity": {"type": "boolean", "default": False},
+                "zone": {"type": "integer"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "flowplot_profile",
+        "description": (
+            "Extract a 1-D profile / centerline; optional RMSE vs a two-column ref CSV."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "var": {"type": "string"},
+                "line": {"type": "string", "default": "mid-j"},
+                "zone": {"type": "integer", "default": 0},
+                "plane": {"type": "string"},
+                "ref": {"type": "string", "description": "Optional reference CSV path"},
+                "out": {"type": "string"},
+            },
+            "required": ["path", "var"],
         },
     },
     {
@@ -275,6 +311,35 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             argv.extend(["--dt", str(arguments["dt"])])
         argv.extend(_seed_args(arguments))
         argv.extend(_nondim_args(arguments))
+        argv.append("--json")
+        return run_flowplot(argv)
+
+    if name == "flowplot_validate":
+        argv = ["validate", str(arguments["path"])]
+        if arguments.get("positivity"):
+            argv.append("--positivity")
+        if arguments.get("zone") is not None:
+            argv.extend(["--zone", str(arguments["zone"])])
+        argv.append("--json")
+        return run_flowplot(argv)
+
+    if name == "flowplot_profile":
+        argv = [
+            "profile",
+            str(arguments["path"]),
+            "--var",
+            str(arguments["var"]),
+            "--line",
+            str(arguments.get("line", "mid-j")),
+            "--zone",
+            str(arguments.get("zone", 0)),
+        ]
+        if arguments.get("plane"):
+            argv.extend(["--plane", str(arguments["plane"])])
+        if arguments.get("ref"):
+            argv.extend(["--ref", str(arguments["ref"])])
+        if arguments.get("out"):
+            argv.extend(["-o", str(arguments["out"])])
         argv.append("--json")
         return run_flowplot(argv)
 

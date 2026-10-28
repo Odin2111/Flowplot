@@ -16,6 +16,7 @@ Binary `.plt` / `.szplt` stays on lehar native readers. Flowplot only takes publ
 | Group | Role |
 |-------|------|
 | **Load & inspect** | Inventory zones/variables before plotting |
+| **Validation & correction** | Field sanity, positivity, profile extracts on the loaded file |
 | **Contours** | Scalar pseudocolor PNGs |
 | **Nondim** | Name-based scale suggestions; apply user/case refs only |
 | **Pathlines** | Velocity particle traces / overlays |
@@ -40,6 +41,14 @@ Binary `.plt` / `.szplt` stays on lehar native readers. Flowplot only takes publ
 | `info` | Dataset info | ready | `data inspect` | `flowplot info {path} --json` → `flowplot_load` |
 | `output-integrity` | Output integrity inventory | stub | `output_integrity` | discover paths in lehar, then `load --json` |
 
+### Validation & correction
+
+| id | Title | Status | Lehar | Flowplot / MCP |
+|----|-------|--------|-------|----------------|
+| `field-sanity` | Field sanity (NaN / Inf / extrema) | ready | `positivity_health` / validation | `validate --json` |
+| `positivity-check` | Positivity check (ρ / p / T) | ready | `positivity_health` | `validate --positivity --json` |
+| `extract-profile` | Extract centerline / profile | ready | `data extract-line` | `profile --var … [--ref …] --json` |
+
 ### Contours
 
 | id | Title | Status | Lehar | Flowplot / MCP |
@@ -47,7 +56,7 @@ Binary `.plt` / `.szplt` stays on lehar native readers. Flowplot only takes publ
 | `contour` | Contour scalar | ready | `research_figures` / `observability_plots` | `contour --var … -o …` → `flowplot_contour` |
 | `wall-physics-field` | Wall-physics near-wall field | stub | `wall_physics` | `contour --var … -o …` |
 | `turbulence-field` | Turbulence field contour | stub | `turbulence_health` | `contour --var k\|omega\|nut …` |
-| `positivity-field` | Positivity scalar contour | stub | `positivity_health` | `contour --var rho\|p\|T …` |
+| `positivity-field` | Positivity scalar contour | ready | `positivity_health` | `contour --var rho\|p\|T …` |
 | `mesh-solution-field` | Mesh–solution QoI contour | stub | `mesh_solution_correlation` | `contour --var …` |
 
 ### Nondim
@@ -56,7 +65,7 @@ Binary `.plt` / `.szplt` stays on lehar native readers. Flowplot only takes publ
 |----|-------|--------|-------|----------------|
 | `nondim-suggest` | Suggest / apply scales | ready | plot-agent / BL | `nondim [--u-ref …]` → `flowplot_nondim` |
 | `boundary-layer-scales` | Boundary-layer reference scales | stub | `boundary_layer` | `nondim --u-ref U_e --lx δ*` |
-| `plot-agent-scales` | Plot-agent / ERCOFTAC scales | stub | `plot-agent` | `nondim --u-ref … --lx …` |
+| `plot-agent-scales` | Plot-agent / ERCOFTAC scales | ready | `plot-agent` | `nondim [--u-ref …] [--lx …]` |
 
 ### Pathlines
 

@@ -11,6 +11,7 @@ use flowplot::field::{extract_scalar_grid, find_var, PlaneSpec};
 use flowplot::menu::{
     format_item_text, format_menu_text, format_stub_run, MenuItem, PostprocessMenu,
 };
+use flowplot::mesh::{extract_mesh_grid, overlay_mesh, render_mesh, MeshOptions};
 use flowplot::nondim::{
     apply_nondim, format_suggestions, suggest_scales, NondimScales, NondimSuggestion,
 };
@@ -18,12 +19,16 @@ use flowplot::pathlines::{
     default_seeds, guess_velocity_vars, overlay_pathlines_styled, render_pathlines_png_styled,
     trace_pathlines, PathlineOptions,
 };
+use flowplot::profile::{
+    compare_profile_rmse, extract_profile, load_ref_csv, ProfileLine,
+};
+use flowplot::validate::validate_dataset;
 use flowplot::{load_path, Dataset};
 
 #[derive(Parser, Debug)]
 #[command(
     name = "flowplot",
-    about = "CFD post-processor: load Tecplot/VTK ASCII, contour, nondim, pathlines, menu",
+    about = "CFD post-processor: load Tecplot/VTK, mesh, contour, nondim, pathlines, validate, profile, menu",
     arg_required_else_help = true
 )]
 struct Cli {
@@ -47,6 +52,28 @@ enum Commands {
     /// Load a CFD file and summarize zones / variables (preferred agent entry).
     Load {
         path: PathBuf,
+    },
+    /// Wireframe mesh / zone grid PNG (default first view; equal aspect, no contour).
+    Mesh {
+        path: PathBuf,
+        /// Output PNG path.
+        #[arg(long, short = 'o')]
+        out: PathBuf,
+        /// Zone index (default 0).
+        #[arg(long, default_value_t = 0)]
+        zone: usize,
+        /// Plane/slice, e.g. k=0, i=1, j=2 (default: auto).
+        #[arg(long)]
+        plane: Option<String>,
+        #[arg(long, default_value_t = 800)]
+        width: u32,
+        #[arg(long, default_value_t = 600)]
+        height: u32,
+        /// Plot look: `default` or `jfm` (black frame on white).
+        #[arg(long, default_value = "default", value_parser = parse_plot_style)]
+        style: PlotStyle,
+        #[command(flatten)]
+        nondim: NondimArgs,
     },
     /// Contour (pseudocolor) any scalar variable to PNG.
     Contour {
@@ -78,6 +105,9 @@ enum Commands {
         style: PlotStyle,
         #[command(flatten)]
         nondim: NondimArgs,
+        /// Overlay the zone mesh (wireframe) on the contour.
+        #[arg(long, default_value_t = false)]
+        mesh: bool,
         /// Also trace pathlines and overlay them on the contour PNG.
         #[arg(long)]
         pathlines: bool,
@@ -123,6 +153,36 @@ enum Commands {
         vmin: Option<f64>,
         #[arg(long)]
         vmax: Option<f64>,
+    },
+    /// Field sanity / positivity checks (NaN, Inf, extrema; optional ρ/p/T ≥ 0).
+    Validate {
+        path: PathBuf,
+        /// Also flag negative samples on density / pressure / temperature names.
+        #[arg(long, default_value_t = false)]
+        positivity: bool,
+        /// Zone index filter (default: all zones).
+        #[arg(long)]
+        zone: Option<usize>,
+    },
+    /// Extract a 1-D profile / centerline (lehar extract-line analogue).
+    Profile {
+        path: PathBuf,
+        /// Variable name to sample.
+        #[arg(long = "var", short = 'v')]
+        variable: String,
+        /// Output JSON path (default: stdout via --json / text).
+        #[arg(long, short = 'o')]
+        out: Option<PathBuf>,
+        /// Line: `mid-j` (default), `mid-i`, `centerline`, `i=N`, `j=N`.
+        #[arg(long, default_value = "mid-j")]
+        line: String,
+        #[arg(long, default_value_t = 0)]
+        zone: usize,
+        #[arg(long)]
+        plane: Option<String>,
+        /// Optional two-column reference CSV (`s,value`) for RMSE compare.
+        #[arg(long = "ref")]
+        reference: Option<PathBuf>,
     },
     /// List / show / run CFD post-processing menu items (lehar ↔ Flowplot).
     Menu {
@@ -243,12 +303,32 @@ fn dispatch(
         None => {
             let Some(path) = bare_path else {
                 return Err(flowplot::Error::plot(
-                    "usage: flowplot [--json] <path> | flowplot [--json] <load|info|contour|nondim|pathlines|menu> ...",
+                    "usage: flowplot [--json] <path> | flowplot [--json] <load|info|mesh|contour|nondim|pathlines|validate|profile|menu> ...",
                 ));
             };
             run_info(&path, json)
         }
         Some(Commands::Info { path }) | Some(Commands::Load { path }) => run_info(&path, json),
+        Some(Commands::Mesh {
+            path,
+            out,
+            zone,
+            plane,
+            width,
+            height,
+            style,
+            nondim,
+        }) => run_mesh(
+            &path,
+            &out,
+            zone,
+            plane.as_deref(),
+            width,
+            height,
+            style,
+            &nondim,
+            json,
+        ),
         Some(Commands::Contour {
             path,
             variable,
@@ -261,6 +341,7 @@ fn dispatch(
             height,
             style,
             nondim,
+            mesh,
             pathlines,
             pathlines_out,
             pathline: pl_args,
@@ -276,6 +357,7 @@ fn dispatch(
             height,
             style,
             &nondim,
+            mesh,
             pathlines,
             pathlines_out.as_ref(),
             &pl_args,
@@ -314,8 +396,153 @@ fn dispatch(
             vmax,
             json,
         ),
+        Some(Commands::Validate {
+            path,
+            positivity,
+            zone,
+        }) => run_validate(&path, positivity, zone, json),
+        Some(Commands::Profile {
+            path,
+            variable,
+            out,
+            line,
+            zone,
+            plane,
+            reference,
+        }) => run_profile(
+            &path,
+            &variable,
+            out.as_ref(),
+            &line,
+            zone,
+            plane.as_deref(),
+            reference.as_ref(),
+            json,
+        ),
         Some(Commands::Menu { menu_file, action }) => run_menu(menu_file.as_ref(), action, json),
     }
+}
+
+fn run_validate(
+    path: &PathBuf,
+    positivity: bool,
+    zone_filter: Option<usize>,
+    json: bool,
+) -> flowplot::Result<()> {
+    let ds = load_path(path)?;
+    let mut report = validate_dataset(&ds, positivity);
+    report.path_hint = Some(path.display().to_string());
+    if let Some(zi) = zone_filter {
+        report.fields.retain(|f| f.zone == zi);
+        report.ok = report.fields.iter().all(|f| f.ok);
+        report.issue_count = report.fields.iter().map(|f| f.issues.len()).sum();
+        report.summary = if report.ok {
+            format!("ok: zone {zi}; {} field(s) clean", report.fields.len())
+        } else {
+            format!(
+                "issues: {} on zone {zi}",
+                report.issue_count
+            )
+        };
+    }
+    if json {
+        let payload = serde_json::json!({
+            "status": if report.ok { "ok" } else { "issues" },
+            "command": "validate",
+            "path": path.display().to_string(),
+            "positivity": positivity,
+            "report": report,
+        });
+        println!("{payload}");
+    } else {
+        println!("validate: {}", path.display());
+        println!("{}", report.summary);
+        for f in &report.fields {
+            let mark = if f.ok { "ok" } else { "!!" };
+            println!(
+                "  [{mark}] zone {}  {:<16} n={} finite={} nan={} inf={} min={:?} max={:?}",
+                f.zone, f.name, f.count, f.finite, f.nan, f.inf, f.min, f.max
+            );
+            for issue in &f.issues {
+                println!("       - {issue}");
+            }
+        }
+    }
+    // Always Ok after a completed scan — callers inspect `status` / summary for issues.
+    Ok(())
+}
+
+fn run_profile(
+    path: &PathBuf,
+    variable: &str,
+    out: Option<&PathBuf>,
+    line: &str,
+    zone: usize,
+    plane: Option<&str>,
+    reference: Option<&PathBuf>,
+    json: bool,
+) -> flowplot::Result<()> {
+    let ds = load_path(path)?;
+    let plane_spec = match plane {
+        Some(p) => PlaneSpec::parse(p)?,
+        None => PlaneSpec::Auto,
+    };
+    let line_spec = ProfileLine::parse(line)?;
+    let profile = extract_profile(&ds, variable, zone, line_spec, plane_spec)?;
+
+    let mut rmse: Option<f64> = None;
+    if let Some(ref_path) = reference {
+        let text = std::fs::read_to_string(ref_path).map_err(|e| {
+            flowplot::Error::plot(format!("failed to read --ref {}: {e}", ref_path.display()))
+        })?;
+        let (xs, ys) = load_ref_csv(&text)?;
+        rmse = compare_profile_rmse(&profile, &xs, &ys);
+    }
+
+    if !json && out.is_none() {
+        println!(
+            "profile: {}  var={}  {}={}  n={}",
+            path.display(),
+            profile.variable,
+            profile.axis,
+            profile.index,
+            profile.samples.len()
+        );
+        println!("# s  x  y  value");
+        for s in &profile.samples {
+            println!("{:.8}  {:.8}  {:.8}  {:.8}", s.s, s.x, s.y, s.value);
+        }
+        if let Some(r) = rmse {
+            println!("rmse vs ref: {r}");
+        }
+        return Ok(());
+    }
+
+    let payload = serde_json::json!({
+        "status": "ok",
+        "command": "profile",
+        "path": path.display().to_string(),
+        "profile": profile,
+        "rmse": rmse,
+        "reference": reference.map(|p| p.display().to_string()),
+    });
+
+    if let Some(out_path) = out {
+        std::fs::write(out_path, serde_json::to_string_pretty(&payload).unwrap_or_default())
+            .map_err(|e| {
+                flowplot::Error::plot(format!("failed to write {}: {e}", out_path.display()))
+            })?;
+        if !json {
+            println!("wrote {}", out_path.display());
+            if let Some(r) = rmse {
+                println!("rmse vs ref: {r}");
+            }
+        }
+    }
+    if json {
+        println!("{payload}");
+    }
+    Ok(())
 }
 
 fn load_menu(menu_file: Option<&PathBuf>) -> flowplot::Result<PostprocessMenu> {
@@ -437,6 +664,10 @@ fn dispatch_ready_item(item: &MenuItem, args: Vec<String>, json: bool) -> flowpl
         && !forwarded.iter().any(|a| a == "--pathlines" || a == "--pathlines-out")
     {
         forwarded.push("--pathlines".into());
+    }
+    // positivity-check always enables the positivity scan.
+    if item.id == "positivity-check" && !forwarded.iter().any(|a| a == "--positivity") {
+        forwarded.push("--positivity".into());
     }
     if json && !forwarded.iter().any(|a| a == "--json") {
         forwarded.push("--json".into());
@@ -672,6 +903,70 @@ fn resolve_raster_size(style: PlotStyle, width: u32, height: u32) -> (u32, u32) 
     }
 }
 
+fn run_mesh(
+    path: &PathBuf,
+    out: &PathBuf,
+    zone: usize,
+    plane: Option<&str>,
+    width: u32,
+    height: u32,
+    style: PlotStyle,
+    nondim: &NondimArgs,
+    json: bool,
+) -> flowplot::Result<()> {
+    let mut nondim_args = nondim.clone();
+    if json {
+        nondim_args.suggest = false;
+    }
+    let ds = maybe_nondim(load_path(path)?, &nondim_args, nondim_args.suggest)?;
+    let plane = parse_plane(plane)?;
+    let (width, height) = if style == PlotStyle::Jfm && width == 800 && height == 600 {
+        (PlotStyle::JFM_WIDTH, PlotStyle::JFM_HEIGHT)
+    } else {
+        (width, height)
+    };
+    let img = render_mesh(
+        &ds,
+        &MeshOptions {
+            zone,
+            plane,
+            width,
+            height,
+            style,
+            ..Default::default()
+        },
+    )?;
+    write_png(out, &img)?;
+    let (xmin, xmax, ymin, ymax) = img.grid.bounds();
+    if json {
+        println!(
+            "{{\"status\":\"ok\",\"command\":\"mesh\",\"path\":{},\"zone\":{},\"out\":{},\"ni\":{},\"nj\":{},\"bounds\":[{},{},{},{}]}}",
+            json_string(&path.display().to_string()),
+            zone,
+            json_string(&out.display().to_string()),
+            img.grid.ni,
+            img.grid.nj,
+            json_f64(xmin),
+            json_f64(xmax),
+            json_f64(ymin),
+            json_f64(ymax)
+        );
+    } else {
+        println!(
+            "wrote mesh {} (zone={}, {}×{}, equal-aspect bounds=[{}, {}]×[{}, {}])",
+            out.display(),
+            zone,
+            img.grid.ni,
+            img.grid.nj,
+            xmin,
+            xmax,
+            ymin,
+            ymax
+        );
+    }
+    Ok(())
+}
+
 fn run_contour(
     path: &PathBuf,
     variable: &str,
@@ -684,6 +979,7 @@ fn run_contour(
     height: u32,
     style: PlotStyle,
     nondim: &NondimArgs,
+    do_mesh: bool,
     do_pathlines: bool,
     pathlines_out: Option<&PathBuf>,
     pl_args: &PathlineArgs,
@@ -711,6 +1007,16 @@ fn run_contour(
         },
     )?;
 
+    if do_mesh {
+        let mesh_grid = extract_mesh_grid(&ds, zone, plane)?;
+        let line = match style {
+            PlotStyle::Jfm => [0, 0, 0, 255],
+            PlotStyle::Default => [20, 20, 20, 220],
+        };
+        // Match stretched contour mapping so wires sit on the color field.
+        overlay_mesh(&mut img, &mesh_grid, false, 0, line);
+    }
+
     let mut n_traces = 0usize;
     let mut pathlines_out_written: Option<String> = None;
     if do_pathlines || pathlines_out.is_some() {
@@ -736,13 +1042,14 @@ fn run_contour(
     write_png(out, &img)?;
     if json {
         println!(
-            "{{\"status\":\"ok\",\"command\":\"contour\",\"path\":{},\"var\":{},\"zone\":{},\"out\":{},\"vmin\":{},\"vmax\":{},\"pathline_traces\":{},\"pathlines_out\":{}}}",
+            "{{\"status\":\"ok\",\"command\":\"contour\",\"path\":{},\"var\":{},\"zone\":{},\"out\":{},\"vmin\":{},\"vmax\":{},\"mesh\":{},\"pathline_traces\":{},\"pathlines_out\":{}}}",
             json_string(&path.display().to_string()),
             json_string(variable),
             zone,
             json_string(&out.display().to_string()),
             json_f64(img.vmin),
             json_f64(img.vmax),
+            if do_mesh { "true" } else { "false" },
             n_traces,
             pathlines_out_written
                 .as_ref()
@@ -751,10 +1058,11 @@ fn run_contour(
         );
     } else {
         println!(
-            "wrote contour {} (var={}, style={:?}, range=[{}, {}])",
+            "wrote contour {} (var={}, style={:?}, mesh={}, range=[{}, {}])",
             out.display(),
             variable,
             style,
+            do_mesh,
             img.vmin,
             img.vmax
         );
