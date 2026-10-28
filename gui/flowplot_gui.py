@@ -9,6 +9,7 @@ Show Derived Objects order (Tecplot’s “Streamtraces” → Flowplot “Pathl
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -22,6 +23,13 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from agents_panel import AgentsPanel
+from zone_style_dialog import (
+    DEFAULT_MESH_COLOR,
+    ZoneStyleDialog,
+    ZoneStyleState,
+    rgb_cli,
+    zone_styles_from_info,
+)
 
 ROOT = Path(__file__).resolve().parent
 ASSETS = ROOT / "assets"
@@ -83,6 +91,9 @@ class FlowplotGui(tk.Tk):
         self.variables: list[str] = []
         self.effectively_2d: bool = True
         self.zone_ordered: dict[str, int] | None = None
+        self.zone_styles: list[ZoneStyleState] = []
+        self.active_zone: int = 0
+        self.mesh_color: str = DEFAULT_MESH_COLOR
         self.flowplot = find_flowplot_bin()
         self.status_var = tk.StringVar(value=self._status_idle())
         self.var_name = tk.StringVar(value="")
@@ -90,6 +101,7 @@ class FlowplotGui(tk.Tk):
         self.plot_type = tk.StringVar(value="2D Cartesian")
         self._preview_photo = None
         self._preview_after: str | None = None
+        self._zone_style_dialog: ZoneStyleDialog | None = None
 
         # Tecplot Show Zone Layers — Mesh ON, Contour OFF by default.
         self.layer_mesh = tk.BooleanVar(value=True)
@@ -175,7 +187,7 @@ class FlowplotGui(tk.Tk):
         """Tecplot Plot menu order (stubs where not yet implemented)."""
         menu.add_command(label="Axis…", command=lambda: self.stub_plot("Axis"))
         menu.add_command(label="Assign XY…", command=lambda: self.stub_plot("Assign XY"))
-        menu.add_command(label="Zone Style…", command=lambda: self.stub_plot("Zone Style"))
+        menu.add_command(label="Zone Style…", command=self.action_zone_style)
         menu.add_separator()
         menu.add_command(label="Pathlines…", command=self.action_pathlines_dialog)
         menu.add_command(label="Contour…", command=self.action_enable_contour)
@@ -504,13 +516,16 @@ class FlowplotGui(tk.Tk):
         self.view_label = ttk.Label(view_box, text="view: auto", style="Muted.TLabel")
         self.view_label.pack(anchor="w", pady=(4, 0))
 
+        ttk.Button(parent, text="Zone Style…", style="Tool.TButton", command=self.action_zone_style).pack(
+            padx=12, pady=(2, 4), anchor="w"
+        )
         ttk.Button(parent, text="Redraw layers", style="Tool.TButton", command=self.action_redraw).pack(
             padx=12, pady=(4, 8), anchor="w"
         )
 
         ttk.Label(
             parent,
-            text="Mesh on = grid first.\nContour on active plane.\nDrag = warp; settle = fill.",
+            text="Mesh on = grid first.\nZone Style… per zone.\nDrag = warp; settle = fill.",
             style="Muted.TLabel",
             justify=tk.LEFT,
         ).pack(anchor="w", padx=12, pady=(4, 12))
@@ -1045,6 +1060,9 @@ class FlowplotGui(tk.Tk):
         self.layer_scatter.set(False)
         self.plane_axis.set("auto")
         self.plane_index.set(0)
+        self.active_zone = 0
+        self.mesh_color = DEFAULT_MESH_COLOR
+        self.zone_styles = []
         self._cancel_redraw_timers()
         self._kill_cli()
         self._render_cache.clear()
@@ -1061,6 +1079,13 @@ class FlowplotGui(tk.Tk):
                 self.zone_ordered = None
                 zones = payload.get("zones") or []
                 if isinstance(zones, list) and zones:
+                    self.zone_styles = zone_styles_from_info(
+                        [z for z in zones if isinstance(z, dict)]
+                    )
+                    self._log(
+                        "zones: "
+                        + ", ".join(f"{z.index}:{z.name}" for z in self.zone_styles)
+                    )
                     ordered = zones[0].get("ordered") if isinstance(zones[0], dict) else None
                     if isinstance(ordered, dict):
                         self.zone_ordered = {
@@ -1083,10 +1108,12 @@ class FlowplotGui(tk.Tk):
                 self._set_variables([])
                 self.effectively_2d = True
                 self.zone_ordered = None
+                self.zone_styles = []
         else:
             self._set_variables([])
             self.effectively_2d = True
             self.zone_ordered = None
+            self.zone_styles = []
 
         self.action_redraw()
 
@@ -1121,6 +1148,9 @@ class FlowplotGui(tk.Tk):
         want_mesh = self.layer_mesh.get()
         want_contour = self.layer_contour.get()
         want_pathlines = self.layer_pathlines.get()
+        zone_idx = self._active_zone_index()
+        zone_args = ["--zone", str(zone_idx)]
+        mesh_color_args = self._mesh_color_cli_args()
 
         if not want_mesh and not want_contour and not want_pathlines:
             self.last_png = None
@@ -1151,6 +1181,8 @@ class FlowplotGui(tk.Tk):
                 f"m={want_mesh}",
                 f"c={want_contour}",
                 f"p={want_pathlines}",
+                f"z={zone_idx}",
+                f"mc={','.join(mesh_color_args)}",
                 var,
                 style,
                 *plane,
@@ -1180,6 +1212,8 @@ class FlowplotGui(tk.Tk):
                 view=view,
                 var=var,
                 size=size,
+                zone_args=zone_args,
+                mesh_color_args=mesh_color_args,
                 want_mesh=want_mesh,
                 want_contour=want_contour,
                 want_pathlines=want_pathlines,
@@ -1210,7 +1244,10 @@ class FlowplotGui(tk.Tk):
             if want_pathlines and not interactive:
                 layers.append("Pathlines")
             tag = "preview" if quality == "preview" else "full"
-            self._set_status((" + ".join(layers) if layers else "Done") + f" [{tag}]")
+            zname = self._zone_label(zone_idx)
+            self._set_status(
+                (" + ".join(layers) if layers else "Done") + f" · zone {zname} [{tag}]"
+            )
 
     def _redraw_cli(
         self,
@@ -1223,6 +1260,8 @@ class FlowplotGui(tk.Tk):
         view: list[str],
         var: str,
         size: list[str],
+        zone_args: list[str],
+        mesh_color_args: list[str],
         want_mesh: bool,
         want_contour: bool,
         want_pathlines: bool,
@@ -1241,6 +1280,7 @@ class FlowplotGui(tk.Tk):
                 str(out),
                 "--style",
                 style,
+                *zone_args,
                 *size,
                 *plane,
                 *view,
@@ -1248,6 +1288,7 @@ class FlowplotGui(tk.Tk):
             ]
             if want_mesh:
                 args.append("--mesh")
+                args.extend(mesh_color_args)
             if want_pathlines and not interactive:
                 args.append("--pathlines")
             return self._run_cli(args)
@@ -1259,6 +1300,7 @@ class FlowplotGui(tk.Tk):
                 str(out),
                 "--style",
                 style,
+                *zone_args,
                 *size,
                 *plane,
                 *view,
@@ -1274,6 +1316,8 @@ class FlowplotGui(tk.Tk):
             str(out),
             "--style",
             style,
+            *zone_args,
+            *mesh_color_args,
             *size,
             *plane,
             *view,
@@ -1285,11 +1329,142 @@ class FlowplotGui(tk.Tk):
         self.layer_contour.set(True)
         if not self.var_name.get().strip() and self.variables:
             self.var_name.set(first_scalar(self.variables))
+        # Keep Zone Style Contour Show in sync for the active zone.
+        zs = self._style_for_zone(self.active_zone)
+        if zs is not None:
+            zs.show_contour = True
+            zs.show_zone = True
         self.action_redraw()
 
     def action_pathlines_dialog(self) -> None:
         self.layer_pathlines.set(True)
         self.action_redraw()
+
+    def action_zone_style(self) -> None:
+        """Plot → Zone Style… (Tecplot-like per-zone Mesh/Contour table)."""
+        if not self.zone_styles:
+            if self.dataset_path and self.dataset_path.is_file():
+                # Lazy fill from a single default row if info lacked zones.
+                self.zone_styles = [
+                    ZoneStyleState(
+                        index=0,
+                        name=self.dataset_path.stem,
+                        show_mesh=self.layer_mesh.get(),
+                        show_contour=self.layer_contour.get(),
+                        mesh_color=self.mesh_color,
+                    )
+                ]
+            else:
+                messagebox.showwarning(
+                    "Zone Style",
+                    "Load a CFD file first (File → Open).",
+                    parent=self,
+                )
+                return
+        existing = self._zone_style_dialog
+        if existing is not None and existing.winfo_exists():
+            existing.styles = copy.deepcopy(self.zone_styles)
+            existing.lift()
+            existing.focus_force()
+            return
+        dlg = ZoneStyleDialog(
+            self,
+            self.zone_styles,
+            on_apply=self._apply_zone_styles,
+            initial_tab="Mesh",
+        )
+        self._zone_style_dialog = dlg
+
+    def _apply_zone_styles(self, styles: list[ZoneStyleState]) -> None:
+        self.zone_styles = styles
+        visible = [z for z in styles if z.show_zone]
+        if not visible:
+            self.layer_mesh.set(False)
+            self.layer_contour.set(False)
+            self._log("Zone Style: no zones shown")
+            self.action_redraw()
+            return
+        # First visible zone drives CLI --zone (multi-zone composite later).
+        active = visible[0]
+        self.active_zone = active.index
+        self.mesh_color = active.mesh_color or DEFAULT_MESH_COLOR
+        self.layer_mesh.set(any(z.show_mesh for z in visible))
+        self.layer_contour.set(any(z.show_contour for z in visible))
+        # Prefer ordered dims from the active zone when info listed them.
+        if self.dataset_path:
+            # Refresh cut limits from the chosen zone if we still have info cache.
+            pass
+        if self.layer_contour.get() and not self.var_name.get().strip() and self.variables:
+            self.var_name.set(first_scalar(self.variables))
+        self._log(
+            f"Zone Style apply: zone={active.index}:{active.name} "
+            f"mesh={self.layer_mesh.get()} contour={self.layer_contour.get()} "
+            f"color={self.mesh_color}"
+        )
+        # Sync cut-plane ordered dims for the active zone when available.
+        self._sync_ordered_for_zone(active.index)
+        self.action_redraw()
+
+    def _active_zone_index(self) -> int:
+        if self.zone_styles:
+            for z in self.zone_styles:
+                if z.show_zone:
+                    return z.index
+            return self.zone_styles[0].index
+        return int(self.active_zone)
+
+    def _zone_label(self, idx: int) -> str:
+        for z in self.zone_styles:
+            if z.index == idx:
+                return f"{idx}:{z.name}"
+        return str(idx)
+
+    def _style_for_zone(self, idx: int) -> ZoneStyleState | None:
+        for z in self.zone_styles:
+            if z.index == idx:
+                return z
+        return None
+
+    def _mesh_color_cli_args(self) -> list[str]:
+        color = self.mesh_color or DEFAULT_MESH_COLOR
+        if self.zone_styles:
+            zs = self._style_for_zone(self._active_zone_index())
+            if zs is not None and zs.mesh_color:
+                color = zs.mesh_color
+        return ["--mesh-color", rgb_cli(color)]
+
+    def _sync_ordered_for_zone(self, zone_idx: int) -> None:
+        """Best-effort: re-read info JSON ordered dims for the chosen zone."""
+        ds = self.dataset_path
+        if not ds or not ds.is_file():
+            return
+        proc = self._run_cli(["--json", "info", str(ds)])
+        if not proc or proc.returncode != 0 or not proc.stdout:
+            return
+        try:
+            payload = json.loads(proc.stdout.strip().splitlines()[-1])
+        except json.JSONDecodeError:
+            return
+        zones = payload.get("zones") or []
+        if not isinstance(zones, list):
+            return
+        for z in zones:
+            if not isinstance(z, dict):
+                continue
+            try:
+                zi = int(z.get("index", -1))
+            except (TypeError, ValueError):
+                continue
+            if zi != zone_idx:
+                continue
+            ordered = z.get("ordered")
+            if isinstance(ordered, dict):
+                self.zone_ordered = {
+                    str(k).lower(): int(v)
+                    for k, v in ordered.items()
+                    if str(k).lower() in ("i", "j", "k")
+                }
+            return
 
     def action_nondim(self) -> None:
         ds = self._require_dataset()
