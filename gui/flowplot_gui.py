@@ -3,8 +3,8 @@
 
 Thin Python front-end that shells out to the `flowplot` CLI. On File→Open the
 default view is the zone **Mesh** (wireframe crate) with Contour off. Contour
-and Streamtraces are optional layers, matching Tecplot’s Show Zone Layers /
-Show Derived Objects order.
+and Pathlines are optional layers, matching Tecplot’s Show Zone Layers /
+Show Derived Objects order (Tecplot’s “Streamtraces” → Flowplot “Pathlines”).
 """
 
 from __future__ import annotations
@@ -90,7 +90,7 @@ class FlowplotGui(tk.Tk):
         self.layer_vector = tk.BooleanVar(value=False)
         self.layer_edge = tk.BooleanVar(value=False)
         self.layer_scatter = tk.BooleanVar(value=False)
-        self.layer_streamtraces = tk.BooleanVar(value=False)
+        self.layer_pathlines = tk.BooleanVar(value=False)
 
         self.scale_vars = {
             "U_ref": tk.StringVar(value=""),
@@ -145,7 +145,7 @@ class FlowplotGui(tk.Tk):
         menu.add_command(label="Assign XY…", command=lambda: self.stub_plot("Assign XY"))
         menu.add_command(label="Zone Style…", command=lambda: self.stub_plot("Zone Style"))
         menu.add_separator()
-        menu.add_command(label="Streamtraces…", command=self.action_streamtraces_dialog)
+        menu.add_command(label="Pathlines…", command=self.action_pathlines_dialog)
         menu.add_command(label="Contour…", command=self.action_enable_contour)
         menu.add_command(label="Vector…", command=lambda: self.stub_plot("Vector"))
         menu.add_command(label="Scatter…", command=lambda: self.stub_plot("Scatter"))
@@ -373,8 +373,8 @@ class FlowplotGui(tk.Tk):
         derived.pack(fill=tk.X, padx=10, pady=(0, 8))
         ttk.Checkbutton(
             derived,
-            text="Streamtraces",
-            variable=self.layer_streamtraces,
+            text="Pathlines",
+            variable=self.layer_pathlines,
             command=self.action_redraw,
         ).pack(anchor="w")
 
@@ -606,7 +606,7 @@ class FlowplotGui(tk.Tk):
         # Reset layers to Tecplot defaults: Mesh on, Contour off.
         self.layer_mesh.set(True)
         self.layer_contour.set(False)
-        self.layer_streamtraces.set(False)
+        self.layer_pathlines.set(False)
         self.layer_shade.set(False)
         self.layer_vector.set(False)
         self.layer_edge.set(False)
@@ -637,9 +637,9 @@ class FlowplotGui(tk.Tk):
 
         want_mesh = self.layer_mesh.get()
         want_contour = self.layer_contour.get()
-        want_streams = self.layer_streamtraces.get()
+        want_pathlines = self.layer_pathlines.get()
 
-        if not want_mesh and not want_contour and not want_streams:
+        if not want_mesh and not want_contour and not want_pathlines:
             self.last_png = None
             self._draw_viewport_placeholder()
             self._set_status("No layers enabled")
@@ -667,10 +667,10 @@ class FlowplotGui(tk.Tk):
             ]
             if want_mesh:
                 args.append("--mesh")
-            if want_streams:
+            if want_pathlines:
                 args.append("--pathlines")
             proc = self._run_cli(args)
-        elif want_streams:
+        elif want_pathlines:
             args = [
                 "pathlines",
                 str(ds),
@@ -703,8 +703,8 @@ class FlowplotGui(tk.Tk):
                 layers.append("Mesh")
             if want_contour:
                 layers.append(f"Contour({var})")
-            if want_streams:
-                layers.append("Streamtraces")
+            if want_pathlines:
+                layers.append("Pathlines")
             self._set_status(" + ".join(layers) if layers else "Done")
 
     def action_enable_contour(self) -> None:
@@ -713,8 +713,8 @@ class FlowplotGui(tk.Tk):
             self.var_name.set(first_scalar(self.variables))
         self.action_redraw()
 
-    def action_streamtraces_dialog(self) -> None:
-        self.layer_streamtraces.set(True)
+    def action_pathlines_dialog(self) -> None:
+        self.layer_pathlines.set(True)
         self.action_redraw()
 
     def action_nondim(self) -> None:

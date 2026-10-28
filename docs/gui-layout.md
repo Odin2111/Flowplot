@@ -7,15 +7,15 @@ Native **tkinter** shell under `gui/flowplot_gui.py`. The viewport previews PNGs
 | Region | Contents |
 |--------|----------|
 | Top | Wordmark, menus **File / Plot / Style / Agents / Help**, tool strip **Open · Redraw · Export PNG** |
-| Left | **Plot** panel: plot type (2D/3D Cartesian…), **Show Zone Layers** (Mesh / Contour / Shade / Vector / Edge / Scatter), **Show Derived Objects** (Streamtraces), contour variable combo from `flowplot info` |
-| Center | Viewport — Mesh PNG by default; Contour / Streamtraces when those layers are on |
+| Left | **Plot** panel: plot type (2D/3D Cartesian…), **Show Zone Layers** (Mesh / Contour / Shade / Vector / Edge / Scatter), **Show Derived Objects** (Pathlines), contour variable combo from `flowplot info` |
+| Center | Viewport — Mesh PNG by default; Contour / Pathlines when those layers are on |
 | Right | Nondim scales **U_ref, Lx, Ly, Lz, T_ref** → CLI flags, plus a short log |
 
 ## Defaults (match Tecplot)
 
 - Mesh **on**, Contour **off** after load
 - Variable combo filled from dataset; default = first non-coordinate scalar (e.g. cone20 → `Pressure`, not `P`)
-- Plot menu: Axis…, Assign XY…, Zone Style…, Streamtraces…, Contour…, Vector…, Scatter…, Blanking…, Label Points… (stubs where not yet implemented)
+- Plot menu: Axis…, Assign XY…, Zone Style…, Pathlines…, Contour…, Vector…, Scatter…, Blanking…, Label Points… (stubs where not yet implemented; Pathlines = Tecplot “Streamtraces”)
 
 ## Run
 
