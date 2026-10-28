@@ -26,7 +26,7 @@ flowplot info <path>
 
 # Contour any scalar to PNG
 flowplot contour <path> --var P -o out.png [--plane k=0] [--vmin 0] [--vmax 1] \
-  [--width 512] [--height 512] [--zone 0] \
+  [--width 512] [--height 512] [--zone 0] [--style default|jfm] \
   [--u-ref U] [--lx Lx] [--ly Ly] [--lz Lz] [--t-ref T] \
   [--pathlines] [--pathlines-out lines.png] [--seed x,y] [--u-var U] [--v-var V] [--dt 0.02]
 
@@ -35,10 +35,12 @@ flowplot nondim <path> [--u-ref U] [--lx Lx] [--ly Ly] [--lz Lz] [--t-ref T] \
   [--x-var X] [--y-var Y] [--z-var Z]
 
 # Pathlines (particle traces / streamlines)
-flowplot pathlines <path> -o lines.png [--var P] [--seed x,y] [--u-var U] [--v-var V]
+flowplot pathlines <path> -o lines.png [--var P] [--seed x,y] [--u-var U] [--v-var V] \
+  [--style default|jfm]
 ```
 
 `--pathlines` overlays traces on the contour PNG; `--pathlines-out` writes a second PNG.
+`--style jfm` uses a restrained coolwarm map, white exterior, black frame, and (if size left at 512×512) a single-column 700×525 raster.
 
 ## Format support
 
