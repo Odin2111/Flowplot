@@ -36,7 +36,7 @@ cargo build
 python3 gui/flowplot_gui.py
 ```
 
-**File → Open** runs `info`, fills the variable list, enables **Mesh**, leaves **Contour** off, and draws an equal-aspect wireframe into the viewport. Turn on Contour (and pick e.g. `Pressure`) to overlay. Plot menu uses Pathlines (Tecplot’s Streamtraces), Contour, Axis, Zone Style, …. See [docs/gui-layout.md](docs/gui-layout.md).
+**File → Open** runs `info`, fills the variable list, enables **Mesh**, leaves **Contour** off, and draws an equal-aspect wireframe into the viewport. Turn on Contour (and pick e.g. `Pressure`) to overlay. **XYZ** buttons and viewport drag rotate the crate; **Cut / Track** sets the I/J/K plane for mesh and contours. Plot menu uses Pathlines (Tecplot’s Streamtraces), Contour, Axis, Zone Style, …. See [docs/gui-layout.md](docs/gui-layout.md).
 
 ## CLI
 
@@ -48,10 +48,12 @@ flowplot info <path> [--json]
 
 # Mesh / zone grid (equal aspect; Contour off) — default first view
 flowplot mesh <path> -o mesh.png [--zone 0] [--plane k=0] \
+  [--view auto|+x|-x|+y|-y|+z|-z|az=35,el=55] \
   [--width 800] [--height 600] [--style default|jfm] [--json]
 
 # Contour any scalar to PNG
-flowplot contour <path> --var P -o out.png [--plane k=0] [--vmin 0] [--vmax 1] \
+flowplot contour <path> --var P -o out.png [--plane k=0] \
+  [--view +z] [--vmin 0] [--vmax 1] \
   [--width 512] [--height 512] [--zone 0] [--style default|jfm] \
   [--u-ref U] [--lx Lx] [--ly Ly] [--lz Lz] [--t-ref T] \
   [--mesh] [--pathlines] [--pathlines-out lines.png] [--seed x,y] [--u-var U] [--v-var V] [--dt 0.02] \

@@ -29,6 +29,7 @@
 //! - [`validate`] — field sanity / positivity checks (lehar validation ideas)
 //! - [`profile`] — line / centerline extracts (lehar extract-line analogue)
 
+pub mod annotate;
 pub mod contour;
 pub mod dataset;
 pub mod error;
@@ -42,9 +43,11 @@ pub mod readers;
 pub mod validate;
 pub mod view;
 
+pub use annotate::{draw_annotations, AnnotationInfo};
 pub use contour::{render_contour, write_png, ContourImage, ContourOptions, PlotStyle};
 pub use dataset::{
     Connectivity, Dataset, ElementType, Location, OrderedDims, Topology, VariableData, Zone,
+    ZoneMeta,
 };
 pub use error::{Error, Result};
 pub use field::{

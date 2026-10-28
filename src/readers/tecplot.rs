@@ -59,9 +59,16 @@ pub fn parse_tecplot_ascii(text: &str) -> Result<Dataset> {
                 }
             }
         } else if upper.starts_with("ZONE") {
-            let (zone, consumed) = parse_zone(&lines[i..], &dataset.variables)?;
+            let (zone, meta, consumed) = parse_zone(&lines[i..], &dataset.variables)?;
             dataset.zones.push(zone);
+            dataset.zone_meta.push(meta);
             i += consumed;
+        } else if upper.starts_with("DATASETAUXDATA") {
+            // DATASETAUXDATA NAME = "value"  (VisIt/Silo-like file metadata)
+            if let Some((k, v)) = parse_auxdata_kv(line) {
+                dataset.aux.push((k, v));
+            }
+            i += 1;
         } else {
             i += 1;
         }
@@ -166,6 +173,9 @@ struct ZoneHeader {
     et: Option<String>,
     datapacking: String,
     varlocation: Location,
+    solution_time: Option<f64>,
+    strand_id: Option<i32>,
+    aux: Vec<(String, String)>,
 }
 
 impl Default for ZoneHeader {
@@ -180,11 +190,17 @@ impl Default for ZoneHeader {
             et: None,
             datapacking: "POINT".into(),
             varlocation: Location::Nodal,
+            solution_time: None,
+            strand_id: None,
+            aux: Vec::new(),
         }
     }
 }
 
-fn parse_zone(lines: &[String], var_names: &[String]) -> Result<(Zone, usize)> {
+fn parse_zone(
+    lines: &[String],
+    var_names: &[String],
+) -> Result<(Zone, crate::dataset::ZoneMeta, usize)> {
     let header_line = &lines[0];
     let mut header = parse_zone_header(header_line)?;
 
@@ -254,8 +270,13 @@ fn parse_zone(lines: &[String], var_names: &[String]) -> Result<(Zone, usize)> {
         topology,
         fields,
     };
+    let meta = crate::dataset::ZoneMeta {
+        solution_time: header.solution_time,
+        strand_id: header.strand_id,
+        aux: header.aux,
+    };
 
-    Ok((zone, idx + consumed_data))
+    Ok((zone, meta, idx + consumed_data))
 }
 
 fn parse_zone_header(line: &str) -> Result<ZoneHeader> {
@@ -312,6 +333,37 @@ fn merge_zone_kv(header: &mut ZoneHeader, s: &str) -> Result<()> {
                     header.varlocation = Location::Nodal;
                 }
             }
+            "SOLUTIONTIME" | "TIME" => {
+                if let Ok(t) = val.parse::<f64>() {
+                    header.solution_time = Some(t);
+                } else {
+                    header.aux.push(("Time".into(), val));
+                }
+            }
+            "STRANDID" | "STRAND" => {
+                if let Ok(s) = val.parse::<i32>() {
+                    header.strand_id = Some(s);
+                }
+            }
+            "AUXDATA" => {
+                // Rare inline form AUXDATA name="value" — keep raw.
+                header.aux.push(("AUXDATA".into(), val));
+            }
+            other if other.starts_with("AUXDATA") => {
+                // AUXDATA CYCLE="123" → key CYCLE
+                let key = other
+                    .strip_prefix("AUXDATA")
+                    .unwrap_or(other)
+                    .trim()
+                    .trim_matches(|c| c == '[' || c == ']')
+                    .to_string();
+                let key = if key.is_empty() {
+                    "AUXDATA".into()
+                } else {
+                    key
+                };
+                header.aux.push((key, val));
+            }
             _ => {}
         }
     }
@@ -345,6 +397,26 @@ fn split_zone_tokens(s: &str) -> Vec<String> {
 fn parse_usize(s: &str, label: &str) -> Result<usize> {
     s.parse::<usize>()
         .map_err(|_| Error::parse("Tecplot ASCII", format!("invalid {label}={s}")))
+}
+
+/// Parse `DATASETAUXDATA KEY = "value"` or `AUXDATA KEY = "value"`.
+fn parse_auxdata_kv(line: &str) -> Option<(String, String)> {
+    let upper = line.to_ascii_uppercase();
+    let rest = if upper.starts_with("DATASETAUXDATA") {
+        line[14..].trim()
+    } else if upper.starts_with("AUXDATA") {
+        line[7..].trim()
+    } else {
+        line.trim()
+    };
+    let (k, v) = rest.split_once('=')?;
+    let key = k.trim().trim_matches('"').to_string();
+    let val = v.trim().trim_matches('"').to_string();
+    if key.is_empty() {
+        None
+    } else {
+        Some((key, val))
+    }
 }
 
 fn read_zone_payload(

@@ -6,6 +6,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+use flowplot::annotate::{draw_annotations, AnnotationInfo};
 use flowplot::contour::{render_contour, write_png, ContourOptions, PlotStyle};
 use flowplot::field::{extract_scalar_grid_view, find_var, PlaneSpec};
 use flowplot::menu::{
@@ -976,6 +977,7 @@ fn run_mesh(
             width,
             height,
             style,
+            path_hint: Some(path.display().to_string()),
             ..Default::default()
         },
     )?;
@@ -1052,6 +1054,9 @@ fn run_contour(
             width,
             height,
             style,
+            // Annotate after mesh/pathline overlays so the legend stays on top.
+            annotate: false,
+            path_hint: Some(path.display().to_string()),
         },
     )?;
 
@@ -1086,6 +1091,26 @@ fn run_contour(
                 println!("wrote pathlines {}", pout.display());
             }
         }
+    }
+
+    // VisIt-style legend on top of mesh/pathline overlays.
+    {
+        let mut info = AnnotationInfo::from_dataset(
+            &ds,
+            zone,
+            Some(variable),
+            Some(&path.display().to_string()),
+        );
+        info.colorbar = true;
+        info.vmin = Some(img.vmin);
+        info.vmax = Some(img.vmax);
+        info.style = style;
+        info.view = Some(view.label());
+        info.plane = Some(match plane {
+            PlaneSpec::Auto => "auto".into(),
+            PlaneSpec::Index { axis, index } => format!("{axis}={index}"),
+        });
+        draw_annotations(&mut img, &info);
     }
 
     write_png(out, &img)?;
@@ -1232,9 +1257,23 @@ fn run_pathlines_cmd(
                 width,
                 height,
                 style,
+                annotate: false,
+                path_hint: Some(path.display().to_string()),
             },
         )?;
         overlay_pathlines_styled(&mut img, &lines, style);
+        let mut info = AnnotationInfo::from_dataset(
+            &ds,
+            zone,
+            Some(var),
+            Some(&path.display().to_string()),
+        );
+        info.colorbar = true;
+        info.vmin = Some(img.vmin);
+        info.vmax = Some(img.vmax);
+        info.style = style;
+        info.view = Some(view.label());
+        draw_annotations(&mut img, &info);
         img
     } else {
         render_pathlines_png_styled(&ds, &pl_opts, width, height, style)?

@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 use crate::dataset::Dataset;
 use crate::error::{Error, Result};
+use crate::annotate::{draw_annotations, AnnotationInfo};
 use crate::field::{extract_scalar_grid_view, find_var, Grid2D, PlaneSpec};
 use crate::view::ViewSpec;
 
@@ -117,6 +118,9 @@ pub struct ContourOptions {
     pub width: u32,
     pub height: u32,
     pub style: PlotStyle,
+    /// VisIt-like title / time / variable / colorbar overlay (default on).
+    pub annotate: bool,
+    pub path_hint: Option<String>,
 }
 
 impl Default for ContourOptions {
@@ -131,6 +135,8 @@ impl Default for ContourOptions {
             width: 512,
             height: 512,
             style: PlotStyle::Default,
+            annotate: true,
+            path_hint: None,
         }
     }
 }
@@ -206,6 +212,24 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
     };
     if opts.style.draw_frame() {
         draw_frame(&mut img, opts.style.frame_rgba(), opts.style.frame_thickness());
+    }
+    if opts.annotate {
+        let mut info = AnnotationInfo::from_dataset(
+            ds,
+            opts.zone,
+            Some(&opts.variable),
+            opts.path_hint.as_deref(),
+        );
+        info.colorbar = true;
+        info.vmin = Some(vmin);
+        info.vmax = Some(vmax);
+        info.style = opts.style;
+        info.view = Some(opts.view.label());
+        info.plane = Some(match opts.plane {
+            PlaneSpec::Auto => "auto".into(),
+            PlaneSpec::Index { axis, index } => format!("{axis}={index}"),
+        });
+        draw_annotations(&mut img, &info);
     }
     Ok(img)
 }
@@ -393,6 +417,7 @@ mod tests {
                     },
                 ],
             }],
+            ..Default::default()
         }
     }
 

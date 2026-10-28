@@ -416,6 +416,8 @@ fn build_dataset(
             topology,
             fields,
         }],
+        aux: Vec::new(),
+        zone_meta: Vec::new(),
     })
 }
 

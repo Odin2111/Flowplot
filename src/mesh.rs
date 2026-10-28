@@ -3,6 +3,7 @@
 //! Default Tecplot-like first view: show the mesh with **equal aspect**
 //! (no stretch), Contour off. Uses ordered IJ / IJK plane extraction.
 
+use crate::annotate::{draw_annotations, AnnotationInfo};
 use crate::contour::{
     draw_frame, draw_line, put_pixel, write_png, ContourImage, PlotStyle,
 };
@@ -28,6 +29,9 @@ pub struct MeshOptions {
     pub bg_rgba: [u8; 4],
     /// Margin in pixels around the fitted domain.
     pub margin: u32,
+    /// VisIt-like title / time / zone overlay (default on).
+    pub annotate: bool,
+    pub path_hint: Option<String>,
 }
 
 /// Default mesh wireframe color (green).
@@ -45,6 +49,8 @@ impl Default for MeshOptions {
             line_rgba: DEFAULT_MESH_RGBA,
             bg_rgba: [255, 255, 255, 255],
             margin: 24,
+            annotate: true,
+            path_hint: None,
         }
     }
 }
@@ -217,6 +223,17 @@ pub fn render_mesh(ds: &Dataset, opts: &MeshOptions) -> Result<ContourImage> {
     if opts.style.draw_frame() {
         draw_frame(&mut img, opts.style.frame_rgba(), opts.style.frame_thickness());
     }
+    if opts.annotate {
+        let mut info =
+            AnnotationInfo::from_dataset(ds, opts.zone, None, opts.path_hint.as_deref());
+        info.colorbar = false;
+        info.view = Some(opts.view.label());
+        info.plane = Some(match opts.plane {
+            PlaneSpec::Auto => "auto".into(),
+            PlaneSpec::Index { axis, index } => format!("{axis}={index}"),
+        });
+        draw_annotations(&mut img, &info);
+    }
     Ok(img)
 }
 
@@ -338,6 +355,7 @@ mod tests {
                     },
                 ],
             }],
+            ..Default::default()
         }
     }
 

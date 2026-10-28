@@ -11,6 +11,16 @@ pub enum Axis {
     K,
 }
 
+impl std::fmt::Display for Axis {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::I => write!(f, "i"),
+            Self::J => write!(f, "j"),
+            Self::K => write!(f, "k"),
+        }
+    }
+}
+
 /// Slice specification for extracting a 2D plane from an ordered zone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaneSpec {
@@ -500,6 +510,7 @@ mod tests {
                     },
                 ],
             }],
+            ..Default::default()
         };
         let g = extract_scalar_grid(&ds, 0, 2, PlaneSpec::Auto).unwrap();
         assert_eq!(g.ni, 2);
@@ -582,6 +593,7 @@ mod tests {
                     },
                 ],
             }],
+            ..Default::default()
         };
         assert!(dataset_is_effectively_2d(&ds));
         let g = extract_scalar_grid(&ds, 0, 3, PlaneSpec::Auto).unwrap();
@@ -619,6 +631,7 @@ mod tests {
                     },
                 ],
             }],
+            ..Default::default()
         };
         let g = extract_scalar_grid_view(
             &ds,

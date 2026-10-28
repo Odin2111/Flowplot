@@ -315,6 +315,7 @@ mod tests {
                     },
                 ],
             }],
+            ..Default::default()
         }
     }
 
