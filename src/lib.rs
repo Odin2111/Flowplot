@@ -1,4 +1,4 @@
-//! `fieldplot` — CFD post-processing core with a Tecplot-like data model.
+//! `flowplot` — CFD post-processing core with a Tecplot-like data model.
 //!
 //! # Data model
 //!

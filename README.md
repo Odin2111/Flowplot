@@ -1,4 +1,4 @@
-# fieldplot
+# flowplot
 
 Rust CFD post-processing library with a Tecplot-like data model:
 
@@ -11,7 +11,7 @@ The GUI comes later. This first slice is the core crate, format readers, and a s
 ```bash
 cargo build
 cargo test
-cargo run --bin fieldplot -- tests/fixtures/simple.dat
+cargo run --bin flowplot -- tests/fixtures/simple.dat
 ```
 
 Requires a recent stable Rust toolchain (`edition = "2021"`).
@@ -19,7 +19,7 @@ Requires a recent stable Rust toolchain (`edition = "2021"`).
 ## CLI
 
 ```bash
-fieldplot <path>
+flowplot <path>
 ```
 
 Detects format by extension, loads into a `Dataset`, and prints zone count, variable names, and per-zone node/cell counts.
@@ -40,7 +40,7 @@ Detects format by extension, loads into a `Dataset`, and prints zone count, vari
 
 - `src/dataset.rs` — data model
 - `src/readers/` — `Reader` trait + Tecplot / VTK / CGNS / Fluent modules
-- `src/bin/fieldplot.rs` — CLI
+- `src/bin/flowplot.rs` — CLI
 - `tests/fixtures/` — tiny synthetic Tecplot ASCII and VTK ASCII files
 
 ## License

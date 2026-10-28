@@ -1,16 +1,16 @@
 [package]
-name = "fieldplot"
+name = "flowplot"
 version = "0.1.0"
 edition = "2021"
-description = "CFD post-processing library: Tecplot-like data model and format readers"
+description = "Rust CFD post-processor; loads Tecplot, VTK, CGNS, and Fluent into one zone/variable model"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 keywords = ["cfd", "tecplot", "vtk", "mesh", "post-processing"]
 categories = ["science", "parsing"]
 
 [[bin]]
-name = "fieldplot"
-path = "src/bin/fieldplot.rs"
+name = "flowplot"
+path = "src/bin/flowplot.rs"
 
 [dependencies]
 thiserror = "2"

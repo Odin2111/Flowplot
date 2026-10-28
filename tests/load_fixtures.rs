@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use fieldplot::load_path;
+use flowplot::load_path;
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

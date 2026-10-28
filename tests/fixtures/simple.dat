@@ -1,4 +1,4 @@
-TITLE = "fieldplot synthetic Tecplot ASCII"
+TITLE = "flowplot synthetic Tecplot ASCII"
 VARIABLES = "X", "Y", "P"
 ZONE T="quad", I=2, J=2, DATAPACKING=POINT
 0.0 0.0 1.0

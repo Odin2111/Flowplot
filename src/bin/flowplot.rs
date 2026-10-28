@@ -4,12 +4,12 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use fieldplot::load_path;
+use flowplot::load_path;
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
     let Some(path) = args.next() else {
-        eprintln!("usage: fieldplot <path>");
+        eprintln!("usage: flowplot <path>");
         eprintln!("  Load a CFD mesh/field file and print zone / variable / size summary.");
         eprintln!("  Formats: .dat/.tp (Tecplot ASCII), .vtk (VTK ASCII), .cgns, .cas/.dat (Fluent stub)");
         return ExitCode::from(2);
