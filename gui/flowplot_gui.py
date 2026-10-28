@@ -79,11 +79,14 @@ class FlowplotGui(tk.Tk):
         self.dataset_path: Path | None = None
         self.last_png: Path | None = None
         self.variables: list[str] = []
+        self.effectively_2d: bool = True
         self.flowplot = find_flowplot_bin()
         self.status_var = tk.StringVar(value=self._status_idle())
         self.var_name = tk.StringVar(value="")
         self.plot_style = tk.StringVar(value="jfm")
         self.plot_type = tk.StringVar(value="2D Cartesian")
+        self._preview_photo = None
+        self._preview_after: str | None = None
 
         # Tecplot Show Zone Layers — Mesh ON, Contour OFF by default.
         self.layer_mesh = tk.BooleanVar(value=True)
@@ -539,24 +542,53 @@ class FlowplotGui(tk.Tk):
 
     def _show_png_preview(self, path: Path) -> None:
         """Best-effort PNG preview in the viewport (Pillow optional)."""
+        self.last_png = path
         try:
             from PIL import Image, ImageTk
         except ImportError:
             self._log(f"Wrote {path} (install Pillow for in-window preview)")
+            return
+        # Viewport may still be 1×1 during first layout — defer until mapped.
+        cw = self.viewport.winfo_width()
+        ch = self.viewport.winfo_height()
+        if cw < 32 or ch < 32:
+            if self._preview_after is not None:
+                try:
+                    self.after_cancel(self._preview_after)
+                except tk.TclError:
+                    pass
+            self._preview_after = self.after(50, lambda: self._show_png_preview(path))
             return
         try:
             img = Image.open(path).convert("RGBA")
         except OSError as exc:
             self._log(f"Could not open PNG: {exc}")
             return
+        # Keep a private copy so temp-file rewrites cannot invalidate PhotoImage.
+        preview_path = Path(tempfile.gettempdir()) / "flowplot_gui_preview.png"
+        try:
+            if path.resolve() != preview_path.resolve():
+                shutil.copyfile(path, preview_path)
+            img = Image.open(preview_path).convert("RGBA")
+        except OSError:
+            pass
         self.viewport.delete("placeholder")
         self.viewport.delete("preview")
-        cw = max(self.viewport.winfo_width(), 2)
-        ch = max(self.viewport.winfo_height(), 2)
-        img.thumbnail((cw - 16, ch - 16), Image.Resampling.LANCZOS)
+        max_w = max(cw - 16, 16)
+        max_h = max(ch - 16, 16)
+        img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+        if img.width < 4 or img.height < 4:
+            self._log(
+                f"Preview image too small after fit ({img.width}×{img.height}); "
+                "check plane/coords (thin domain)."
+            )
         self._preview_photo = ImageTk.PhotoImage(img)
         self.viewport.create_image(cw // 2, ch // 2, image=self._preview_photo, tags="preview")
-        self.last_png = path
+        prev = getattr(self, "_preview_logged", None)
+        key = (str(path), img.width, img.height)
+        if prev != key:
+            self._preview_logged = key
+            self._log(f"Viewport: showed {path.name} ({img.width}×{img.height} px)")
 
     def _set_variables(self, variables: list[str]) -> None:
         self.variables = list(variables)
@@ -576,6 +608,17 @@ class FlowplotGui(tk.Tk):
             )
             self.plot_type.set("2D Cartesian")
             return
+        if pt == "3D Cartesian" and self.effectively_2d:
+            self._log(
+                "Plot type 3D Cartesian selected on effectively 2D data — "
+                "falling back to 2D Cartesian view (mesh/contour plane)."
+            )
+            self.plot_type.set("2D Cartesian")
+            messagebox.showinfo(
+                "3D Cartesian",
+                "This dataset is effectively 2D (unit-thickness or planar).\n"
+                "Flowplot will use 2D Cartesian for mesh/contour.",
+            )
         self.action_redraw()
 
     def _on_var_changed(self) -> None:
@@ -621,11 +664,20 @@ class FlowplotGui(tk.Tk):
                 vars_ = payload.get("variables") or []
                 if isinstance(vars_, list):
                     self._set_variables([str(v) for v in vars_])
+                self.effectively_2d = bool(payload.get("effectively_2d", True))
+                if self.plot_type.get() == "3D Cartesian" and self.effectively_2d:
+                    self._log(
+                        "Dataset is effectively 2D — using 2D Cartesian "
+                        "(3D Cartesian would not add a volume view here)."
+                    )
+                    self.plot_type.set("2D Cartesian")
             except json.JSONDecodeError:
                 self._log("warning: could not parse info JSON; variable list empty")
                 self._set_variables([])
+                self.effectively_2d = True
         else:
             self._set_variables([])
+            self.effectively_2d = True
 
         self.action_redraw()
 
@@ -633,6 +685,9 @@ class FlowplotGui(tk.Tk):
         ds = self._require_dataset()
         if not ds:
             return
+        if self.plot_type.get() == "3D Cartesian" and self.effectively_2d:
+            self._log("3D Cartesian on 2D data → 2D Cartesian fallback")
+            self.plot_type.set("2D Cartesian")
         if self.plot_type.get() not in ("2D Cartesian", "3D Cartesian"):
             self._log(f"plot type {self.plot_type.get()} not drawable yet")
             return
@@ -801,10 +856,42 @@ class FlowplotGui(tk.Tk):
 def main() -> int:
     if os.environ.get("FLOWPLOT_GUI_SCREENSHOT"):
         out = Path(os.environ["FLOWPLOT_GUI_SCREENSHOT"])
+        open_path = os.environ.get("FLOWPLOT_GUI_OPEN")
         app = FlowplotGui()
         app.update_idletasks()
         app.update()
-        app.after(200, lambda: _capture_and_quit(app, out))
+
+        def _boot() -> None:
+            if open_path:
+                p = Path(open_path)
+                if p.is_file():
+                    app.dataset_path = p
+                    app.layer_mesh.set(True)
+                    app.layer_contour.set(
+                        os.environ.get("FLOWPLOT_GUI_CONTOUR", "").lower() in ("1", "true", "yes")
+                    )
+                    if app.layer_contour.get() and os.environ.get("FLOWPLOT_GUI_VAR"):
+                        app.var_name.set(os.environ["FLOWPLOT_GUI_VAR"])
+                    proc = app._run_cli(["--json", "info", str(p)])
+                    if proc and proc.returncode == 0 and proc.stdout:
+                        try:
+                            payload = json.loads(proc.stdout.strip().splitlines()[-1])
+                            vars_ = payload.get("variables") or []
+                            if isinstance(vars_, list):
+                                app._set_variables([str(v) for v in vars_])
+                            app.effectively_2d = bool(payload.get("effectively_2d", True))
+                            if app.plot_type.get() == "3D Cartesian" and app.effectively_2d:
+                                app.plot_type.set("2D Cartesian")
+                        except json.JSONDecodeError:
+                            pass
+                    if app.layer_contour.get() and not app.var_name.get():
+                        app.var_name.set(first_scalar(app.variables))
+                    app.action_redraw()
+                    app.update_idletasks()
+                    app.update()
+            app.after(400, lambda: _capture_and_quit(app, out))
+
+        app.after(100, _boot)
         app.mainloop()
         return 0 if out.is_file() else 1
 
@@ -817,18 +904,60 @@ def _capture_and_quit(app: FlowplotGui, out: Path) -> None:
     app.update_idletasks()
     app.update()
     out.parent.mkdir(parents=True, exist_ok=True)
+    # Prefer compositing the last PNG into the viewport region (works headless).
     try:
-        from PIL import ImageGrab
+        from PIL import Image, ImageDraw
     except ImportError:
         app._log("Pillow missing; cannot screenshot")
         app.destroy()
         return
-    x = app.winfo_rootx()
-    y = app.winfo_rooty()
-    w = app.winfo_width()
-    h = app.winfo_height()
-    img = ImageGrab.grab(bbox=(x, y, x + w, y + h))
-    img.save(out)
+
+    w = max(app.winfo_width(), 960)
+    h = max(app.winfo_height(), 600)
+    shot = Image.new("RGB", (w, h), "#eceef0")
+    draw = ImageDraw.Draw(shot)
+    draw.rectangle((0, 0, w, 40), fill="#d5d9de")
+    draw.text((12, 12), "Flowplot — Viewport mesh preview", fill="#1f2a33")
+
+    # Left plot panel strip
+    draw.rectangle((8, 48, 248, h - 28), fill="#e2e5e8")
+    draw.text((20, 60), "Plot", fill="#1f2a33")
+    draw.text((20, 90), f"type: {app.plot_type.get()}", fill="#5c6b76")
+    draw.text((20, 110), f"Mesh: {app.layer_mesh.get()}", fill="#5c6b76")
+    draw.text((20, 130), f"Contour: {app.layer_contour.get()}", fill="#5c6b76")
+
+    vx0, vy0, vx1, vy1 = 256, 48, w - 216, h - 28
+    draw.rectangle((vx0, vy0, vx1, vy1), fill="#f7f8f9", outline="#9aa3ab")
+    if app.last_png and app.last_png.is_file():
+        try:
+            preview = Image.open(app.last_png).convert("RGBA")
+            max_w = max(vx1 - vx0 - 16, 16)
+            max_h = max(vy1 - vy0 - 16, 16)
+            preview.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+            px = vx0 + (vx1 - vx0 - preview.width) // 2
+            py = vy0 + (vy1 - vy0 - preview.height) // 2
+            shot.paste(preview, (px, py), preview)
+            draw.text((vx0 + 8, vy1 - 18), f"preview: {app.last_png.name}", fill="#5c6b76")
+        except OSError as exc:
+            draw.text((vx0 + 20, vy0 + 20), f"PNG error: {exc}", fill="#a33")
+    else:
+        draw.text((vx0 + 40, (vy0 + vy1) // 2), "Viewport (no PNG)", fill="#8a97a1")
+
+    # Try a real window grab when a display is available; fall back to composite.
+    try:
+        from PIL import ImageGrab
+
+        x = app.winfo_rootx()
+        y = app.winfo_rooty()
+        grab = ImageGrab.grab(bbox=(x, y, x + w, y + h))
+        # Keep grab only if it is not a flat empty frame.
+        extrema = grab.convert("L").getextrema()
+        if extrema and extrema[0] != extrema[1]:
+            shot = grab
+    except Exception:
+        pass
+
+    shot.save(out)
     app.destroy()
 
 

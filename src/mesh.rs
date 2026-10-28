@@ -18,13 +18,16 @@ pub struct MeshOptions {
     pub width: u32,
     pub height: u32,
     pub style: PlotStyle,
-    /// Line RGBA. Default: dark gray on white (Tecplot-like mesh).
+    /// Line RGBA. Default: green wireframe on white.
     pub line_rgba: [u8; 4],
     /// Background RGBA.
     pub bg_rgba: [u8; 4],
     /// Margin in pixels around the fitted domain.
     pub margin: u32,
 }
+
+/// Default mesh wireframe color (green).
+pub const DEFAULT_MESH_RGBA: [u8; 4] = [34, 160, 60, 255];
 
 impl Default for MeshOptions {
     fn default() -> Self {
@@ -34,7 +37,7 @@ impl Default for MeshOptions {
             width: 800,
             height: 600,
             style: PlotStyle::Default,
-            line_rgba: [40, 48, 56, 255],
+            line_rgba: DEFAULT_MESH_RGBA,
             bg_rgba: [255, 255, 255, 255],
             margin: 24,
         }
@@ -52,12 +55,18 @@ pub struct AspectMap {
     pub ymax: f64,
     pub origin_x: f64,
     pub origin_y: f64,
-    /// Pixels per world unit (same for X and Y).
+    /// Pixels per world unit in X (and Y when `y_scale` is 0).
     pub scale: f64,
+    /// Optional independent Y scale for thin-domain fill. `0` ⇒ use `scale`.
+    pub y_scale: f64,
 }
 
 impl AspectMap {
     /// Fit `[xmin,xmax]×[ymin,ymax]` into `width×height` with equal aspect.
+    ///
+    /// If equal-aspect would leave a needle thinner than 8px (extreme aspect
+    /// ratios / still-collapsed coords), fall back to fill/stretch so the
+    /// mesh remains visible in the viewport.
     pub fn fit(
         width: u32,
         height: u32,
@@ -75,6 +84,9 @@ impl AspectMap {
         let scale = (avail_w / dx).min(avail_h / dy);
         let used_w = dx * scale;
         let used_h = dy * scale;
+        if used_w < 8.0 || used_h < 8.0 {
+            return Self::fit_fill(width, height, xmin, xmax, ymin, ymax, margin);
+        }
         let origin_x = m + (avail_w - used_w) * 0.5;
         let origin_y = m + (avail_h - used_h) * 0.5;
         Self {
@@ -87,13 +99,49 @@ impl AspectMap {
             origin_x,
             origin_y,
             scale,
+            y_scale: 0.0,
+        }
+    }
+
+    /// Stretch independently in X and Y to fill the drawable area (auto-fit).
+    pub fn fit_fill(
+        width: u32,
+        height: u32,
+        xmin: f64,
+        xmax: f64,
+        ymin: f64,
+        ymax: f64,
+        margin: u32,
+    ) -> Self {
+        let m = margin as f64;
+        let avail_w = (width as f64 - 2.0 * m).max(1.0);
+        let avail_h = (height as f64 - 2.0 * m).max(1.0);
+        let dx = (xmax - xmin).abs().max(1e-30);
+        let dy = (ymax - ymin).abs().max(1e-30);
+        Self {
+            width,
+            height,
+            xmin,
+            xmax,
+            ymin,
+            ymax,
+            origin_x: m,
+            origin_y: m,
+            scale: avail_w / dx,
+            y_scale: avail_h / dy,
         }
     }
 
     pub fn world_to_pixel(self, x: f64, y: f64) -> (i32, i32) {
-        let px = self.origin_x + (x - self.xmin) * self.scale;
+        let sx = self.scale;
+        let sy = if self.y_scale > 0.0 {
+            self.y_scale
+        } else {
+            self.scale
+        };
+        let px = self.origin_x + (x - self.xmin) * sx;
         // Image y grows downward; world y grows upward.
-        let py = self.origin_y + (self.ymax - y) * self.scale;
+        let py = self.origin_y + (self.ymax - y) * sy;
         (px.round() as i32, py.round() as i32)
     }
 }
@@ -305,12 +353,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(img.rgba.len(), 120 * 80 * 4);
-        // Background should be mostly white; some dark mesh pixels exist.
-        let dark = img
+        // Background should be mostly white; green mesh strokes exist.
+        let greenish = img
             .rgba
             .chunks_exact(4)
-            .filter(|p| p[0] < 200 || p[1] < 200 || p[2] < 200)
+            .filter(|p| p[1] > p[0].saturating_add(20) && p[1] > p[2].saturating_add(20))
             .count();
-        assert!(dark > 10, "expected mesh strokes, got {dark} dark pixels");
+        assert!(greenish > 10, "expected green mesh strokes, got {greenish}");
     }
 }

@@ -167,6 +167,95 @@ pub fn guess_coord_vars(ds: &Dataset) -> (Option<usize>, Option<usize>, Option<u
     )
 }
 
+/// Span of a nodal field over `nodes` (0 if missing / empty).
+fn field_span_on_nodes(zone: &Zone, var_idx: Option<usize>, nodes: &[usize]) -> f64 {
+    let Some(vi) = var_idx else {
+        return 0.0;
+    };
+    let Some(field) = zone.fields.get(vi) else {
+        return 0.0;
+    };
+    let mut mn = f64::INFINITY;
+    let mut mx = f64::NEG_INFINITY;
+    for &n in nodes {
+        if let Some(&v) = field.values.get(n) {
+            if v.is_finite() {
+                mn = mn.min(v);
+                mx = mx.max(v);
+            }
+        }
+    }
+    if mn.is_finite() && mx.is_finite() {
+        (mx - mn).abs()
+    } else {
+        0.0
+    }
+}
+
+/// Choose two plot axes that actually vary on the extracted plane.
+///
+/// Meridian / axisymmetric slices often have Y≡0 with geometry in X/R and Z;
+/// defaulting to (X,Y) collapses the mesh to a 1-pixel line in the viewport.
+pub fn pick_plot_coord_indices(
+    zone: &Zone,
+    nodes: &[usize],
+    x_i: Option<usize>,
+    y_i: Option<usize>,
+    z_i: Option<usize>,
+) -> (Option<usize>, Option<usize>) {
+    let sx = field_span_on_nodes(zone, x_i, nodes);
+    let sy = field_span_on_nodes(zone, y_i, nodes);
+    let sz = field_span_on_nodes(zone, z_i, nodes);
+    let max_span = sx.max(sy).max(sz).max(1e-30);
+    let eps = (1e-8 * max_span).max(1e-30);
+
+    // Prefer Tecplot-like XY when both vary; otherwise fall back to XZ / YZ.
+    if sx > eps && sy > eps {
+        return (x_i, y_i);
+    }
+    if sx > eps && sz > eps {
+        return (x_i, z_i);
+    }
+    if sy > eps && sz > eps {
+        return (y_i, z_i);
+    }
+    // Single varying axis + best available second (may be synthetic later).
+    if sx >= sy && sx >= sz {
+        (x_i, if sy >= sz { y_i } else { z_i }.or(y_i).or(z_i))
+    } else if sy >= sz {
+        (y_i, if sx >= sz { x_i } else { z_i }.or(x_i).or(z_i))
+    } else {
+        (z_i, if sx >= sy { x_i } else { y_i }.or(x_i).or(y_i))
+    }
+}
+
+/// True when the dataset is effectively a 2D Cartesian plot (no thick 3D volume).
+///
+/// Used by the GUI to fall back from "3D Cartesian" with a clear message.
+pub fn dataset_is_effectively_2d(ds: &Dataset) -> bool {
+    let Some(zone) = ds.zones.first() else {
+        return true;
+    };
+    match &zone.topology {
+        Topology::Ordered(OrderedDims::I { .. }) | Topology::Ordered(OrderedDims::Ij { .. }) => {
+            true
+        }
+        Topology::Ordered(OrderedDims::Ijk { i, j, k }) => {
+            // Unit thickness on any structured axis ⇒ a single plane, not a volume.
+            *i <= 1 || *j <= 1 || *k <= 1
+        }
+        Topology::FiniteElement { .. } => {
+            let (x_i, y_i, z_i) = guess_coord_vars(ds);
+            let nodes: Vec<usize> = (0..zone.node_count()).collect();
+            let sx = field_span_on_nodes(zone, x_i, &nodes);
+            let sy = field_span_on_nodes(zone, y_i, &nodes);
+            let sz = field_span_on_nodes(zone, z_i, &nodes);
+            let max_span = sx.max(sy).max(sz).max(1e-30);
+            sz <= 1e-8 * max_span
+        }
+    }
+}
+
 /// Extract a nodal 2D grid of `var_idx` from an ordered zone.
 pub fn extract_scalar_grid(
     ds: &Dataset,
@@ -194,34 +283,20 @@ pub fn extract_scalar_grid(
         ));
     }
 
-    let (x_i, y_i, _) = guess_coord_vars(ds);
+    let (x_i, y_i, z_i) = guess_coord_vars(ds);
     let (ni, nj, node_indices) = plane_nodes(*dims, plane)?;
+    let (plot_x, plot_y) = pick_plot_coord_indices(zone, &node_indices, x_i, y_i, z_i);
     let n = ni * nj;
     let mut values = Vec::with_capacity(n);
     let mut x = Vec::with_capacity(n);
     let mut y = Vec::with_capacity(n);
 
-    for &node in &node_indices {
-        values.push(*field.values.get(node).unwrap_or(&f64::NAN));
-        x.push(coord_at(zone, x_i, node, node % ni.max(1)));
-        // For default index layout j = node / ni in the extracted plane.
-        let j_local = node_indices
-            .iter()
-            .position(|&n| n == node)
-            .unwrap_or(0)
-            / ni.max(1);
-        let _ = j_local;
-        y.push(coord_at(zone, y_i, node, node / dims_i(*dims).max(1)));
-    }
-
-    // Rebuild x/y using plane-local indices for consistent synthetic grids.
-    x.clear();
-    y.clear();
     for (local, &node) in node_indices.iter().enumerate() {
         let i = local % ni;
         let j = local / ni;
-        x.push(coord_at(zone, x_i, node, i));
-        y.push(coord_at(zone, y_i, node, j));
+        values.push(*field.values.get(node).unwrap_or(&f64::NAN));
+        x.push(coord_at(zone, plot_x, node, i));
+        y.push(coord_at(zone, plot_y, node, j));
     }
 
     Ok(Grid2D {
@@ -233,12 +308,22 @@ pub fn extract_scalar_grid(
     })
 }
 
-fn dims_i(dims: OrderedDims) -> usize {
-    match dims {
-        OrderedDims::I { i } => i,
-        OrderedDims::Ij { i, .. } => i,
-        OrderedDims::Ijk { i, .. } => i,
+/// Auto plane for IJK: slice the unit-thickness axis that leaves the largest 2D plane.
+fn auto_ijk_plane(i: usize, j: usize, k: usize) -> (Axis, usize) {
+    let candidates = [
+        (k <= 1, Axis::K, i.saturating_mul(j)),
+        (j <= 1, Axis::J, i.saturating_mul(k)),
+        (i <= 1, Axis::I, j.saturating_mul(k)),
+    ];
+    let mut best: Option<(Axis, usize)> = None;
+    let mut best_area = 0usize;
+    for &(unit, axis, area) in &candidates {
+        if unit && area > best_area {
+            best_area = area;
+            best = Some((axis, 0));
+        }
     }
+    best.unwrap_or((Axis::K, 0))
 }
 
 fn coord_at(zone: &Zone, var_idx: Option<usize>, node: usize, fallback_index: usize) -> f64 {
@@ -291,7 +376,9 @@ fn plane_nodes(dims: OrderedDims, plane: PlaneSpec) -> Result<(usize, usize, Vec
         }
         OrderedDims::Ijk { i, j, k } => {
             let (axis, index) = match plane {
-                PlaneSpec::Auto => (Axis::K, 0usize),
+                // Slice a unit-thickness axis first so Auto does not collapse
+                // I×1×K meridian zones to a 523×1 line (K=0 of J=1).
+                PlaneSpec::Auto => auto_ijk_plane(i, j, k),
                 PlaneSpec::Index { axis, index } => (axis, index),
             };
             match axis {
@@ -394,5 +481,87 @@ mod tests {
         assert_eq!(g.values, vec![1.0, 2.0, 3.0, 4.0]);
         let s = g.sample(0.5, 0.5).unwrap();
         assert!((s - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn auto_plane_meridian_ijk_j1() {
+        // jet_cyl-like meridian: I×1×K — Auto must slice J, not K=0 of J=1.
+        let (axis, idx) = auto_ijk_plane(523, 1, 58);
+        assert_eq!(axis, Axis::J);
+        assert_eq!(idx, 0);
+        let (ni, nj, nodes) =
+            plane_nodes(OrderedDims::Ijk { i: 4, j: 1, k: 3 }, PlaneSpec::Auto).unwrap();
+        assert_eq!((ni, nj), (4, 3));
+        assert_eq!(nodes.len(), 12);
+    }
+
+    #[test]
+    fn pick_coords_prefers_xz_when_y_flat() {
+        let zone = Zone {
+            name: "m".into(),
+            topology: Topology::Ordered(OrderedDims::Ijk {
+                i: 2,
+                j: 1,
+                k: 2,
+            }),
+            fields: vec![
+                VariableData {
+                    location: Location::Nodal,
+                    values: vec![0.0, 1.0, 0.0, 1.0], // X
+                },
+                VariableData {
+                    location: Location::Nodal,
+                    values: vec![0.0; 4], // Y flat
+                },
+                VariableData {
+                    location: Location::Nodal,
+                    values: vec![0.0, 0.0, 2.0, 2.0], // Z
+                },
+            ],
+        };
+        let nodes: Vec<usize> = (0..4).collect();
+        let (px, py) = pick_plot_coord_indices(&zone, &nodes, Some(0), Some(1), Some(2));
+        assert_eq!(px, Some(0));
+        assert_eq!(py, Some(2));
+    }
+
+    #[test]
+    fn extract_meridian_uses_xz() {
+        let ds = Dataset {
+            title: None,
+            variables: vec!["X".into(), "Y".into(), "Z".into(), "Ux".into()],
+            zones: vec![Zone {
+                name: "meridian".into(),
+                topology: Topology::Ordered(OrderedDims::Ijk {
+                    i: 2,
+                    j: 1,
+                    k: 2,
+                }),
+                fields: vec![
+                    VariableData {
+                        location: Location::Nodal,
+                        values: vec![0.1, 0.2, 0.1, 0.2],
+                    },
+                    VariableData {
+                        location: Location::Nodal,
+                        values: vec![0.0; 4],
+                    },
+                    VariableData {
+                        location: Location::Nodal,
+                        values: vec![0.0, 0.0, 1.0, 1.0],
+                    },
+                    VariableData {
+                        location: Location::Nodal,
+                        values: vec![1.0, 2.0, 3.0, 4.0],
+                    },
+                ],
+            }],
+        };
+        assert!(dataset_is_effectively_2d(&ds));
+        let g = extract_scalar_grid(&ds, 0, 3, PlaneSpec::Auto).unwrap();
+        assert_eq!((g.ni, g.nj), (2, 2));
+        let (xmin, xmax, ymin, ymax) = g.bounds();
+        assert!((xmin - 0.1).abs() < 1e-12 && (xmax - 0.2).abs() < 1e-12);
+        assert!((ymin - 0.0).abs() < 1e-12 && (ymax - 1.0).abs() < 1e-12);
     }
 }

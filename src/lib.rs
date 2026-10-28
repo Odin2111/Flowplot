@@ -45,10 +45,11 @@ pub use dataset::{
     Connectivity, Dataset, ElementType, Location, OrderedDims, Topology, VariableData, Zone,
 };
 pub use error::{Error, Result};
-pub use field::PlaneSpec;
+pub use field::{dataset_is_effectively_2d, pick_plot_coord_indices, PlaneSpec};
 pub use menu::{format_item_text, format_menu_text, format_stub_run, PostprocessMenu};
 pub use mesh::{
     extract_mesh_grid, overlay_mesh, render_mesh, write_mesh_png, AspectMap, MeshOptions,
+    DEFAULT_MESH_RGBA,
 };
 pub use nondim::{
     apply_nondim, format_suggestions, suggest_scales, NondimScales, NondimSuggestion, ScaleKind,
