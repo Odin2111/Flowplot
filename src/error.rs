@@ -21,6 +21,9 @@ pub enum Error {
         format: &'static str,
         detail: String,
     },
+
+    #[error("plot error: {0}")]
+    Plot(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -45,5 +48,9 @@ impl Error {
             format,
             detail: detail.into(),
         }
+    }
+
+    pub fn plot(message: impl Into<String>) -> Self {
+        Self::Plot(message.into())
     }
 }
