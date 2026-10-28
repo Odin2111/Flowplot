@@ -1,4 +1,4 @@
-//! CLI: load CFD files; summarize; contour PNG; nondim scales; pathlines.
+//! CLI: load CFD files; summarize; contour PNG; nondim scales; pathlines; postprocess menu.
 //! Agent contract: every subcommand accepts `--json` and emits a stable JSON object.
 
 use std::path::PathBuf;
@@ -8,6 +8,9 @@ use clap::{Parser, Subcommand};
 
 use flowplot::contour::{render_contour, write_png, ContourOptions};
 use flowplot::field::{extract_scalar_grid, find_var, PlaneSpec};
+use flowplot::menu::{
+    format_item_text, format_menu_text, format_stub_run, MenuItem, PostprocessMenu,
+};
 use flowplot::nondim::{
     apply_nondim, format_suggestions, suggest_scales, NondimScales, NondimSuggestion,
 };
@@ -20,7 +23,7 @@ use flowplot::{load_path, Dataset};
 #[derive(Parser, Debug)]
 #[command(
     name = "flowplot",
-    about = "CFD post-processor: load Tecplot/VTK ASCII, contour, nondim, pathlines",
+    about = "CFD post-processor: load Tecplot/VTK ASCII, contour, nondim, pathlines, menu",
     arg_required_else_help = true
 )]
 struct Cli {
@@ -115,6 +118,35 @@ enum Commands {
         #[arg(long)]
         vmax: Option<f64>,
     },
+    /// List / show / run CFD post-processing menu items (lehar ↔ Flowplot).
+    Menu {
+        /// Override path to `agents/postprocess-menu.yaml`.
+        #[arg(long = "menu-file")]
+        menu_file: Option<PathBuf>,
+        #[command(subcommand)]
+        action: Option<MenuAction>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum MenuAction {
+    /// Print menu groups and items (default for bare `flowplot menu`).
+    List {
+        /// Only show one group id (e.g. `shocks`).
+        #[arg(long)]
+        group: Option<String>,
+    },
+    /// Show one menu item (lehar agent, template, flags).
+    Show {
+        id: String,
+    },
+    /// Dispatch a ready item, or document a stub.
+    Run {
+        id: String,
+        /// Arguments forwarded to the underlying `flowplot <command> …`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
@@ -178,13 +210,35 @@ struct PathlineArgs {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let json = cli.json;
-    let result = match cli.command {
-        None => {
-            let Some(path) = cli.path else {
-                eprintln!(
-                    "usage: flowplot [--json] <path> | flowplot [--json] <load|info|contour|nondim|pathlines> ..."
+    let result = dispatch(cli.command, cli.path, json);
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            if json {
+                println!(
+                    "{{\"status\":\"error\",\"error\":{}}}",
+                    json_string(&e.to_string())
                 );
-                return ExitCode::from(2);
+            } else {
+                eprintln!("error: {e}");
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn dispatch(
+    command: Option<Commands>,
+    bare_path: Option<PathBuf>,
+    json: bool,
+) -> flowplot::Result<()> {
+    match command {
+        None => {
+            let Some(path) = bare_path else {
+                return Err(flowplot::Error::plot(
+                    "usage: flowplot [--json] <path> | flowplot [--json] <load|info|contour|nondim|pathlines|menu> ...",
+                ));
             };
             run_info(&path, json)
         }
@@ -250,21 +304,152 @@ fn main() -> ExitCode {
             vmax,
             json,
         ),
-    };
+        Some(Commands::Menu { menu_file, action }) => run_menu(menu_file.as_ref(), action, json),
+    }
+}
 
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
+fn load_menu(menu_file: Option<&PathBuf>) -> flowplot::Result<PostprocessMenu> {
+    match menu_file {
+        Some(path) => PostprocessMenu::load_path(path),
+        None => PostprocessMenu::load_default(),
+    }
+}
+
+fn run_menu(
+    menu_file: Option<&PathBuf>,
+    action: Option<MenuAction>,
+    json: bool,
+) -> flowplot::Result<()> {
+    let menu = load_menu(menu_file)?;
+    match action {
+        None | Some(MenuAction::List { group: None }) => print_menu_list(&menu, None, json),
+        Some(MenuAction::List { group: Some(gid) }) => {
+            if menu.filter_group(Some(&gid)).is_empty() {
+                return Err(flowplot::Error::plot(format!(
+                    "unknown menu group '{gid}' (see `flowplot menu`)"
+                )));
+            }
+            print_menu_list(&menu, Some(&gid), json)
+        }
+        Some(MenuAction::Show { id }) => {
+            let Some((group, item)) = menu.find_item(&id) else {
+                return Err(flowplot::Error::plot(format!(
+                    "unknown menu item '{id}' (see `flowplot menu`)"
+                )));
+            };
             if json {
                 println!(
-                    "{{\"status\":\"error\",\"error\":{}}}",
-                    json_string(&e.to_string())
+                    "{{\"status\":\"ok\",\"command\":\"menu\",\"action\":\"show\",\"item\":{}}}",
+                    serde_json::to_string(item).unwrap_or_else(|_| "null".into())
                 );
             } else {
-                eprintln!("error: {e}");
+                print!("{}", format_item_text(group, item));
             }
-            ExitCode::FAILURE
+            Ok(())
         }
+        Some(MenuAction::Run { id, args }) => run_menu_item(&menu, &id, args, json),
+    }
+}
+
+fn print_menu_list(
+    menu: &PostprocessMenu,
+    group: Option<&str>,
+    json: bool,
+) -> flowplot::Result<()> {
+    if json {
+        let groups: Vec<_> = menu
+            .filter_group(group)
+            .into_iter()
+            .cloned()
+            .collect();
+        let payload = serde_json::json!({
+            "status": "ok",
+            "command": "menu",
+            "action": "list",
+            "title": menu.title,
+            "version": menu.version,
+            "groups": groups,
+        });
+        println!("{payload}");
+    } else {
+        print!("{}", format_menu_text(menu, group));
+    }
+    Ok(())
+}
+
+fn run_menu_item(
+    menu: &PostprocessMenu,
+    id: &str,
+    args: Vec<String>,
+    json: bool,
+) -> flowplot::Result<()> {
+    let Some((_group, item)) = menu.find_item(id) else {
+        return Err(flowplot::Error::plot(format!(
+            "unknown menu item '{id}' (see `flowplot menu`)"
+        )));
+    };
+    if item.status != "ready" {
+        return emit_stub(item, json);
+    }
+    dispatch_ready_item(item, args, json)
+}
+
+fn emit_stub(item: &MenuItem, json: bool) -> flowplot::Result<()> {
+    if json {
+        let payload = serde_json::json!({
+            "status": "stub",
+            "command": "menu",
+            "action": "run",
+            "id": item.id,
+            "title": item.title,
+            "requires_agent": item.lehar.agent,
+            "lehar_surface": item.lehar.surface,
+            "flowplot_template": item.flowplot.template,
+            "planned_flags": item.flowplot.planned_flags,
+            "notes": item.flowplot.notes,
+            "mcp": item.mcp,
+        });
+        println!("{payload}");
+    } else {
+        print!("{}", format_stub_run(item));
+    }
+    Ok(())
+}
+
+fn dispatch_ready_item(item: &MenuItem, args: Vec<String>, json: bool) -> flowplot::Result<()> {
+    let mut forwarded = args;
+    // Allow `menu run <id> -- <args>`; clap may leave a literal "--".
+    if forwarded.first().map(String::as_str) == Some("--") {
+        forwarded.remove(0);
+    }
+    // contour-pathlines always overlays traces.
+    if item.id == "contour-pathlines"
+        && !forwarded.iter().any(|a| a == "--pathlines" || a == "--pathlines-out")
+    {
+        forwarded.push("--pathlines".into());
+    }
+    if json && !forwarded.iter().any(|a| a == "--json") {
+        forwarded.push("--json".into());
+    }
+
+    let mut argv = vec![
+        "flowplot".to_string(),
+        item.flowplot.command.clone(),
+    ];
+    argv.extend(forwarded);
+
+    let cli = Cli::try_parse_from(&argv).map_err(|e| {
+        flowplot::Error::plot(format!(
+            "menu run {} — invalid args for `flowplot {}`: {e}\ntemplate: {}",
+            item.id, item.flowplot.command, item.flowplot.template
+        ))
+    })?;
+    // Avoid re-entering menu; only dispatch leaf commands.
+    match &cli.command {
+        Some(Commands::Menu { .. }) => Err(flowplot::Error::plot(
+            "menu run cannot dispatch another menu action",
+        )),
+        _ => dispatch(cli.command, cli.path, cli.json || json),
     }
 }
 
