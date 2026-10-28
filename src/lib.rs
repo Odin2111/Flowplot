@@ -21,6 +21,7 @@
 //!
 //! # Plotting (this slice)
 //!
+//! - [`mesh`] — wireframe zone grid / "crate" PNG (default first view; equal aspect)
 //! - [`contour`] — scalar color-field / contour PNG for any variable
 //! - [`nondim`] — reference-scale nondimensionalization (CLI/config; no invented physics)
 //! - [`pathlines`] — particle traces / streamlines of the velocity field
@@ -30,6 +31,7 @@ pub mod dataset;
 pub mod error;
 pub mod field;
 pub mod menu;
+pub mod mesh;
 pub mod nondim;
 pub mod pathlines;
 pub mod readers;
@@ -41,6 +43,9 @@ pub use dataset::{
 pub use error::{Error, Result};
 pub use field::PlaneSpec;
 pub use menu::{format_item_text, format_menu_text, format_stub_run, PostprocessMenu};
+pub use mesh::{
+    extract_mesh_grid, overlay_mesh, render_mesh, write_mesh_png, AspectMap, MeshOptions,
+};
 pub use nondim::{
     apply_nondim, format_suggestions, suggest_scales, NondimScales, NondimSuggestion, ScaleKind,
 };
