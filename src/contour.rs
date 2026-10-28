@@ -179,28 +179,26 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
 
     let (xmin, xmax, ymin, ymax) = grid.bounds();
     let nan = opts.style.nan_rgba();
+    // Cell-driven raster (goose/lobster-style): O(cells × pixels/cell) ≈ O(image),
+    // not O(pixels × cells) like per-pixel bbox scans — interactive redraw stays snappy.
     let mut rgba = vec![0u8; (opts.width as usize) * (opts.height as usize) * 4];
-    for py in 0..opts.height {
-        let v = 1.0 - (py as f64 + 0.5) / opts.height as f64;
-        let y = ymin + v * (ymax - ymin);
-        for px in 0..opts.width {
-            let u = (px as f64 + 0.5) / opts.width as f64;
-            let x = xmin + u * (xmax - xmin);
-            let val = grid.sample(x, y).unwrap_or(f64::NAN);
-            let (r, g, b, a) = if val.is_finite() {
-                let t = ((val - vmin) / (vmax - vmin)).clamp(0.0, 1.0);
-                let (r, g, b) = opts.style.colormap(t);
-                (r, g, b, 255)
-            } else {
-                (nan[0], nan[1], nan[2], nan[3])
-            };
-            let i = ((py * opts.width + px) * 4) as usize;
-            rgba[i] = r;
-            rgba[i + 1] = g;
-            rgba[i + 2] = b;
-            rgba[i + 3] = a;
-        }
+    for px in rgba.chunks_exact_mut(4) {
+        px.copy_from_slice(&nan);
     }
+    rasterize_cells(
+        &grid,
+        &mut rgba,
+        opts.width,
+        opts.height,
+        xmin,
+        xmax,
+        ymin,
+        ymax,
+        vmin,
+        vmax,
+        opts.style,
+        nan,
+    );
 
     let mut img = ContourImage {
         width: opts.width,
@@ -278,6 +276,116 @@ fn data_range(values: &[f64]) -> (f64, f64) {
     } else {
         (vmin, vmax)
     }
+}
+
+/// Paint each structured cell as two triangles into the image (fast interactive path).
+fn rasterize_cells(
+    grid: &Grid2D,
+    rgba: &mut [u8],
+    width: u32,
+    height: u32,
+    xmin: f64,
+    xmax: f64,
+    ymin: f64,
+    ymax: f64,
+    vmin: f64,
+    vmax: f64,
+    style: PlotStyle,
+    nan: [u8; 4],
+) {
+    if grid.ni < 2 || grid.nj < 2 {
+        return;
+    }
+    let dx = (xmax - xmin).abs().max(1e-30);
+    let dy = (ymax - ymin).abs().max(1e-30);
+    let w = width as f64;
+    let h = height as f64;
+    let to_px = |x: f64, y: f64| -> (f64, f64) {
+        let u = (x - xmin) / dx;
+        let v = (y - ymin) / dy;
+        (u * (w - 1.0), (1.0 - v) * (h - 1.0))
+    };
+    let span = (vmax - vmin).abs().max(1e-30);
+
+    for j in 0..grid.nj - 1 {
+        for i in 0..grid.ni - 1 {
+            let (x00, y00) = grid.xy(i, j);
+            let (x10, y10) = grid.xy(i + 1, j);
+            let (x01, y01) = grid.xy(i, j + 1);
+            let (x11, y11) = grid.xy(i + 1, j + 1);
+            let v00 = grid.value(i, j);
+            let v10 = grid.value(i + 1, j);
+            let v01 = grid.value(i, j + 1);
+            let v11 = grid.value(i + 1, j + 1);
+            let p00 = to_px(x00, y00);
+            let p10 = to_px(x10, y10);
+            let p01 = to_px(x01, y01);
+            let p11 = to_px(x11, y11);
+            fill_tri(rgba, width, height, p00, p10, p11, v00, v10, v11, vmin, span, style, nan);
+            fill_tri(rgba, width, height, p00, p11, p01, v00, v11, v01, vmin, span, style, nan);
+        }
+    }
+}
+
+fn fill_tri(
+    rgba: &mut [u8],
+    width: u32,
+    height: u32,
+    a: (f64, f64),
+    b: (f64, f64),
+    c: (f64, f64),
+    va: f64,
+    vb: f64,
+    vc: f64,
+    vmin: f64,
+    span: f64,
+    style: PlotStyle,
+    nan: [u8; 4],
+) {
+    let min_x = a.0.min(b.0).min(c.0).floor() as i32;
+    let max_x = a.0.max(b.0).max(c.0).ceil() as i32;
+    let min_y = a.1.min(b.1).min(c.1).floor() as i32;
+    let max_y = a.1.max(b.1).max(c.1).ceil() as i32;
+    let min_x = min_x.max(0);
+    let min_y = min_y.max(0);
+    let max_x = max_x.min(width as i32 - 1);
+    let max_y = max_y.min(height as i32 - 1);
+    if min_x > max_x || min_y > max_y {
+        return;
+    }
+    let area = edge(a, b, c);
+    if area.abs() < 1e-18 {
+        return;
+    }
+    let inv = 1.0 / area;
+    for py in min_y..=max_y {
+        for px in min_x..=max_x {
+            let p = (px as f64 + 0.5, py as f64 + 0.5);
+            let w0 = edge(b, c, p) * inv;
+            let w1 = edge(c, a, p) * inv;
+            let w2 = edge(a, b, p) * inv;
+            if w0 < -1e-9 || w1 < -1e-9 || w2 < -1e-9 {
+                continue;
+            }
+            let val = w0 * va + w1 * vb + w2 * vc;
+            let i = ((py as u32 * width + px as u32) * 4) as usize;
+            if val.is_finite() {
+                let t = ((val - vmin) / span).clamp(0.0, 1.0);
+                let (r, g, b) = style.colormap(t);
+                rgba[i] = r;
+                rgba[i + 1] = g;
+                rgba[i + 2] = b;
+                rgba[i + 3] = 255;
+            } else {
+                rgba[i..i + 4].copy_from_slice(&nan);
+            }
+        }
+    }
+}
+
+#[inline]
+fn edge(a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> f64 {
+    (c.0 - a.0) * (b.1 - a.1) - (c.1 - a.1) * (b.0 - a.0)
 }
 
 /// Turbo-like colormap (approximate), t in [0,1].

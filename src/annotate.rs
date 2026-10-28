@@ -1,8 +1,11 @@
 //! VisIt-style plot annotations: title / time / cycle, variable name, colorbar.
 //!
-//! Drawn as a lightweight bitmap overlay (no external font deps). Mimics the
-//! Silo/VisIt habit of putting database info top-left and a vertical legend
-//! on the right of the active field plot.
+//! Text uses anti-aliased TrueType (DejaVu Sans via `fontdue`) for a modern
+//! VisIt-quality look — not a 5×7 bitmap.
+
+use std::sync::OnceLock;
+
+use fontdue::Font;
 
 use crate::contour::{draw_line, put_pixel, ContourImage, PlotStyle};
 use crate::dataset::Dataset;
@@ -72,7 +75,6 @@ impl AnnotationInfo {
             strand_id: meta.strand_id,
             ..Default::default()
         };
-        // File-level Time AUX if zone has none.
         if info.time.is_none() {
             for (k, v) in &ds.aux {
                 if k.eq_ignore_ascii_case("time") || k.eq_ignore_ascii_case("solutiontime") {
@@ -88,9 +90,18 @@ impl AnnotationInfo {
 }
 
 const FG: [u8; 4] = [20, 24, 28, 255];
-const FG_SOFT: [u8; 4] = [50, 58, 66, 255];
-const PANEL: [u8; 4] = [250, 251, 252, 220];
+const FG_SOFT: [u8; 4] = [55, 64, 72, 255];
+const PANEL: [u8; 4] = [250, 251, 252, 230];
 const BAR_FRAME: [u8; 4] = [30, 30, 30, 255];
+
+fn annotation_font() -> &'static Font {
+    static FONT: OnceLock<Font> = OnceLock::new();
+    FONT.get_or_init(|| {
+        let bytes = include_bytes!("../assets/DejaVuSans.ttf");
+        Font::from_bytes(bytes as &[u8], fontdue::FontSettings::default())
+            .expect("bundled assets/DejaVuSans.ttf must parse")
+    })
+}
 
 /// Overlay VisIt-like annotations on an existing raster.
 pub fn draw_annotations(img: &mut ContourImage, info: &AnnotationInfo) {
@@ -98,26 +109,36 @@ pub fn draw_annotations(img: &mut ContourImage, info: &AnnotationInfo) {
         return;
     }
     let lines = info_lines(info);
-    let pad = 8i32;
-    let scale = if img.width >= 700 { 2i32 } else { 1i32 };
-    let line_h = 8 * scale + 2;
-    let panel_w = lines
-        .iter()
-        .map(|l| text_width(l, scale))
-        .max()
-        .unwrap_or(40)
-        + 2 * pad;
-    let panel_h = (lines.len() as i32) * line_h + pad;
-    fill_rect(img, pad - 2, pad - 2, panel_w, panel_h, PANEL);
+    let title_px = if img.width >= 700 { 15.0 } else { 13.0 };
+    let body_px = if img.width >= 700 { 12.0 } else { 11.0 };
+    let pad = 10i32;
+    let line_gap = 4i32;
+
+    let mut sizes = Vec::with_capacity(lines.len());
+    let mut max_w = 0i32;
+    let mut total_h = pad;
     for (i, line) in lines.iter().enumerate() {
-        let y = pad + (i as i32) * line_h;
+        let px = if i == 0 { title_px } else { body_px };
+        let (w, h) = measure_text(line, px);
+        sizes.push((px, w, h));
+        max_w = max_w.max(w);
+        total_h += h + line_gap;
+    }
+    total_h += pad / 2;
+    let panel_w = max_w + 2 * pad;
+    fill_rect(img, pad - 4, pad - 4, panel_w, total_h, PANEL);
+
+    let mut y = pad;
+    for (i, line) in lines.iter().enumerate() {
+        let (px, _w, h) = sizes[i];
         let color = if i == 0 { FG } else { FG_SOFT };
-        draw_text(img, pad, y, line, color, scale);
+        draw_text_aa(img, pad as f32, y as f32, line, px, color);
+        y += h + line_gap;
     }
 
     if info.colorbar {
         if let (Some(vmin), Some(vmax)) = (info.vmin, info.vmax) {
-            draw_colorbar(img, info.style, vmin, vmax, info.variable.as_deref());
+            draw_colorbar(img, info.style, vmin, vmax, info.variable.as_deref(), body_px);
         }
     }
 }
@@ -179,27 +200,26 @@ fn draw_colorbar(
     vmin: f64,
     vmax: f64,
     variable: Option<&str>,
+    label_px: f32,
 ) {
-    let bar_w = (img.width / 28).clamp(12, 28) as i32;
-    let margin = 10i32;
+    let bar_w = (img.width / 28).clamp(14, 28) as i32;
+    let margin = 12i32;
     let top = (img.height as f64 * 0.12) as i32;
     let bot = (img.height as f64 * 0.88) as i32;
-    let x0 = img.width as i32 - margin - bar_w;
+    let x0 = img.width as i32 - margin - bar_w - 48;
     if x0 < 40 || bot - top < 40 {
         return;
     }
-    // Soft backdrop so turbo/dark fields stay readable.
     fill_rect(
         img,
-        x0 - 4,
-        top - 18,
-        bar_w + 8 + 56,
-        bot - top + 36,
+        x0 - 6,
+        top - 22,
+        bar_w + 60,
+        bot - top + 44,
         PANEL,
     );
     if let Some(v) = variable {
-        let scale = if img.width >= 700 { 2 } else { 1 };
-        draw_text(img, x0 - 2, top - 14, v, FG, scale);
+        draw_text_aa(img, x0 as f32, (top - 18) as f32, v, label_px, FG);
     }
     for y in top..=bot {
         let t = 1.0 - (y - top) as f64 / (bot - top).max(1) as f64;
@@ -208,26 +228,19 @@ fn draw_colorbar(
             put_pixel(img, x, y, [r, g, b, 255]);
         }
     }
-    // Frame
     draw_line(img, x0, top, x0 + bar_w, top, BAR_FRAME);
     draw_line(img, x0, bot, x0 + bar_w, bot, BAR_FRAME);
     draw_line(img, x0, top, x0, bot, BAR_FRAME);
     draw_line(img, x0 + bar_w, top, x0 + bar_w, bot, BAR_FRAME);
 
-    let scale = 1i32;
+    let tick_px = (label_px - 1.0).max(9.0);
     let hi = format_tick(vmax);
     let lo = format_tick(vmin);
     let mid = format_tick(0.5 * (vmin + vmax));
-    draw_text(img, x0 + bar_w + 4, top - 2, &hi, FG, scale);
-    draw_text(
-        img,
-        x0 + bar_w + 4,
-        (top + bot) / 2 - 3,
-        &mid,
-        FG_SOFT,
-        scale,
-    );
-    draw_text(img, x0 + bar_w + 4, bot - 6, &lo, FG, scale);
+    let tx = (x0 + bar_w + 6) as f32;
+    draw_text_aa(img, tx, top as f32, &hi, tick_px, FG);
+    draw_text_aa(img, tx, ((top + bot) / 2) as f32, &mid, tick_px, FG_SOFT);
+    draw_text_aa(img, tx, (bot - 12) as f32, &lo, tick_px, FG);
 }
 
 fn format_tick(v: f64) -> String {
@@ -245,7 +258,6 @@ fn format_tick(v: f64) -> String {
 fn fill_rect(img: &mut ContourImage, x: i32, y: i32, w: i32, h: i32, rgba: [u8; 4]) {
     for yy in y..y + h {
         for xx in x..x + w {
-            // Alpha blend over existing pixel when a < 255.
             if rgba[3] >= 250 {
                 put_pixel(img, xx, yy, rgba);
             } else {
@@ -269,46 +281,44 @@ fn blend_pixel(img: &mut ContourImage, x: i32, y: i32, rgba: [u8; 4]) {
     img.rgba[i + 3] = 255;
 }
 
-fn text_width(s: &str, scale: i32) -> i32 {
-    (s.chars().count() as i32) * (6 * scale)
+fn measure_text(text: &str, px: f32) -> (i32, i32) {
+    let font = annotation_font();
+    let mut w = 0.0f32;
+    let mut h = px.ceil() as i32;
+    for ch in text.chars() {
+        let (metrics, _) = font.rasterize(ch, px);
+        w += metrics.advance_width;
+        h = h.max(metrics.height as i32 + metrics.ymin.abs());
+    }
+    ((w.ceil() as i32).max(1), h.max(1) + 2)
 }
 
-/// 5×7 monospace glyphs for printable ASCII (space–~).
-fn draw_text(img: &mut ContourImage, x: i32, y: i32, text: &str, rgba: [u8; 4], scale: i32) {
-    let scale = scale.max(1);
-    let mut cx = x;
+/// Anti-aliased TrueType text (VisIt-quality).
+fn draw_text_aa(img: &mut ContourImage, x: f32, y: f32, text: &str, px: f32, rgba: [u8; 4]) {
+    let font = annotation_font();
+    let mut pen_x = x;
+    // `y` is the top of the line box; baseline sits ~80% down (VisIt-like HUD).
+    let baseline = y + px * 0.80;
     for ch in text.chars() {
-        if let Some(glyph) = glyph(ch) {
-            for row in 0..7i32 {
-                let bits = glyph[row as usize];
-                for col in 0..5i32 {
-                    if bits & (1 << (4 - col)) != 0 {
-                        for dy in 0..scale {
-                            for dx in 0..scale {
-                                put_pixel(
-                                    img,
-                                    cx + col * scale + dx,
-                                    y + row * scale + dy,
-                                    rgba,
-                                );
-                            }
-                        }
-                    }
+        let (metrics, bitmap) = font.rasterize(ch, px);
+        let glyph_x = (pen_x + metrics.xmin as f32).round() as i32;
+        let glyph_y = (baseline + metrics.ymin as f32).round() as i32;
+        for row in 0..metrics.height {
+            for col in 0..metrics.width {
+                let cover = bitmap[row * metrics.width + col];
+                if cover == 0 {
+                    continue;
                 }
+                let a = ((cover as u16 * rgba[3] as u16) / 255) as u8;
+                blend_pixel(
+                    img,
+                    glyph_x + col as i32,
+                    glyph_y + row as i32,
+                    [rgba[0], rgba[1], rgba[2], a],
+                );
             }
         }
-        cx += 6 * scale;
-    }
-}
-
-fn glyph(ch: char) -> Option<[u8; 7]> {
-    // Compact 5-bit rows; bit4 = leftmost. Table covers ASCII 32..=126.
-    const G: [[u8; 7]; 95] = include!("glyph5x7.in");
-    let idx = ch as usize;
-    if (32..=126).contains(&idx) {
-        Some(G[idx - 32])
-    } else {
-        Some(G[(b'?' as usize) - 32])
+        pen_x += metrics.advance_width;
     }
 }
 
@@ -334,7 +344,7 @@ mod tests {
                 values: vec![0.0, 0.5, 0.5, 1.0],
             },
         };
-        let mut ds = Dataset {
+        let ds = Dataset {
             title: Some("demo".into()),
             variables: vec!["P".into()],
             zones: vec![Zone {
@@ -352,14 +362,19 @@ mod tests {
                 aux: vec![("CYCLE".into(), "42".into())],
             }],
         };
-        let _ = &mut ds;
         let mut info = AnnotationInfo::from_dataset(&ds, 0, Some("P"), Some("/tmp/run.plt"));
         info.colorbar = true;
         info.vmin = Some(0.0);
         info.vmax = Some(1.0);
         info.style = PlotStyle::Default;
         draw_annotations(&mut img, &info);
-        // Top-left panel should have been painted (not all 200).
         assert!(img.rgba.iter().step_by(4).any(|&r| r > 240));
+    }
+
+    #[test]
+    fn font_loads_bundled_dejavu() {
+        let f = annotation_font();
+        let (m, bmp) = f.rasterize('A', 16.0);
+        assert!(m.width > 0 && !bmp.is_empty());
     }
 }
