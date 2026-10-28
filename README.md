@@ -40,27 +40,37 @@ Menus: File, Plot, Style, Agents, Help. Tool strip: Load, Contour, Nondim, Pathl
 ## CLI
 
 ```bash
-# Summary + name-based nondim suggestions
-flowplot <path>
-flowplot info <path>
+# Summary + name-based nondim suggestions (agent entry: load --json)
+flowplot load <path> [--json]
+flowplot <path> [--json]          # same as load
+flowplot info <path> [--json]
 
 # Contour any scalar to PNG
 flowplot contour <path> --var P -o out.png [--plane k=0] [--vmin 0] [--vmax 1] \
   [--width 512] [--height 512] [--zone 0] [--style default|jfm] \
   [--u-ref U] [--lx Lx] [--ly Ly] [--lz Lz] [--t-ref T] \
-  [--pathlines] [--pathlines-out lines.png] [--seed x,y] [--u-var U] [--v-var V] [--dt 0.02]
+  [--pathlines] [--pathlines-out lines.png] [--seed x,y] [--u-var U] [--v-var V] [--dt 0.02] \
+  [--json]
 
 # Nondim suggestions / apply scales (no invented physics)
 flowplot nondim <path> [--u-ref U] [--lx Lx] [--ly Ly] [--lz Lz] [--t-ref T] \
-  [--x-var X] [--y-var Y] [--z-var Z]
+  [--x-var X] [--y-var Y] [--z-var Z] [--json]
 
 # Pathlines (particle traces / streamlines)
 flowplot pathlines <path> -o lines.png [--var P] [--seed x,y] [--u-var U] [--v-var V] \
-  [--style default|jfm]
+  [--style default|jfm] [--json]
+
+# CFD post-processing menu (lehar agents ↔ Flowplot)
+flowplot menu
+flowplot menu show contour
+flowplot menu run load -- tests/fixtures/simple.dat --json
+flowplot menu run bow-shock-field   # stub: requires agent + planned flags
 ```
 
 `--pathlines` overlays traces on the contour PNG; `--pathlines-out` writes a second PNG.
 `--style jfm` uses a restrained coolwarm map, white exterior, black frame, and (if size left at 512×512) a single-column 700×525 raster.
+
+Agents (lehar-agent / MCP): prefer `--json` or `FLOWPLOT_BIN=… python3 agents/flowplot_mcp.py` — see [`docs/agent-bridge.md`](docs/agent-bridge.md) and [`docs/postprocess-menu.md`](docs/postprocess-menu.md).
 
 ## Format support
 
@@ -82,8 +92,14 @@ flowplot pathlines <path> -o lines.png [--var P] [--seed x,y] [--u-var U] [--v-v
 - `src/nondim.rs` — reference scales + name suggestions
 - `src/pathlines.rs` — velocity-field particle traces
 - `src/field.rs` — ordered-plane extract + bilinear sample
-- `src/bin/flowplot.rs` — CLI
+- `src/bin/flowplot.rs` — CLI (`load` / `contour` / `nondim` / `pathlines` / `menu`, `--json`, `--style`)
+- `src/menu.rs` — postprocess menu loader (embedded YAML)
+- `agents/postprocess-menu.yaml` — machine-readable CFD postprocess menu
+- `agents/flowplot_mcp.py` — stdio MCP wrapper for lehar agents
+- `docs/agent-bridge.md` — lehar ↔ Flowplot contract
+- `docs/postprocess-menu.md` — human-facing menu (groups ↔ lehar ↔ CLI/MCP)
 - `gui/` — first tkinter layout shell + SVG wordmark
+- `packaging/windows/` — MSI packaging (MinGW + wixl)
 - `tests/fixtures/` — synthetic Tecplot / VTK ASCII (incl. `flow.dat` for contour/pathlines)
 
 ## License

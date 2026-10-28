@@ -1,4 +1,5 @@
-//! CLI: load CFD files; summarize; contour PNG; nondim scales; pathlines.
+//! CLI: load CFD files; summarize; contour PNG; nondim scales; pathlines; postprocess menu.
+//! Agent contract: every subcommand accepts `--json` and emits a stable JSON object.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -7,8 +8,11 @@ use clap::{Parser, Subcommand};
 
 use flowplot::contour::{render_contour, write_png, ContourOptions, PlotStyle};
 use flowplot::field::{extract_scalar_grid, find_var, PlaneSpec};
+use flowplot::menu::{
+    format_item_text, format_menu_text, format_stub_run, MenuItem, PostprocessMenu,
+};
 use flowplot::nondim::{
-    apply_nondim, format_suggestions, suggest_scales, NondimScales,
+    apply_nondim, format_suggestions, suggest_scales, NondimScales, NondimSuggestion,
 };
 use flowplot::pathlines::{
     default_seeds, guess_velocity_vars, overlay_pathlines_styled, render_pathlines_png_styled,
@@ -19,21 +23,29 @@ use flowplot::{load_path, Dataset};
 #[derive(Parser, Debug)]
 #[command(
     name = "flowplot",
-    about = "CFD post-processor: load Tecplot/VTK ASCII, contour, nondim, pathlines",
+    about = "CFD post-processor: load Tecplot/VTK ASCII, contour, nondim, pathlines, menu",
     arg_required_else_help = true
 )]
 struct Cli {
+    /// Emit a machine-readable JSON object (for lehar / MCP agents).
+    #[arg(long, global = true)]
+    json: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Path to a CFD file (summary mode when no subcommand).
+    /// Path to a CFD file (summary / load mode when no subcommand).
     path: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Print zone / variable / size summary (same as bare `flowplot <path>`).
+    /// Print zone / variable / size summary (alias of `load`).
     Info {
+        path: PathBuf,
+    },
+    /// Load a CFD file and summarize zones / variables (preferred agent entry).
+    Load {
         path: PathBuf,
     },
     /// Contour (pseudocolor) any scalar variable to PNG.
@@ -112,6 +124,35 @@ enum Commands {
         #[arg(long)]
         vmax: Option<f64>,
     },
+    /// List / show / run CFD post-processing menu items (lehar ↔ Flowplot).
+    Menu {
+        /// Override path to `agents/postprocess-menu.yaml`.
+        #[arg(long = "menu-file")]
+        menu_file: Option<PathBuf>,
+        #[command(subcommand)]
+        action: Option<MenuAction>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum MenuAction {
+    /// Print menu groups and items (default for bare `flowplot menu`).
+    List {
+        /// Only show one group id (e.g. `shocks`).
+        #[arg(long)]
+        group: Option<String>,
+    },
+    /// Show one menu item (lehar agent, template, flags).
+    Show {
+        id: String,
+    },
+    /// Dispatch a ready item, or document a stub.
+    Run {
+        id: String,
+        /// Arguments forwarded to the underlying `flowplot <command> …`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
@@ -174,15 +215,40 @@ struct PathlineArgs {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let result = match cli.command {
-        None => {
-            let Some(path) = cli.path else {
-                eprintln!("usage: flowplot <path> | flowplot <info|contour|nondim|pathlines> ...");
-                return ExitCode::from(2);
-            };
-            run_info(&path)
+    let json = cli.json;
+    let result = dispatch(cli.command, cli.path, json);
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            if json {
+                println!(
+                    "{{\"status\":\"error\",\"error\":{}}}",
+                    json_string(&e.to_string())
+                );
+            } else {
+                eprintln!("error: {e}");
+            }
+            ExitCode::FAILURE
         }
-        Some(Commands::Info { path }) => run_info(&path),
+    }
+}
+
+fn dispatch(
+    command: Option<Commands>,
+    bare_path: Option<PathBuf>,
+    json: bool,
+) -> flowplot::Result<()> {
+    match command {
+        None => {
+            let Some(path) = bare_path else {
+                return Err(flowplot::Error::plot(
+                    "usage: flowplot [--json] <path> | flowplot [--json] <load|info|contour|nondim|pathlines|menu> ...",
+                ));
+            };
+            run_info(&path, json)
+        }
+        Some(Commands::Info { path }) | Some(Commands::Load { path }) => run_info(&path, json),
         Some(Commands::Contour {
             path,
             variable,
@@ -213,12 +279,13 @@ fn main() -> ExitCode {
             pathlines,
             pathlines_out.as_ref(),
             &pl_args,
+            json,
         ),
         Some(Commands::Nondim {
             path,
             nondim,
             summary,
-        }) => run_nondim(&path, &nondim, summary),
+        }) => run_nondim(&path, &nondim, summary, json),
         Some(Commands::Pathlines {
             path,
             out,
@@ -245,22 +312,238 @@ fn main() -> ExitCode {
             contour_var.as_deref(),
             vmin,
             vmax,
+            json,
         ),
-    };
-
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
-        }
+        Some(Commands::Menu { menu_file, action }) => run_menu(menu_file.as_ref(), action, json),
     }
 }
 
-fn run_info(path: &PathBuf) -> flowplot::Result<()> {
+fn load_menu(menu_file: Option<&PathBuf>) -> flowplot::Result<PostprocessMenu> {
+    match menu_file {
+        Some(path) => PostprocessMenu::load_path(path),
+        None => PostprocessMenu::load_default(),
+    }
+}
+
+fn run_menu(
+    menu_file: Option<&PathBuf>,
+    action: Option<MenuAction>,
+    json: bool,
+) -> flowplot::Result<()> {
+    let menu = load_menu(menu_file)?;
+    match action {
+        None | Some(MenuAction::List { group: None }) => print_menu_list(&menu, None, json),
+        Some(MenuAction::List { group: Some(gid) }) => {
+            if menu.filter_group(Some(&gid)).is_empty() {
+                return Err(flowplot::Error::plot(format!(
+                    "unknown menu group '{gid}' (see `flowplot menu`)"
+                )));
+            }
+            print_menu_list(&menu, Some(&gid), json)
+        }
+        Some(MenuAction::Show { id }) => {
+            let Some((group, item)) = menu.find_item(&id) else {
+                return Err(flowplot::Error::plot(format!(
+                    "unknown menu item '{id}' (see `flowplot menu`)"
+                )));
+            };
+            if json {
+                println!(
+                    "{{\"status\":\"ok\",\"command\":\"menu\",\"action\":\"show\",\"item\":{}}}",
+                    serde_json::to_string(item).unwrap_or_else(|_| "null".into())
+                );
+            } else {
+                print!("{}", format_item_text(group, item));
+            }
+            Ok(())
+        }
+        Some(MenuAction::Run { id, args }) => run_menu_item(&menu, &id, args, json),
+    }
+}
+
+fn print_menu_list(
+    menu: &PostprocessMenu,
+    group: Option<&str>,
+    json: bool,
+) -> flowplot::Result<()> {
+    if json {
+        let groups: Vec<_> = menu
+            .filter_group(group)
+            .into_iter()
+            .cloned()
+            .collect();
+        let payload = serde_json::json!({
+            "status": "ok",
+            "command": "menu",
+            "action": "list",
+            "title": menu.title,
+            "version": menu.version,
+            "groups": groups,
+        });
+        println!("{payload}");
+    } else {
+        print!("{}", format_menu_text(menu, group));
+    }
+    Ok(())
+}
+
+fn run_menu_item(
+    menu: &PostprocessMenu,
+    id: &str,
+    args: Vec<String>,
+    json: bool,
+) -> flowplot::Result<()> {
+    let Some((_group, item)) = menu.find_item(id) else {
+        return Err(flowplot::Error::plot(format!(
+            "unknown menu item '{id}' (see `flowplot menu`)"
+        )));
+    };
+    if item.status != "ready" {
+        return emit_stub(item, json);
+    }
+    dispatch_ready_item(item, args, json)
+}
+
+fn emit_stub(item: &MenuItem, json: bool) -> flowplot::Result<()> {
+    if json {
+        let payload = serde_json::json!({
+            "status": "stub",
+            "command": "menu",
+            "action": "run",
+            "id": item.id,
+            "title": item.title,
+            "requires_agent": item.lehar.agent,
+            "lehar_surface": item.lehar.surface,
+            "flowplot_template": item.flowplot.template,
+            "planned_flags": item.flowplot.planned_flags,
+            "notes": item.flowplot.notes,
+            "mcp": item.mcp,
+        });
+        println!("{payload}");
+    } else {
+        print!("{}", format_stub_run(item));
+    }
+    Ok(())
+}
+
+fn dispatch_ready_item(item: &MenuItem, args: Vec<String>, json: bool) -> flowplot::Result<()> {
+    let mut forwarded = args;
+    // Allow `menu run <id> -- <args>`; clap may leave a literal "--".
+    if forwarded.first().map(String::as_str) == Some("--") {
+        forwarded.remove(0);
+    }
+    // contour-pathlines always overlays traces.
+    if item.id == "contour-pathlines"
+        && !forwarded.iter().any(|a| a == "--pathlines" || a == "--pathlines-out")
+    {
+        forwarded.push("--pathlines".into());
+    }
+    if json && !forwarded.iter().any(|a| a == "--json") {
+        forwarded.push("--json".into());
+    }
+
+    let mut argv = vec![
+        "flowplot".to_string(),
+        item.flowplot.command.clone(),
+    ];
+    argv.extend(forwarded);
+
+    let cli = Cli::try_parse_from(&argv).map_err(|e| {
+        flowplot::Error::plot(format!(
+            "menu run {} — invalid args for `flowplot {}`: {e}\ntemplate: {}",
+            item.id, item.flowplot.command, item.flowplot.template
+        ))
+    })?;
+    // Avoid re-entering menu; only dispatch leaf commands.
+    match &cli.command {
+        Some(Commands::Menu { .. }) => Err(flowplot::Error::plot(
+            "menu run cannot dispatch another menu action",
+        )),
+        _ => dispatch(cli.command, cli.path, cli.json || json),
+    }
+}
+
+fn json_string(s: &str) -> String {
+    let mut out = String::from('"');
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn json_string_list(items: &[String]) -> String {
+    let parts: Vec<_> = items.iter().map(|s| json_string(s)).collect();
+    format!("[{}]", parts.join(","))
+}
+
+fn json_f64(v: f64) -> String {
+    if v.is_finite() {
+        // Keep a compact but parseable representation.
+        format!("{v}")
+    } else if v.is_nan() {
+        "null".into()
+    } else if v.is_sign_positive() {
+        "null".into()
+    } else {
+        "null".into()
+    }
+}
+
+fn suggestions_json(suggestions: &[NondimSuggestion]) -> String {
+    let parts: Vec<_> = suggestions
+        .iter()
+        .map(|s| {
+            format!(
+                "{{\"variable\":{},\"kind\":{},\"message\":{}}}",
+                json_string(&s.variable),
+                json_string(&format!("{:?}", s.kind)),
+                json_string(&s.message)
+            )
+        })
+        .collect();
+    format!("[{}]", parts.join(","))
+}
+
+fn dataset_load_json(path: &PathBuf, ds: &Dataset, suggestions: &[NondimSuggestion]) -> String {
+    let mut zones = Vec::new();
+    for (i, zone) in ds.zones.iter().enumerate() {
+        zones.push(format!(
+            "{{\"index\":{i},\"name\":{},\"nodes\":{},\"cells\":{}}}",
+            json_string(&zone.name),
+            zone.node_count(),
+            zone.cell_count()
+        ));
+    }
+    format!(
+        "{{\"status\":\"ok\",\"command\":\"load\",\"path\":{},\"title\":{},\"variables\":{},\"zones\":[{}],\"nondim_suggestions\":{}}}",
+        json_string(&path.display().to_string()),
+        ds.title
+            .as_ref()
+            .map(|t| json_string(t))
+            .unwrap_or_else(|| "null".into()),
+        json_string_list(&ds.variables),
+        zones.join(","),
+        suggestions_json(suggestions)
+    )
+}
+
+fn run_info(path: &PathBuf, json: bool) -> flowplot::Result<()> {
     let ds = load_path(path)?;
-    print_summary(path, &ds);
     let suggestions = suggest_scales(&ds.variables);
+    if json {
+        println!("{}", dataset_load_json(path, &ds, &suggestions));
+        return Ok(());
+    }
+    print_summary(path, &ds);
     if !suggestions.is_empty() {
         println!("{}", format_suggestions(&suggestions));
     }
@@ -404,8 +687,14 @@ fn run_contour(
     do_pathlines: bool,
     pathlines_out: Option<&PathBuf>,
     pl_args: &PathlineArgs,
+    json: bool,
 ) -> flowplot::Result<()> {
-    let ds = maybe_nondim(load_path(path)?, nondim, nondim.suggest)?;
+    // Avoid human-only suggestion prints when agents request JSON.
+    let mut nondim_args = nondim.clone();
+    if json {
+        nondim_args.suggest = false;
+    }
+    let ds = maybe_nondim(load_path(path)?, &nondim_args, nondim_args.suggest)?;
     let plane = parse_plane(plane)?;
     let (width, height) = resolve_raster_size(style, width, height);
     let mut img = render_contour(
@@ -422,36 +711,64 @@ fn run_contour(
         },
     )?;
 
+    let mut n_traces = 0usize;
+    let mut pathlines_out_written: Option<String> = None;
     if do_pathlines || pathlines_out.is_some() {
         let pl_opts = build_pathline_opts(&ds, zone, plane, pl_args)?;
         let lines = trace_pathlines(&ds, &pl_opts)?;
-        println!("pathlines: {} traces", lines.len());
+        n_traces = lines.len();
+        if !json {
+            println!("pathlines: {} traces", lines.len());
+        }
         if do_pathlines {
             overlay_pathlines_styled(&mut img, &lines, style);
         }
         if let Some(pout) = pathlines_out {
             let separate = render_pathlines_png_styled(&ds, &pl_opts, width, height, style)?;
             write_png(pout, &separate)?;
-            println!("wrote pathlines {}", pout.display());
+            pathlines_out_written = Some(pout.display().to_string());
+            if !json {
+                println!("wrote pathlines {}", pout.display());
+            }
         }
     }
 
     write_png(out, &img)?;
-    println!(
-        "wrote contour {} (var={}, style={:?}, range=[{}, {}])",
-        out.display(),
-        variable,
-        style,
-        img.vmin,
-        img.vmax
-    );
+    if json {
+        println!(
+            "{{\"status\":\"ok\",\"command\":\"contour\",\"path\":{},\"var\":{},\"zone\":{},\"out\":{},\"vmin\":{},\"vmax\":{},\"pathline_traces\":{},\"pathlines_out\":{}}}",
+            json_string(&path.display().to_string()),
+            json_string(variable),
+            zone,
+            json_string(&out.display().to_string()),
+            json_f64(img.vmin),
+            json_f64(img.vmax),
+            n_traces,
+            pathlines_out_written
+                .as_ref()
+                .map(|p| json_string(p))
+                .unwrap_or_else(|| "null".into())
+        );
+    } else {
+        println!(
+            "wrote contour {} (var={}, style={:?}, range=[{}, {}])",
+            out.display(),
+            variable,
+            style,
+            img.vmin,
+            img.vmax
+        );
+    }
     Ok(())
 }
 
-fn run_nondim(path: &PathBuf, nondim: &NondimArgs, summary: bool) -> flowplot::Result<()> {
+fn run_nondim(path: &PathBuf, nondim: &NondimArgs, summary: bool, json: bool) -> flowplot::Result<()> {
     let ds = load_path(path)?;
-    print_summary(path, &ds);
-    println!("{}", format_suggestions(&suggest_scales(&ds.variables)));
+    let suggestions = suggest_scales(&ds.variables);
+    if !json {
+        print_summary(path, &ds);
+        println!("{}", format_suggestions(&suggestions));
+    }
     let scales = scales_from_args(nondim);
     if scales.u_ref.is_none()
         && scales.lx.is_none()
@@ -459,12 +776,24 @@ fn run_nondim(path: &PathBuf, nondim: &NondimArgs, summary: bool) -> flowplot::R
         && scales.lz.is_none()
         && scales.t_ref.is_none()
     {
-        println!("no scales passed; suggestions only (never invent physics)");
+        if json {
+            println!(
+                "{{\"status\":\"ok\",\"command\":\"nondim\",\"path\":{},\"applied\":false,\"message\":{},\"nondim_suggestions\":{}}}",
+                json_string(&path.display().to_string()),
+                json_string("no scales passed; suggestions only (never invent physics)"),
+                suggestions_json(&suggestions)
+            );
+        } else {
+            println!("no scales passed; suggestions only (never invent physics)");
+        }
         return Ok(());
     }
     let out = apply_nondim(&ds, &scales)?;
+    let mut field_summaries = Vec::new();
     if summary {
-        println!("after nondim:");
+        if !json {
+            println!("after nondim:");
+        }
         for (i, name) in out.variables.iter().enumerate() {
             let mut vmin = f64::INFINITY;
             let mut vmax = f64::NEG_INFINITY;
@@ -479,9 +808,26 @@ fn run_nondim(path: &PathBuf, nondim: &NondimArgs, summary: bool) -> flowplot::R
                 }
             }
             if vmin.is_finite() {
-                println!("  {name}: min={vmin} max={vmax}");
+                if json {
+                    field_summaries.push(format!(
+                        "{{\"variable\":{},\"min\":{},\"max\":{}}}",
+                        json_string(name),
+                        json_f64(vmin),
+                        json_f64(vmax)
+                    ));
+                } else {
+                    println!("  {name}: min={vmin} max={vmax}");
+                }
             }
         }
+    }
+    if json {
+        println!(
+            "{{\"status\":\"ok\",\"command\":\"nondim\",\"path\":{},\"applied\":true,\"nondim_suggestions\":{},\"fields\":[{}]}}",
+            json_string(&path.display().to_string()),
+            suggestions_json(&suggestions),
+            field_summaries.join(",")
+        );
     }
     Ok(())
 }
@@ -499,13 +845,20 @@ fn run_pathlines_cmd(
     contour_var: Option<&str>,
     vmin: Option<f64>,
     vmax: Option<f64>,
+    json: bool,
 ) -> flowplot::Result<()> {
-    let ds = maybe_nondim(load_path(path)?, nondim, nondim.suggest)?;
+    let mut nondim_args = nondim.clone();
+    if json {
+        nondim_args.suggest = false;
+    }
+    let ds = maybe_nondim(load_path(path)?, &nondim_args, nondim_args.suggest)?;
     let plane = parse_plane(plane)?;
     let (width, height) = resolve_raster_size(style, width, height);
     let pl_opts = build_pathline_opts(&ds, zone, plane, pl_args)?;
     let lines = trace_pathlines(&ds, &pl_opts)?;
-    println!("pathlines: {} traces", lines.len());
+    if !json {
+        println!("pathlines: {} traces", lines.len());
+    }
 
     let img = if let Some(var) = contour_var {
         let mut img = render_contour(
@@ -526,7 +879,23 @@ fn run_pathlines_cmd(
     } else {
         render_pathlines_png_styled(&ds, &pl_opts, width, height, style)?
     };
+    let _ = &mut img;
     write_png(out, &img)?;
-    println!("wrote pathlines {} (style={:?})", out.display(), style);
+    if json {
+        println!(
+            "{{\"status\":\"ok\",\"command\":\"pathlines\",\"path\":{},\"out\":{},\"zone\":{},\"traces\":{},\"u_var\":{},\"v_var\":{},\"contour_var\":{}}}",
+            json_string(&path.display().to_string()),
+            json_string(&out.display().to_string()),
+            zone,
+            lines.len(),
+            json_string(&pl_opts.u_var),
+            json_string(&pl_opts.v_var),
+            contour_var
+                .map(json_string)
+                .unwrap_or_else(|| "null".into())
+        );
+    } else {
+        println!("wrote pathlines {} (style={:?})", out.display(), style);
+    }
     Ok(())
 }

@@ -28,6 +28,7 @@ pub mod contour;
 pub mod dataset;
 pub mod error;
 pub mod field;
+pub mod menu;
 pub mod nondim;
 pub mod pathlines;
 pub mod readers;
@@ -38,6 +39,7 @@ pub use dataset::{
 };
 pub use error::{Error, Result};
 pub use field::PlaneSpec;
+pub use menu::{format_item_text, format_menu_text, format_stub_run, PostprocessMenu};
 pub use nondim::{
     apply_nondim, format_suggestions, suggest_scales, NondimScales, NondimSuggestion, ScaleKind,
 };
