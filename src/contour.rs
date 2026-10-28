@@ -5,7 +5,8 @@ use std::str::FromStr;
 
 use crate::dataset::Dataset;
 use crate::error::{Error, Result};
-use crate::field::{extract_scalar_grid, find_var, Grid2D, PlaneSpec};
+use crate::field::{extract_scalar_grid_view, find_var, Grid2D, PlaneSpec};
+use crate::view::ViewSpec;
 
 /// Publication / screen look for contour and pathline PNGs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -110,6 +111,7 @@ pub struct ContourOptions {
     pub variable: String,
     pub zone: usize,
     pub plane: PlaneSpec,
+    pub view: ViewSpec,
     pub vmin: Option<f64>,
     pub vmax: Option<f64>,
     pub width: u32,
@@ -123,6 +125,7 @@ impl Default for ContourOptions {
             variable: String::new(),
             zone: 0,
             plane: PlaneSpec::Auto,
+            view: ViewSpec::Auto,
             vmin: None,
             vmax: None,
             width: 512,
@@ -153,7 +156,7 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
         return Err(Error::plot("contour width/height must be > 0"));
     }
     let var_idx = find_var(ds, &opts.variable)?;
-    let grid = extract_scalar_grid(ds, opts.zone, var_idx, opts.plane)?;
+    let grid = extract_scalar_grid_view(ds, opts.zone, var_idx, opts.plane, opts.view)?;
     let (mut vmin, mut vmax) = data_range(&grid.values);
     if let Some(v) = opts.vmin {
         vmin = v;

@@ -8,13 +8,17 @@ use crate::contour::{
 };
 use crate::dataset::Dataset;
 use crate::error::{Error, Result};
-use crate::field::{extract_scalar_grid, find_var, guess_coord_vars, Grid2D, PlaneSpec};
+use crate::field::{
+    extract_scalar_grid_view, find_var, guess_coord_vars, Grid2D, PlaneSpec,
+};
+use crate::view::ViewSpec;
 
 /// Options for a mesh (wireframe) PNG.
 #[derive(Debug, Clone)]
 pub struct MeshOptions {
     pub zone: usize,
     pub plane: PlaneSpec,
+    pub view: ViewSpec,
     pub width: u32,
     pub height: u32,
     pub style: PlotStyle,
@@ -34,6 +38,7 @@ impl Default for MeshOptions {
         Self {
             zone: 0,
             plane: PlaneSpec::Auto,
+            view: ViewSpec::Auto,
             width: 800,
             height: 600,
             style: PlotStyle::Default,
@@ -148,6 +153,16 @@ impl AspectMap {
 
 /// Extract coordinate grid for mesh drawing (values unused; prefer X if present).
 pub fn extract_mesh_grid(ds: &Dataset, zone: usize, plane: PlaneSpec) -> Result<Grid2D> {
+    extract_mesh_grid_view(ds, zone, plane, ViewSpec::Auto)
+}
+
+/// Extract coordinate grid and project with `view`.
+pub fn extract_mesh_grid_view(
+    ds: &Dataset,
+    zone: usize,
+    plane: PlaneSpec,
+    view: ViewSpec,
+) -> Result<Grid2D> {
     let (x_i, _y_i, _) = guess_coord_vars(ds);
     let var_idx = x_i.unwrap_or(0);
     if ds.variables.is_empty() {
@@ -160,7 +175,7 @@ pub fn extract_mesh_grid(ds: &Dataset, zone: usize, plane: PlaneSpec) -> Result<
         0
     };
     let _ = find_var(ds, &ds.variables[idx])?;
-    extract_scalar_grid(ds, zone, idx, plane)
+    extract_scalar_grid_view(ds, zone, idx, plane, view)
 }
 
 /// Render a wireframe mesh PNG with undistorted (equal) aspect.
@@ -168,7 +183,7 @@ pub fn render_mesh(ds: &Dataset, opts: &MeshOptions) -> Result<ContourImage> {
     if opts.width == 0 || opts.height == 0 {
         return Err(Error::plot("mesh width/height must be > 0"));
     }
-    let grid = extract_mesh_grid(ds, opts.zone, opts.plane)?;
+    let grid = extract_mesh_grid_view(ds, opts.zone, opts.plane, opts.view)?;
     if grid.ni < 1 || grid.nj < 1 {
         return Err(Error::plot("mesh grid is empty"));
     }
