@@ -1,0 +1,21 @@
+Flowplot Windows dependencies
+=============================
+
+CLI (flowplot.exe)
+------------------
+  Self-contained x86_64 Windows binary (MinGW, statically linked CRT).
+  Needs only normal Windows system DLLs (kernel32, msvcrt, …).
+  No Visual C++ redistributable and no MinGW DLLs required.
+
+GUI (gui/flowplot_gui.py)
+-------------------------
+  Optional. Requires:
+    - Python 3.9+ on PATH (python or py launcher)
+    - tkinter (included with python.org Windows installs; enable Tcl/Tk)
+  The GUI shells out to flowplot.exe for load / contour / nondim / pathlines.
+
+Suggested layout next to a CFD solver
+-------------------------------------
+  C:\Program Files\Flowplot\flowplot.exe
+  …your solver install…
+  Put both on PATH so scripts and the GUI can find flowplot.

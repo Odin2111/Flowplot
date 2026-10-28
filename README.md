@@ -17,6 +17,17 @@ cargo run --bin flowplot -- contour tests/fixtures/flow.dat --var P -o /tmp/p.pn
 
 Requires a recent stable Rust toolchain (`edition = "2021"`).
 
+## Windows installer
+
+Cross-build a 64-bit MSI (MinGW + [wixl](https://wiki.gnome.org/msitools)):
+
+```bash
+./packaging/windows/build-msi.sh
+# → packaging/windows/Flowplot-Setup.msi
+```
+
+Installs under `C:\Program Files\Flowplot\`, Start Menu shortcuts, optional PATH via `add-to-path.bat`. See `packaging/windows/README.txt`.
+
 ## GUI (layout shell)
 
 ```bash
