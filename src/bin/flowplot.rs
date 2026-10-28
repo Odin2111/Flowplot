@@ -6,8 +6,11 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use flowplot::annotate::{draw_annotations, AnnotationInfo};
-use flowplot::contour::{render_contour, write_png, ContourOptions, PlotStyle};
+use flowplot::annotate::{draw_annotations, draw_probe_label, AnnotationInfo};
+use flowplot::contour::{
+    pixel_to_world, render_contour, write_png, ColorMapName, ContourColoring, ContourOptions,
+    PlotStyle,
+};
 use flowplot::field::{extract_scalar_grid_view, find_var, PlaneSpec};
 use flowplot::menu::{
     format_item_text, format_menu_text, format_stub_run, MenuItem, PostprocessMenu,
@@ -80,6 +83,12 @@ enum Commands {
         /// Mesh line color as `R,G,B` or `#RRGGBB` (default green).
         #[arg(long)]
         mesh_color: Option<String>,
+        /// Stretch mesh to fill the raster (no letterbox). Default: equal aspect.
+        #[arg(long, default_value_t = false)]
+        fill: bool,
+        /// Pixel margin around the fitted domain.
+        #[arg(long, default_value_t = 8)]
+        margin: u32,
         #[command(flatten)]
         nondim: NondimArgs,
     },
@@ -130,6 +139,58 @@ enum Commands {
         pathlines_out: Option<PathBuf>,
         #[command(flatten)]
         pathline: PathlineArgs,
+        /// Contour coloring: `continuous` (flood) or `banded` (discrete levels).
+        #[arg(long, default_value = "continuous", value_parser = parse_coloring)]
+        coloring: ContourColoring,
+        /// Number of contour bands / levels (banded mode; toolbar ± adjusts this).
+        #[arg(long, default_value_t = 16)]
+        levels: u32,
+        /// Colormap: `default` (follow --style), `turbo`, `jfm`, `coolwarm`, `grayscale`.
+        #[arg(long, default_value = "default", value_parser = parse_colormap)]
+        colormap: ColorMapName,
+        /// Draw the colorbar legend (default on).
+        #[arg(long, default_value_t = true)]
+        legend: bool,
+        /// Suppress the colorbar legend.
+        #[arg(long, default_value_t = false)]
+        no_legend: bool,
+        /// Pixel margin around the filled plot area.
+        #[arg(long, default_value_t = 4)]
+        margin: u32,
+    },
+    /// Probe a scalar at world or pixel coordinates (Tecplot-like probe).
+    Probe {
+        path: PathBuf,
+        #[arg(long = "var", short = 'v')]
+        variable: String,
+        #[arg(long, default_value_t = 0)]
+        zone: usize,
+        #[arg(long)]
+        plane: Option<String>,
+        #[arg(long)]
+        view: Option<String>,
+        /// World X (mutually exclusive with --px).
+        #[arg(long)]
+        x: Option<f64>,
+        /// World Y.
+        #[arg(long)]
+        y: Option<f64>,
+        /// Pixel X in a W×H raster (with --py / --width / --height).
+        #[arg(long)]
+        px: Option<i32>,
+        #[arg(long)]
+        py: Option<i32>,
+        #[arg(long, default_value_t = 800)]
+        width: u32,
+        #[arg(long, default_value_t = 600)]
+        height: u32,
+        /// Optional PNG to stamp the probe label onto (writes --out).
+        #[arg(long, short = 'o')]
+        out: Option<PathBuf>,
+        #[arg(long, default_value = "default", value_parser = parse_plot_style)]
+        style: PlotStyle,
+        #[command(flatten)]
+        nondim: NondimArgs,
     },
     /// Print nondim suggestions and optionally apply scales (no PNG).
     Nondim {
@@ -336,6 +397,8 @@ fn dispatch(
             height,
             style,
             mesh_color,
+            fill,
+            margin,
             nondim,
         }) => run_mesh(
             &path,
@@ -347,6 +410,8 @@ fn dispatch(
             height,
             style,
             mesh_color.as_deref(),
+            fill,
+            margin,
             &nondim,
             json,
         ),
@@ -368,6 +433,12 @@ fn dispatch(
             pathlines,
             pathlines_out,
             pathline: pl_args,
+            coloring,
+            levels,
+            colormap,
+            legend,
+            no_legend,
+            margin,
         }) => run_contour(
             &path,
             &variable,
@@ -386,6 +457,43 @@ fn dispatch(
             pathlines,
             pathlines_out.as_ref(),
             &pl_args,
+            coloring,
+            levels,
+            colormap,
+            legend && !no_legend,
+            margin,
+            json,
+        ),
+        Some(Commands::Probe {
+            path,
+            variable,
+            zone,
+            plane,
+            view,
+            x,
+            y,
+            px,
+            py,
+            width,
+            height,
+            out,
+            style,
+            nondim,
+        }) => run_probe(
+            &path,
+            &variable,
+            zone,
+            plane.as_deref(),
+            view.as_deref(),
+            x,
+            y,
+            px,
+            py,
+            width,
+            height,
+            out.as_ref(),
+            style,
+            &nondim,
             json,
         ),
         Some(Commands::Nondim {
@@ -944,6 +1052,14 @@ fn parse_plot_style(s: &str) -> Result<PlotStyle, String> {
     s.parse()
 }
 
+fn parse_coloring(s: &str) -> Result<ContourColoring, String> {
+    s.parse()
+}
+
+fn parse_colormap(s: &str) -> Result<ColorMapName, String> {
+    s.parse()
+}
+
 /// When `--style jfm` is set and the user left the 512×512 CLI defaults, use
 /// the single-column JFM raster size.
 fn resolve_raster_size(style: PlotStyle, width: u32, height: u32) -> (u32, u32) {
@@ -1004,6 +1120,8 @@ fn run_mesh(
     height: u32,
     style: PlotStyle,
     mesh_color: Option<&str>,
+    fill: bool,
+    margin: u32,
     nondim: &NondimArgs,
     json: bool,
 ) -> flowplot::Result<()> {
@@ -1035,6 +1153,8 @@ fn run_mesh(
             height,
             style,
             line_rgba,
+            fill,
+            margin,
             path_hint: Some(path.display().to_string()),
             ..Default::default()
         },
@@ -1090,6 +1210,11 @@ fn run_contour(
     do_pathlines: bool,
     pathlines_out: Option<&PathBuf>,
     pl_args: &PathlineArgs,
+    coloring: ContourColoring,
+    levels: u32,
+    colormap: ColorMapName,
+    legend: bool,
+    margin: u32,
     json: bool,
 ) -> flowplot::Result<()> {
     // Avoid human-only suggestion prints when agents request JSON.
@@ -1116,6 +1241,11 @@ fn run_contour(
             // Annotate after mesh/pathline overlays so the legend stays on top.
             annotate: false,
             path_hint: Some(path.display().to_string()),
+            coloring,
+            nlevels: levels,
+            colormap,
+            legend,
+            margin,
         },
     )?;
 
@@ -1156,10 +1286,16 @@ fn run_contour(
             Some(variable),
             Some(&path.display().to_string()),
         );
-        info.colorbar = true;
+        info.colorbar = legend;
         info.vmin = Some(img.vmin);
         info.vmax = Some(img.vmax);
         info.style = style;
+        info.colormap = colormap;
+        info.nlevels = if coloring == ContourColoring::Banded {
+            Some(levels.max(2))
+        } else {
+            None
+        };
         info.view = Some(view.label());
         info.plane = Some(match plane {
             PlaneSpec::Auto => "auto".into(),
@@ -1171,7 +1307,7 @@ fn run_contour(
     write_png(out, &img)?;
     if json {
         println!(
-            "{{\"status\":\"ok\",\"command\":\"contour\",\"path\":{},\"var\":{},\"zone\":{},\"out\":{},\"vmin\":{},\"vmax\":{},\"mesh\":{},\"pathline_traces\":{},\"pathlines_out\":{}}}",
+            "{{\"status\":\"ok\",\"command\":\"contour\",\"path\":{},\"var\":{},\"zone\":{},\"out\":{},\"vmin\":{},\"vmax\":{},\"mesh\":{},\"coloring\":{},\"levels\":{},\"colormap\":{},\"legend\":{},\"pathline_traces\":{},\"pathlines_out\":{}}}",
             json_string(&path.display().to_string()),
             json_string(variable),
             zone,
@@ -1179,6 +1315,19 @@ fn run_contour(
             json_f64(img.vmin),
             json_f64(img.vmax),
             if do_mesh { "true" } else { "false" },
+            json_string(match coloring {
+                ContourColoring::Continuous => "continuous",
+                ContourColoring::Banded => "banded",
+            }),
+            levels,
+            json_string(match colormap {
+                ColorMapName::StyleDefault => "default",
+                ColorMapName::Turbo => "turbo",
+                ColorMapName::Jfm => "jfm",
+                ColorMapName::Coolwarm => "coolwarm",
+                ColorMapName::Grayscale => "grayscale",
+            }),
+            if legend { "true" } else { "false" },
             n_traces,
             pathlines_out_written
                 .as_ref()
@@ -1187,13 +1336,118 @@ fn run_contour(
         );
     } else {
         println!(
-            "wrote contour {} (var={}, style={:?}, mesh={}, range=[{}, {}])",
+            "wrote contour {} (var={}, style={:?}, coloring={:?}, levels={}, mesh={}, range=[{}, {}])",
             out.display(),
             variable,
             style,
+            coloring,
+            levels,
             do_mesh,
             img.vmin,
             img.vmax
+        );
+    }
+    Ok(())
+}
+
+fn run_probe(
+    path: &PathBuf,
+    variable: &str,
+    zone: usize,
+    plane: Option<&str>,
+    view: Option<&str>,
+    x: Option<f64>,
+    y: Option<f64>,
+    px: Option<i32>,
+    py: Option<i32>,
+    width: u32,
+    height: u32,
+    out: Option<&PathBuf>,
+    style: PlotStyle,
+    nondim: &NondimArgs,
+    json: bool,
+) -> flowplot::Result<()> {
+    let mut nondim_args = nondim.clone();
+    if json {
+        nondim_args.suggest = false;
+    }
+    let ds = maybe_nondim(load_path(path)?, &nondim_args, nondim_args.suggest)?;
+    let plane = parse_plane(plane)?;
+    let view = parse_view(view)?;
+    let var_idx = find_var(&ds, variable)?;
+    let grid = extract_scalar_grid_view(&ds, zone, var_idx, plane, view)?;
+    let legend_reserve = ((width as f64) * 0.14).round().clamp(56.0, 110.0) as u32;
+    let plot_w = width.saturating_sub(legend_reserve).max(32);
+    let margin = 4u32;
+    let (wx, wy, pix_x, pix_y) = if let (Some(px), Some(py)) = (px, py) {
+        // Build a throwaway ContourImage for pixel→world with the fill mapping.
+        let img = flowplot::ContourImage {
+            width,
+            height,
+            rgba: vec![0; (width as usize) * (height as usize) * 4],
+            vmin: 0.0,
+            vmax: 1.0,
+            grid: grid.clone(),
+        };
+        let (wx, wy) = pixel_to_world(&img, px, py, plot_w, margin);
+        (wx, wy, px, py)
+    } else if let (Some(wx), Some(wy)) = (x, y) {
+        let img = flowplot::ContourImage {
+            width,
+            height,
+            rgba: vec![0; (width as usize) * (height as usize) * 4],
+            vmin: 0.0,
+            vmax: 1.0,
+            grid: grid.clone(),
+        };
+        let (px, py) = flowplot::world_to_pixel_plot(&img, wx, wy, plot_w, margin);
+        (wx, wy, px, py)
+    } else {
+        return Err(flowplot::Error::plot(
+            "probe requires --x/--y or --px/--py",
+        ));
+    };
+    let value = grid.sample(wx, wy).ok_or_else(|| {
+        flowplot::Error::plot(format!(
+            "probe ({wx}, {wy}) is outside the active plane"
+        ))
+    })?;
+    let label = format!("{variable}={value:.6}");
+    if let Some(out_path) = out {
+        let mut img = render_contour(
+            &ds,
+            &ContourOptions {
+                variable: variable.to_string(),
+                zone,
+                plane,
+                view,
+                width,
+                height,
+                style,
+                annotate: true,
+                path_hint: Some(path.display().to_string()),
+                ..Default::default()
+            },
+        )?;
+        draw_probe_label(&mut img, pix_x, pix_y, &label);
+        write_png(out_path, &img)?;
+    }
+    if json {
+        println!(
+            "{{\"status\":\"ok\",\"command\":\"probe\",\"path\":{},\"var\":{},\"zone\":{},\"x\":{},\"y\":{},\"px\":{},\"py\":{},\"value\":{},\"label\":{}}}",
+            json_string(&path.display().to_string()),
+            json_string(variable),
+            zone,
+            json_f64(wx),
+            json_f64(wy),
+            pix_x,
+            pix_y,
+            json_f64(value),
+            json_string(&label)
+        );
+    } else {
+        println!(
+            "probe {variable} @ ({wx:.6}, {wy:.6}) px=({pix_x},{pix_y}) → {value:.8}"
         );
     }
     Ok(())
@@ -1314,6 +1568,7 @@ fn run_pathlines_cmd(
                 style,
                 annotate: false,
                 path_hint: Some(path.display().to_string()),
+                ..Default::default()
             },
         )?;
         overlay_pathlines_styled(&mut img, &lines, style);

@@ -29,6 +29,8 @@ pub struct MeshOptions {
     pub bg_rgba: [u8; 4],
     /// Margin in pixels around the fitted domain.
     pub margin: u32,
+    /// When true, stretch to fill the raster (no letterbox). GUI viewport uses this.
+    pub fill: bool,
     /// VisIt-like title / time / zone overlay (default on).
     pub annotate: bool,
     pub path_hint: Option<String>,
@@ -48,7 +50,8 @@ impl Default for MeshOptions {
             style: PlotStyle::Default,
             line_rgba: DEFAULT_MESH_RGBA,
             bg_rgba: [255, 255, 255, 255],
-            margin: 24,
+            margin: 8,
+            fill: false,
             annotate: true,
             path_hint: None,
         }
@@ -194,15 +197,27 @@ pub fn render_mesh(ds: &Dataset, opts: &MeshOptions) -> Result<ContourImage> {
         return Err(Error::plot("mesh grid is empty"));
     }
     let (xmin, xmax, ymin, ymax) = grid.bounds();
-    let map = AspectMap::fit(
-        opts.width,
-        opts.height,
-        xmin,
-        xmax,
-        ymin,
-        ymax,
-        opts.margin,
-    );
+    let map = if opts.fill {
+        AspectMap::fit_fill(
+            opts.width,
+            opts.height,
+            xmin,
+            xmax,
+            ymin,
+            ymax,
+            opts.margin,
+        )
+    } else {
+        AspectMap::fit(
+            opts.width,
+            opts.height,
+            xmin,
+            xmax,
+            ymin,
+            ymax,
+            opts.margin,
+        )
+    };
 
     let mut rgba = vec![0u8; (opts.width as usize) * (opts.height as usize) * 4];
     for px in rgba.chunks_exact_mut(4) {

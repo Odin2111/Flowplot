@@ -1,7 +1,7 @@
 //! VisIt-style plot annotations: title / time / cycle, variable name, colorbar.
 //!
-//! Text uses anti-aliased TrueType (DejaVu Sans via `fontdue`) for a modern
-//! VisIt-quality look — not a 5×7 bitmap.
+//! Text is drawn with 2× supersampled TrueType coverage (DejaVu Sans via
+//! `fontdue`) so HUD labels stay sharp and undistorted at viewport scale.
 
 use std::sync::OnceLock;
 
@@ -25,8 +25,12 @@ pub struct AnnotationInfo {
     pub vmin: Option<f64>,
     pub vmax: Option<f64>,
     pub style: PlotStyle,
+    /// Colormap used by the colorbar (follows plot style when StyleDefault).
+    pub colormap: crate::contour::ColorMapName,
     /// Draw the vertical colorbar (contour / scalar views).
     pub colorbar: bool,
+    /// Contour level count shown in the HUD (when banded / labeled).
+    pub nlevels: Option<u32>,
 }
 
 impl Default for AnnotationInfo {
@@ -44,7 +48,9 @@ impl Default for AnnotationInfo {
             vmin: None,
             vmax: None,
             style: PlotStyle::Default,
+            colormap: crate::contour::ColorMapName::StyleDefault,
             colorbar: false,
+            nlevels: None,
         }
     }
 }
@@ -94,6 +100,10 @@ const FG_SOFT: [u8; 4] = [55, 64, 72, 255];
 const PANEL: [u8; 4] = [250, 251, 252, 230];
 const BAR_FRAME: [u8; 4] = [30, 30, 30, 255];
 
+/// Supersample factor for glyph coverage (reduces stretch/jaggies when PNGs
+/// are shown near 1:1 in the GUI viewport).
+const AA_SCALE: f32 = 2.0;
+
 fn annotation_font() -> &'static Font {
     static FONT: OnceLock<Font> = OnceLock::new();
     FONT.get_or_init(|| {
@@ -103,16 +113,38 @@ fn annotation_font() -> &'static Font {
     })
 }
 
+fn line_metrics(px: f32) -> (f32, f32) {
+    let font = annotation_font();
+    if let Some(m) = font.horizontal_line_metrics(px) {
+        (m.ascent, m.descent.abs())
+    } else {
+        (px * 0.8, px * 0.2)
+    }
+}
+
 /// Overlay VisIt-like annotations on an existing raster.
 pub fn draw_annotations(img: &mut ContourImage, info: &AnnotationInfo) {
     if img.width < 64 || img.height < 64 {
         return;
     }
     let lines = info_lines(info);
-    let title_px = if img.width >= 700 { 15.0 } else { 13.0 };
-    let body_px = if img.width >= 700 { 12.0 } else { 11.0 };
+    // Slightly larger HUD so supersampled glyphs stay readable after LANCZOS fit.
+    let title_px = if img.width >= 900 {
+        16.0
+    } else if img.width >= 700 {
+        15.0
+    } else {
+        13.0
+    };
+    let body_px = if img.width >= 900 {
+        13.0
+    } else if img.width >= 700 {
+        12.0
+    } else {
+        11.0
+    };
     let pad = 10i32;
-    let line_gap = 4i32;
+    let line_gap = 3i32;
 
     let mut sizes = Vec::with_capacity(lines.len());
     let mut max_w = 0i32;
@@ -128,17 +160,25 @@ pub fn draw_annotations(img: &mut ContourImage, info: &AnnotationInfo) {
     let panel_w = max_w + 2 * pad;
     fill_rect(img, pad - 4, pad - 4, panel_w, total_h, PANEL);
 
-    let mut y = pad;
+    let mut y = pad as f32;
     for (i, line) in lines.iter().enumerate() {
         let (px, _w, h) = sizes[i];
         let color = if i == 0 { FG } else { FG_SOFT };
-        draw_text_aa(img, pad as f32, y as f32, line, px, color);
-        y += h + line_gap;
+        draw_text_aa(img, pad as f32, y, line, px, color);
+        y += h as f32 + line_gap as f32;
     }
 
     if info.colorbar {
         if let (Some(vmin), Some(vmax)) = (info.vmin, info.vmax) {
-            draw_colorbar(img, info.style, vmin, vmax, info.variable.as_deref(), body_px);
+            draw_colorbar(
+                img,
+                info.style,
+                info.colormap,
+                vmin,
+                vmax,
+                info.variable.as_deref(),
+                body_px,
+            );
         }
     }
 }
@@ -180,6 +220,9 @@ fn info_lines(info: &AnnotationInfo) -> Vec<String> {
     if let Some(v) = &info.variable {
         lines.push(format!("Variable: {v}"));
     }
+    if let Some(n) = info.nlevels {
+        lines.push(format!("Levels: {n}"));
+    }
     if let Some(p) = &info.plane {
         lines.push(format!("Plane: {p}"));
     }
@@ -197,33 +240,44 @@ fn info_lines(info: &AnnotationInfo) -> Vec<String> {
 fn draw_colorbar(
     img: &mut ContourImage,
     style: PlotStyle,
+    colormap: crate::contour::ColorMapName,
     vmin: f64,
     vmax: f64,
     variable: Option<&str>,
     label_px: f32,
 ) {
     let bar_w = (img.width / 28).clamp(14, 28) as i32;
-    let margin = 12i32;
-    let top = (img.height as f64 * 0.12) as i32;
-    let bot = (img.height as f64 * 0.88) as i32;
-    let x0 = img.width as i32 - margin - bar_w - 48;
+    let margin = 10i32;
+    let top = (img.height as f64 * 0.10) as i32;
+    let bot = (img.height as f64 * 0.90) as i32;
+    let tick_px = (label_px - 1.0).max(10.0);
+    let hi = format_tick(vmax);
+    let lo = format_tick(vmin);
+    let mid = format_tick(0.5 * (vmin + vmax));
+    let var_label = variable.unwrap_or("");
+    let (tw_hi, _) = measure_text(&hi, tick_px);
+    let (tw_lo, _) = measure_text(&lo, tick_px);
+    let (tw_mid, _) = measure_text(&mid, tick_px);
+    let (tw_var, _) = measure_text(var_label, label_px);
+    let label_w = tw_hi.max(tw_lo).max(tw_mid).max(tw_var).max(36);
+    let x0 = img.width as i32 - margin - bar_w - label_w - 10;
     if x0 < 40 || bot - top < 40 {
         return;
     }
     fill_rect(
         img,
-        x0 - 6,
-        top - 22,
-        bar_w + 60,
-        bot - top + 44,
+        x0 - 8,
+        top - 24,
+        bar_w + label_w + 22,
+        bot - top + 48,
         PANEL,
     );
-    if let Some(v) = variable {
-        draw_text_aa(img, x0 as f32, (top - 18) as f32, v, label_px, FG);
+    if !var_label.is_empty() {
+        draw_text_aa(img, x0 as f32, (top - 20) as f32, var_label, label_px, FG);
     }
     for y in top..=bot {
         let t = 1.0 - (y - top) as f64 / (bot - top).max(1) as f64;
-        let (r, g, b) = style.colormap(t);
+        let (r, g, b) = style.colormap_named(colormap, t);
         for x in x0..x0 + bar_w {
             put_pixel(img, x, y, [r, g, b, 255]);
         }
@@ -233,14 +287,10 @@ fn draw_colorbar(
     draw_line(img, x0, top, x0, bot, BAR_FRAME);
     draw_line(img, x0 + bar_w, top, x0 + bar_w, bot, BAR_FRAME);
 
-    let tick_px = (label_px - 1.0).max(9.0);
-    let hi = format_tick(vmax);
-    let lo = format_tick(vmin);
-    let mid = format_tick(0.5 * (vmin + vmax));
     let tx = (x0 + bar_w + 6) as f32;
     draw_text_aa(img, tx, top as f32, &hi, tick_px, FG);
     draw_text_aa(img, tx, ((top + bot) / 2) as f32, &mid, tick_px, FG_SOFT);
-    draw_text_aa(img, tx, (bot - 12) as f32, &lo, tick_px, FG);
+    draw_text_aa(img, tx, (bot - 14) as f32, &lo, tick_px, FG);
 }
 
 fn format_tick(v: f64) -> String {
@@ -249,7 +299,7 @@ fn format_tick(v: f64) -> String {
     }
     let a = v.abs();
     if a != 0.0 && (a >= 1e4 || a < 1e-2) {
-        format!("{v:.2e}")
+        format!("{v:.3e}")
     } else {
         format!("{v:.4}")
     }
@@ -283,43 +333,95 @@ fn blend_pixel(img: &mut ContourImage, x: i32, y: i32, rgba: [u8; 4]) {
 
 fn measure_text(text: &str, px: f32) -> (i32, i32) {
     let font = annotation_font();
+    let (ascent, descent) = line_metrics(px);
     let mut w = 0.0f32;
-    let mut h = px.ceil() as i32;
     for ch in text.chars() {
         let (metrics, _) = font.rasterize(ch, px);
         w += metrics.advance_width;
-        h = h.max(metrics.height as i32 + metrics.ymin.abs());
     }
-    ((w.ceil() as i32).max(1), h.max(1) + 2)
+    let h = (ascent + descent).ceil() as i32 + 2;
+    ((w.ceil() as i32).max(1), h.max(1))
 }
 
-/// Anti-aliased TrueType text (VisIt-quality).
+/// Anti-aliased TrueType text via 2× coverage supersample.
+///
+/// Glyphs are rasterized at `2×px` and downsampled with matching 2× metrics
+/// (xmin/ymin/advance all ÷2) so strokes never look horizontally stretched.
 fn draw_text_aa(img: &mut ContourImage, x: f32, y: f32, text: &str, px: f32, rgba: [u8; 4]) {
     let font = annotation_font();
+    let (ascent, _descent) = line_metrics(px);
+    let baseline = y + ascent;
     let mut pen_x = x;
-    // `y` is the top of the line box; baseline sits ~80% down (VisIt-like HUD).
-    let baseline = y + px * 0.80;
+    let hi_px = px * AA_SCALE;
+    let scale = AA_SCALE as i32;
     for ch in text.chars() {
-        let (metrics, bitmap) = font.rasterize(ch, px);
-        let glyph_x = (pen_x + metrics.xmin as f32).round() as i32;
-        let glyph_y = (baseline + metrics.ymin as f32).round() as i32;
-        for row in 0..metrics.height {
-            for col in 0..metrics.width {
-                let cover = bitmap[row * metrics.width + col];
-                if cover == 0 {
+        let (metrics, bitmap) = font.rasterize(ch, hi_px);
+        // All placement from the high-res metrics, scaled back to destination.
+        let glyph_x0 = pen_x + (metrics.xmin as f32) / AA_SCALE;
+        let glyph_y0 = baseline + (metrics.ymin as f32) / AA_SCALE;
+        let dst_w = ((metrics.width as f32) / AA_SCALE).ceil() as i32;
+        let dst_h = ((metrics.height as f32) / AA_SCALE).ceil() as i32;
+        for row in 0..dst_h {
+            for col in 0..dst_w {
+                let mut acc = 0u32;
+                let mut n = 0u32;
+                for sy in 0..scale {
+                    for sx in 0..scale {
+                        let src_x = col * scale + sx;
+                        let src_y = row * scale + sy;
+                        if src_x >= 0
+                            && src_y >= 0
+                            && src_x < metrics.width as i32
+                            && src_y < metrics.height as i32
+                        {
+                            acc += bitmap[src_y as usize * metrics.width + src_x as usize] as u32;
+                            n += 1;
+                        }
+                    }
+                }
+                if n == 0 || acc == 0 {
                     continue;
                 }
+                let cover = ((acc + n / 2) / n) as u8;
                 let a = ((cover as u16 * rgba[3] as u16) / 255) as u8;
+                if a == 0 {
+                    continue;
+                }
                 blend_pixel(
                     img,
-                    glyph_x + col as i32,
-                    glyph_y + row as i32,
+                    (glyph_x0 + col as f32).round() as i32,
+                    (glyph_y0 + row as f32).round() as i32,
                     [rgba[0], rgba[1], rgba[2], a],
                 );
             }
         }
-        pen_x += metrics.advance_width;
+        pen_x += metrics.advance_width / AA_SCALE;
     }
+}
+
+/// Stamp a probe readout near a pixel (Tecplot-like click label).
+pub fn draw_probe_label(img: &mut ContourImage, px: i32, py: i32, text: &str) {
+    if img.width < 32 || img.height < 32 || text.is_empty() {
+        return;
+    }
+    let font_px = if img.width >= 700 { 12.0 } else { 11.0 };
+    let (tw, th) = measure_text(text, font_px);
+    let pad = 4i32;
+    let mut x = px + 10;
+    let mut y = py - th - 8;
+    if x + tw + pad * 2 > img.width as i32 {
+        x = px - tw - pad * 2 - 10;
+    }
+    if y < 4 {
+        y = py + 10;
+    }
+    x = x.max(4);
+    y = y.max(4);
+    fill_rect(img, x - pad, y - pad, tw + pad * 2, th + pad * 2, PANEL);
+    // Crosshair
+    draw_line(img, px - 5, py, px + 5, py, FG);
+    draw_line(img, px, py - 5, px, py + 5, FG);
+    draw_text_aa(img, x as f32, y as f32, text, font_px, FG);
 }
 
 #[cfg(test)]
@@ -376,5 +478,25 @@ mod tests {
         let f = annotation_font();
         let (m, bmp) = f.rasterize('A', 16.0);
         assert!(m.width > 0 && !bmp.is_empty());
+    }
+
+    #[test]
+    fn probe_label_draws() {
+        let mut img = ContourImage {
+            width: 120,
+            height: 80,
+            rgba: vec![180u8; 120 * 80 * 4],
+            vmin: 0.0,
+            vmax: 1.0,
+            grid: Grid2D {
+                ni: 2,
+                nj: 2,
+                x: vec![0.0, 1.0, 0.0, 1.0],
+                y: vec![0.0, 0.0, 1.0, 1.0],
+                values: vec![0.0, 1.0, 1.0, 2.0],
+            },
+        };
+        draw_probe_label(&mut img, 40, 40, "P=1.23");
+        assert!(img.rgba.iter().any(|&v| v < 50));
     }
 }

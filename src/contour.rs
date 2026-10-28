@@ -33,6 +33,58 @@ impl FromStr for PlotStyle {
     }
 }
 
+/// Contour fill mode (Tecplot Contour Details → Levels and Color).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContourColoring {
+    /// Smooth continuous colormap (default).
+    #[default]
+    Continuous,
+    /// Discrete bands at `nlevels` steps.
+    Banded,
+}
+
+impl FromStr for ContourColoring {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "continuous" | "flood" | "smooth" => Ok(Self::Continuous),
+            "banded" | "bands" | "steps" => Ok(Self::Banded),
+            other => Err(format!(
+                "unknown coloring '{other}' (expected continuous|banded)"
+            )),
+        }
+    }
+}
+
+/// Named colormap override (Tecplot Multi-Coloring).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorMapName {
+    #[default]
+    StyleDefault,
+    Turbo,
+    Jfm,
+    Coolwarm,
+    Grayscale,
+}
+
+impl FromStr for ColorMapName {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "default" | "auto" | "" => Ok(Self::StyleDefault),
+            "turbo" => Ok(Self::Turbo),
+            "jfm" => Ok(Self::Jfm),
+            "coolwarm" | "cool-warm" => Ok(Self::Coolwarm),
+            "gray" | "grey" | "grayscale" | "greyscale" => Ok(Self::Grayscale),
+            other => Err(format!(
+                "unknown colormap '{other}' (expected default|turbo|jfm|coolwarm|grayscale)"
+            )),
+        }
+    }
+}
+
 impl PlotStyle {
     /// Suggested raster size for a single-column JFM figure (~88 mm at ~200 dpi).
     pub const JFM_WIDTH: u32 = 700;
@@ -42,6 +94,16 @@ impl PlotStyle {
         match self {
             Self::Default => colormap_turbo(t),
             Self::Jfm => colormap_jfm(t),
+        }
+    }
+
+    pub fn colormap_named(self, name: ColorMapName, t: f64) -> (u8, u8, u8) {
+        match name {
+            ColorMapName::StyleDefault => self.colormap(t),
+            ColorMapName::Turbo => colormap_turbo(t),
+            ColorMapName::Jfm => colormap_jfm(t),
+            ColorMapName::Coolwarm => colormap_coolwarm(t),
+            ColorMapName::Grayscale => colormap_gray(t),
         }
     }
 
@@ -121,6 +183,16 @@ pub struct ContourOptions {
     /// VisIt-like title / time / variable / colorbar overlay (default on).
     pub annotate: bool,
     pub path_hint: Option<String>,
+    /// Continuous flood vs banded levels (Tecplot Contour Details).
+    pub coloring: ContourColoring,
+    /// Number of contour bands / levels (used when banded; also HUD).
+    pub nlevels: u32,
+    /// Colormap override; `StyleDefault` follows `style`.
+    pub colormap: ColorMapName,
+    /// Draw the colorbar legend when annotating.
+    pub legend: bool,
+    /// Pixel margin around the filled plot (tight → no letterbox waste).
+    pub margin: u32,
 }
 
 impl Default for ContourOptions {
@@ -137,6 +209,11 @@ impl Default for ContourOptions {
             style: PlotStyle::Default,
             annotate: true,
             path_hint: None,
+            coloring: ContourColoring::Continuous,
+            nlevels: 16,
+            colormap: ColorMapName::StyleDefault,
+            legend: true,
+            margin: 4,
         }
     }
 }
@@ -179,8 +256,15 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
 
     let (xmin, xmax, ymin, ymax) = grid.bounds();
     let nan = opts.style.nan_rgba();
-    // Cell-driven raster (goose/lobster-style): O(cells × pixels/cell) ≈ O(image),
-    // not O(pixels × cells) like per-pixel bbox scans — interactive redraw stays snappy.
+    // Reserve a right strip for the legend so the flood fills the plot area
+    // without large unused letterbox margins (Tecplot Contour Details layout).
+    let legend_reserve = if opts.annotate && opts.legend {
+        ((opts.width as f64) * 0.14).round().clamp(56.0, 110.0) as u32
+    } else {
+        0
+    };
+    let plot_w = opts.width.saturating_sub(legend_reserve).max(32);
+    // Cell-driven raster: O(cells × pixels/cell) ≈ O(image).
     let mut rgba = vec![0u8; (opts.width as usize) * (opts.height as usize) * 4];
     for px in rgba.chunks_exact_mut(4) {
         px.copy_from_slice(&nan);
@@ -190,6 +274,8 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
         &mut rgba,
         opts.width,
         opts.height,
+        plot_w,
+        opts.margin,
         xmin,
         xmax,
         ymin,
@@ -197,6 +283,9 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
         vmin,
         vmax,
         opts.style,
+        opts.colormap,
+        opts.coloring,
+        opts.nlevels,
         nan,
     );
 
@@ -218,10 +307,16 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
             Some(&opts.variable),
             opts.path_hint.as_deref(),
         );
-        info.colorbar = true;
+        info.colorbar = opts.legend;
         info.vmin = Some(vmin);
         info.vmax = Some(vmax);
         info.style = opts.style;
+        info.colormap = opts.colormap;
+        info.nlevels = if opts.coloring == ContourColoring::Banded {
+            Some(opts.nlevels.max(2))
+        } else {
+            None
+        };
         info.view = Some(opts.view.label());
         info.plane = Some(match opts.plane {
             PlaneSpec::Auto => "auto".into(),
@@ -279,11 +374,16 @@ fn data_range(values: &[f64]) -> (f64, f64) {
 }
 
 /// Paint each structured cell as two triangles into the image (fast interactive path).
+///
+/// Flood fills the left `plot_w` pixels (minus margin), leaving a right strip for
+/// the legend so the Viewport shows data edge-to-edge without letterbox waste.
 fn rasterize_cells(
     grid: &Grid2D,
     rgba: &mut [u8],
     width: u32,
     height: u32,
+    plot_w: u32,
+    margin: u32,
     xmin: f64,
     xmax: f64,
     ymin: f64,
@@ -291,6 +391,9 @@ fn rasterize_cells(
     vmin: f64,
     vmax: f64,
     style: PlotStyle,
+    colormap: ColorMapName,
+    coloring: ContourColoring,
+    nlevels: u32,
     nan: [u8; 4],
 ) {
     if grid.ni < 2 || grid.nj < 2 {
@@ -298,14 +401,19 @@ fn rasterize_cells(
     }
     let dx = (xmax - xmin).abs().max(1e-30);
     let dy = (ymax - ymin).abs().max(1e-30);
-    let w = width as f64;
-    let h = height as f64;
+    let m = margin as f64;
+    let avail_w = (plot_w as f64 - 2.0 * m).max(1.0);
+    let avail_h = (height as f64 - 2.0 * m).max(1.0);
+    // Independent X/Y scale = fill the plot rect (no unused letterbox).
+    let sx = avail_w / dx;
+    let sy = avail_h / dy;
     let to_px = |x: f64, y: f64| -> (f64, f64) {
-        let u = (x - xmin) / dx;
-        let v = (y - ymin) / dy;
-        (u * (w - 1.0), (1.0 - v) * (h - 1.0))
+        let px = m + (x - xmin) * sx;
+        let py = m + (ymax - y) * sy;
+        (px, py)
     };
     let span = (vmax - vmin).abs().max(1e-30);
+    let levels = nlevels.max(2);
 
     for j in 0..grid.nj - 1 {
         for i in 0..grid.ni - 1 {
@@ -321,16 +429,29 @@ fn rasterize_cells(
             let p10 = to_px(x10, y10);
             let p01 = to_px(x01, y01);
             let p11 = to_px(x11, y11);
-            fill_tri(rgba, width, height, p00, p10, p11, v00, v10, v11, vmin, span, style, nan);
-            fill_tri(rgba, width, height, p00, p11, p01, v00, v11, v01, vmin, span, style, nan);
+            fill_tri(
+                rgba, width, height, plot_w, p00, p10, p11, v00, v10, v11, vmin, span, style,
+                colormap, coloring, levels, nan,
+            );
+            fill_tri(
+                rgba, width, height, plot_w, p00, p11, p01, v00, v11, v01, vmin, span, style,
+                colormap, coloring, levels, nan,
+            );
         }
     }
+}
+
+fn quantize_band(t: f64, levels: u32) -> f64 {
+    let n = levels.max(2) as f64;
+    let idx = (t.clamp(0.0, 1.0) * n).floor().min(n - 1.0);
+    (idx + 0.5) / n
 }
 
 fn fill_tri(
     rgba: &mut [u8],
     width: u32,
     height: u32,
+    plot_w: u32,
     a: (f64, f64),
     b: (f64, f64),
     c: (f64, f64),
@@ -340,6 +461,9 @@ fn fill_tri(
     vmin: f64,
     span: f64,
     style: PlotStyle,
+    colormap: ColorMapName,
+    coloring: ContourColoring,
+    levels: u32,
     nan: [u8; 4],
 ) {
     let min_x = a.0.min(b.0).min(c.0).floor() as i32;
@@ -348,7 +472,7 @@ fn fill_tri(
     let max_y = a.1.max(b.1).max(c.1).ceil() as i32;
     let min_x = min_x.max(0);
     let min_y = min_y.max(0);
-    let max_x = max_x.min(width as i32 - 1);
+    let max_x = max_x.min(plot_w as i32 - 1).min(width as i32 - 1);
     let max_y = max_y.min(height as i32 - 1);
     if min_x > max_x || min_y > max_y {
         return;
@@ -370,8 +494,11 @@ fn fill_tri(
             let val = w0 * va + w1 * vb + w2 * vc;
             let i = ((py as u32 * width + px as u32) * 4) as usize;
             if val.is_finite() {
-                let t = ((val - vmin) / span).clamp(0.0, 1.0);
-                let (r, g, b) = style.colormap(t);
+                let mut t = ((val - vmin) / span).clamp(0.0, 1.0);
+                if coloring == ContourColoring::Banded {
+                    t = quantize_band(t, levels);
+                }
+                let (r, g, b) = style.colormap_named(colormap, t);
                 rgba[i] = r;
                 rgba[i + 1] = g;
                 rgba[i + 2] = b;
@@ -406,6 +533,29 @@ fn colormap_turbo(t: f64) -> (u8, u8, u8) {
                 + t * (27814.0 + t * (-22569.18 + t * 6838.66)))))
         .clamp(0.0, 255.0);
     (r as u8, g as u8, b as u8)
+}
+
+fn colormap_gray(t: f64) -> (u8, u8, u8) {
+    let g = (t.clamp(0.0, 1.0) * 255.0).round() as u8;
+    (g, g, g)
+}
+
+fn colormap_coolwarm(t: f64) -> (u8, u8, u8) {
+    let t = t.clamp(0.0, 1.0);
+    // Classic cool→warm (blue → white → red).
+    if t < 0.5 {
+        let u = t * 2.0;
+        let r = (59.0 + u * (255.0 - 59.0)) as u8;
+        let g = (76.0 + u * (255.0 - 76.0)) as u8;
+        let b = (192.0 + u * (255.0 - 192.0)) as u8;
+        (r, g, b)
+    } else {
+        let u = (t - 0.5) * 2.0;
+        let r = (255.0 + u * (180.0 - 255.0)) as u8;
+        let g = (255.0 + u * (4.0 - 255.0)) as u8;
+        let b = (255.0 + u * (38.0 - 255.0)) as u8;
+        (r, g, b)
+    }
 }
 
 /// Restrained coolwarm (blue → soft gray → muted red) for JFM-style figures.
@@ -452,14 +602,47 @@ pub fn draw_frame(img: &mut ContourImage, rgba: [u8; 4], thickness: u32) {
     }
 }
 
-/// Map physical (x,y) in grid bounds to pixel coordinates.
+/// Map physical (x,y) in grid bounds to pixel coordinates (full-width stretch).
 pub fn world_to_pixel(img: &ContourImage, x: f64, y: f64) -> (i32, i32) {
+    world_to_pixel_plot(img, x, y, img.width, 0)
+}
+
+/// Map physical (x,y) into the filled plot rect (`plot_w` × height, margin 0).
+pub fn world_to_pixel_plot(
+    img: &ContourImage,
+    x: f64,
+    y: f64,
+    plot_w: u32,
+    margin: u32,
+) -> (i32, i32) {
     let (xmin, xmax, ymin, ymax) = img.grid.bounds();
-    let u = (x - xmin) / (xmax - xmin);
-    let v = (y - ymin) / (ymax - ymin);
-    let px = (u * img.width as f64) as i32;
-    let py = ((1.0 - v) * img.height as f64) as i32;
-    (px, py)
+    let dx = (xmax - xmin).abs().max(1e-30);
+    let dy = (ymax - ymin).abs().max(1e-30);
+    let m = margin as f64;
+    let avail_w = (plot_w as f64 - 2.0 * m).max(1.0);
+    let avail_h = (img.height as f64 - 2.0 * m).max(1.0);
+    let px = m + (x - xmin) / dx * avail_w;
+    let py = m + (ymax - y) / dy * avail_h;
+    (px.round() as i32, py.round() as i32)
+}
+
+/// Inverse of [`world_to_pixel_plot`] — pixel → world (for probe).
+pub fn pixel_to_world(
+    img: &ContourImage,
+    px: i32,
+    py: i32,
+    plot_w: u32,
+    margin: u32,
+) -> (f64, f64) {
+    let (xmin, xmax, ymin, ymax) = img.grid.bounds();
+    let dx = (xmax - xmin).abs().max(1e-30);
+    let dy = (ymax - ymin).abs().max(1e-30);
+    let m = margin as f64;
+    let avail_w = (plot_w as f64 - 2.0 * m).max(1.0);
+    let avail_h = (img.height as f64 - 2.0 * m).max(1.0);
+    let x = xmin + (px as f64 - m) / avail_w * dx;
+    let y = ymax - (py as f64 - m) / avail_h * dy;
+    (x, y)
 }
 
 /// Set a pixel if inside the image.
