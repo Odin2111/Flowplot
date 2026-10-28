@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Flowplot Windows installer (wixl / WiX 3 schema). Built by packaging/windows/build-msi.sh -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="85E90C52-2020-4B37-B607-4255E636E728"
+           Name="Flowplot"
+           Language="1033"
+           Version="0.1.0"
+           Manufacturer="Odin2111"
+           UpgradeCode="CD082F2B-9E83-53D9-926E-24C027DB480B">
+    <Package InstallerVersion="200"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="Flowplot CFD post-processor"
+             Comments="Installs flowplot.exe next to your CFD solver toolchain."
+             Manufacturer="Odin2111" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Flowplot is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="Flowplot">
+          <Component Id="FlowplotExe" Guid="8C3F60B2-D8BC-541E-9D08-582F6FBCFAD2">
+            <File Id="FlowplotExeFile"
+                  Source="stage/flowplot.exe"
+                  Name="flowplot.exe"
+                  KeyPath="yes" />
+          </Component>
+          <Component Id="Readme" Guid="EE69620D-DBAF-512C-90FF-502DED30BCF7">
+            <File Id="ReadmeFile" Source="stage/README.txt" Name="README.txt" KeyPath="yes" />
+          </Component>
+          <Component Id="DepsNote" Guid="8CF3A35D-4EA0-5886-B9D4-55CAB8ADD5E2">
+            <File Id="DepsFile" Source="stage/DEPS.txt" Name="DEPS.txt" KeyPath="yes" />
+          </Component>
+          <Component Id="GuiLauncher" Guid="C0FFEE00-1111-5222-9333-444455556666">
+            <File Id="GuiBat" Source="stage/flowplot-gui.bat" Name="flowplot-gui.bat" KeyPath="yes" />
+          </Component>
+          <Component Id="AddPath" Guid="94C79462-D831-55CE-83F2-1DD981B2E412">
+            <File Id="AddPathBat" Source="stage/add-to-path.bat" Name="add-to-path.bat" KeyPath="yes" />
+          </Component>
+          <Directory Id="GuiDir" Name="gui">
+            <Component Id="GuiPy" Guid="B7A73450-5A4B-595E-9FD9-63F1B19EDEF6">
+              <File Id="GuiPyFile" Source="stage/gui/flowplot_gui.py" Name="flowplot_gui.py" KeyPath="yes" />
+            </Component>
+            <Component Id="GuiInit" Guid="ED9EA518-AABF-5DB7-990B-693DBBB432EE">
+              <File Id="GuiInitFile" Source="stage/gui/__init__.py" Name="__init__.py" KeyPath="yes" />
+            </Component>
+            <Directory Id="AssetsDir" Name="assets">
+              <Component Id="Wordmark" Guid="2731E70F-591C-5F05-B5BC-CF17C1C2F42F">
+                <File Id="WordmarkFile"
+                      Source="stage/gui/assets/flowplot-wordmark.svg"
+                      Name="flowplot-wordmark.svg"
+                      KeyPath="yes" />
+              </Component>
+            </Directory>
+          </Directory>
+        </Directory>
+      </Directory>
+
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="Flowplot">
+          <Component Id="StartMenuShortcuts" Guid="DD12184E-94E6-5FDA-8D0E-0129F4E2CD05">
+            <Shortcut Id="FlowplotCliShortcut"
+                      Name="Flowplot CLI"
+                      Description="Flowplot CFD post-processor (CLI help)"
+                      Target="[INSTALLFOLDER]flowplot.exe"
+                      Arguments="--help"
+                      WorkingDirectory="INSTALLFOLDER" />
+            <Shortcut Id="FlowplotGuiShortcut"
+                      Name="Flowplot GUI"
+                      Description="Flowplot GUI shell (requires Python 3 + tkinter)"
+                      Target="[INSTALLFOLDER]flowplot-gui.bat"
+                      WorkingDirectory="INSTALLFOLDER" />
+            <Shortcut Id="AddPathShortcut"
+                      Name="Add Flowplot to PATH"
+                      Description="Optional: append install dir to your user PATH"
+                      Target="[INSTALLFOLDER]add-to-path.bat"
+                      WorkingDirectory="INSTALLFOLDER" />
+            <Shortcut Id="UninstallProduct"
+                      Name="Uninstall Flowplot"
+                      Target="[System64Folder]msiexec.exe"
+                      Arguments="/x [ProductCode]"
+                      Description="Uninstall Flowplot" />
+            <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
+            <RegistryValue Root="HKCU"
+                           Key="Software\Odin2111\Flowplot"
+                           Name="installed"
+                           Type="integer"
+                           Value="1"
+                           KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <Feature Id="Complete" Title="Flowplot" Description="CLI, GUI shell, and docs" Level="1" Display="expand">
+      <Feature Id="CliFeature" Title="CLI" Level="1">
+        <ComponentRef Id="FlowplotExe" />
+        <ComponentRef Id="Readme" />
+        <ComponentRef Id="DepsNote" />
+        <ComponentRef Id="GuiLauncher" />
+        <ComponentRef Id="AddPath" />
+      </Feature>
+      <Feature Id="GuiFeature" Title="GUI shell" Level="1">
+        <ComponentRef Id="GuiPy" />
+        <ComponentRef Id="GuiInit" />
+        <ComponentRef Id="Wordmark" />
+      </Feature>
+      <Feature Id="ShortcutsFeature" Title="Start Menu shortcuts" Level="1">
+        <ComponentRef Id="StartMenuShortcuts" />
+      </Feature>
+    </Feature>
+  </Product>
+</Wix>

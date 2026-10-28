@@ -3,3 +3,9 @@
 .idea/
 .vscode/
 *.swp
+__pycache__/
+*.py[cod]
+
+# Windows packaging stage / MSI artifacts
+packaging/windows/stage/
+packaging/windows/*.msi

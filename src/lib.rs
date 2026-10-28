@@ -33,7 +33,7 @@ pub mod nondim;
 pub mod pathlines;
 pub mod readers;
 
-pub use contour::{render_contour, write_png, ContourImage, ContourOptions};
+pub use contour::{render_contour, write_png, ContourImage, ContourOptions, PlotStyle};
 pub use dataset::{
     Connectivity, Dataset, ElementType, Location, OrderedDims, Topology, VariableData, Zone,
 };
@@ -44,7 +44,7 @@ pub use nondim::{
     apply_nondim, format_suggestions, suggest_scales, NondimScales, NondimSuggestion, ScaleKind,
 };
 pub use pathlines::{
-    default_seeds, guess_velocity_vars, overlay_pathlines, render_pathlines_png, trace_pathlines,
-    Pathline, PathlineOptions,
+    default_seeds, guess_velocity_vars, overlay_pathlines, overlay_pathlines_styled,
+    render_pathlines_png, render_pathlines_png_styled, trace_pathlines, Pathline, PathlineOptions,
 };
 pub use readers::{load_path, Reader};

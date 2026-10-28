@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use flowplot::contour::{render_contour, write_png, ContourOptions};
+use flowplot::contour::{render_contour, write_png, ContourOptions, PlotStyle};
 use flowplot::field::{extract_scalar_grid, find_var, PlaneSpec};
 use flowplot::menu::{
     format_item_text, format_menu_text, format_stub_run, MenuItem, PostprocessMenu,
@@ -15,8 +15,8 @@ use flowplot::nondim::{
     apply_nondim, format_suggestions, suggest_scales, NondimScales, NondimSuggestion,
 };
 use flowplot::pathlines::{
-    default_seeds, guess_velocity_vars, overlay_pathlines, render_pathlines_png, trace_pathlines,
-    PathlineOptions,
+    default_seeds, guess_velocity_vars, overlay_pathlines_styled, render_pathlines_png_styled,
+    trace_pathlines, PathlineOptions,
 };
 use flowplot::{load_path, Dataset};
 
@@ -73,6 +73,9 @@ enum Commands {
         width: u32,
         #[arg(long, default_value_t = 512)]
         height: u32,
+        /// Plot look: `default` (turbo) or `jfm` (restrained coolwarm, black frame).
+        #[arg(long, default_value = "default", value_parser = parse_plot_style)]
+        style: PlotStyle,
         #[command(flatten)]
         nondim: NondimArgs,
         /// Also trace pathlines and overlay them on the contour PNG.
@@ -106,6 +109,9 @@ enum Commands {
         width: u32,
         #[arg(long, default_value_t = 512)]
         height: u32,
+        /// Plot look: `default` (turbo) or `jfm` (white paper, black frame).
+        #[arg(long, default_value = "default", value_parser = parse_plot_style)]
+        style: PlotStyle,
         #[command(flatten)]
         nondim: NondimArgs,
         #[command(flatten)]
@@ -253,6 +259,7 @@ fn dispatch(
             vmax,
             width,
             height,
+            style,
             nondim,
             pathlines,
             pathlines_out,
@@ -267,6 +274,7 @@ fn dispatch(
             vmax,
             width,
             height,
+            style,
             &nondim,
             pathlines,
             pathlines_out.as_ref(),
@@ -285,6 +293,7 @@ fn dispatch(
             plane,
             width,
             height,
+            style,
             nondim,
             pathline: pl_args,
             contour_var,
@@ -297,6 +306,7 @@ fn dispatch(
             plane.as_deref(),
             width,
             height,
+            style,
             &nondim,
             &pl_args,
             contour_var.as_deref(),
@@ -648,6 +658,20 @@ fn parse_seed(s: &str) -> flowplot::Result<[f64; 2]> {
     Ok([x, y])
 }
 
+fn parse_plot_style(s: &str) -> Result<PlotStyle, String> {
+    s.parse()
+}
+
+/// When `--style jfm` is set and the user left the 512×512 CLI defaults, use
+/// the single-column JFM raster size.
+fn resolve_raster_size(style: PlotStyle, width: u32, height: u32) -> (u32, u32) {
+    if style == PlotStyle::Jfm && width == 512 && height == 512 {
+        (PlotStyle::JFM_WIDTH, PlotStyle::JFM_HEIGHT)
+    } else {
+        (width, height)
+    }
+}
+
 fn run_contour(
     path: &PathBuf,
     variable: &str,
@@ -658,6 +682,7 @@ fn run_contour(
     vmax: Option<f64>,
     width: u32,
     height: u32,
+    style: PlotStyle,
     nondim: &NondimArgs,
     do_pathlines: bool,
     pathlines_out: Option<&PathBuf>,
@@ -671,6 +696,7 @@ fn run_contour(
     }
     let ds = maybe_nondim(load_path(path)?, &nondim_args, nondim_args.suggest)?;
     let plane = parse_plane(plane)?;
+    let (width, height) = resolve_raster_size(style, width, height);
     let mut img = render_contour(
         &ds,
         &ContourOptions {
@@ -681,6 +707,7 @@ fn run_contour(
             vmax,
             width,
             height,
+            style,
         },
     )?;
 
@@ -694,10 +721,10 @@ fn run_contour(
             println!("pathlines: {} traces", lines.len());
         }
         if do_pathlines {
-            overlay_pathlines(&mut img, &lines);
+            overlay_pathlines_styled(&mut img, &lines, style);
         }
         if let Some(pout) = pathlines_out {
-            let separate = render_pathlines_png(&ds, &pl_opts, width, height)?;
+            let separate = render_pathlines_png_styled(&ds, &pl_opts, width, height, style)?;
             write_png(pout, &separate)?;
             pathlines_out_written = Some(pout.display().to_string());
             if !json {
@@ -724,9 +751,10 @@ fn run_contour(
         );
     } else {
         println!(
-            "wrote contour {} (var={}, range=[{}, {}])",
+            "wrote contour {} (var={}, style={:?}, range=[{}, {}])",
             out.display(),
             variable,
+            style,
             img.vmin,
             img.vmax
         );
@@ -811,6 +839,7 @@ fn run_pathlines_cmd(
     plane: Option<&str>,
     width: u32,
     height: u32,
+    style: PlotStyle,
     nondim: &NondimArgs,
     pl_args: &PathlineArgs,
     contour_var: Option<&str>,
@@ -824,13 +853,14 @@ fn run_pathlines_cmd(
     }
     let ds = maybe_nondim(load_path(path)?, &nondim_args, nondim_args.suggest)?;
     let plane = parse_plane(plane)?;
+    let (width, height) = resolve_raster_size(style, width, height);
     let pl_opts = build_pathline_opts(&ds, zone, plane, pl_args)?;
     let lines = trace_pathlines(&ds, &pl_opts)?;
     if !json {
         println!("pathlines: {} traces", lines.len());
     }
 
-    let mut img = if let Some(var) = contour_var {
+    let img = if let Some(var) = contour_var {
         let mut img = render_contour(
             &ds,
             &ContourOptions {
@@ -841,14 +871,14 @@ fn run_pathlines_cmd(
                 vmax,
                 width,
                 height,
+                style,
             },
         )?;
-        overlay_pathlines(&mut img, &lines);
+        overlay_pathlines_styled(&mut img, &lines, style);
         img
     } else {
-        render_pathlines_png(&ds, &pl_opts, width, height)?
+        render_pathlines_png_styled(&ds, &pl_opts, width, height, style)?
     };
-    let _ = &mut img;
     write_png(out, &img)?;
     if json {
         println!(
@@ -864,7 +894,7 @@ fn run_pathlines_cmd(
                 .unwrap_or_else(|| "null".into())
         );
     } else {
-        println!("wrote pathlines {}", out.display());
+        println!("wrote pathlines {} (style={:?})", out.display(), style);
     }
     Ok(())
 }
