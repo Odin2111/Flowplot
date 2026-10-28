@@ -352,15 +352,19 @@ fn draw_level_labels(img: &mut ContourImage, vmin: f64, vmax: f64, nlevels: u32)
     let legend_reserve = ((img.width as f64) * 0.10).round().clamp(48.0, 88.0) as u32;
     let plot_w = img.width.saturating_sub(legend_reserve).max(32);
     let margin = 2u32;
-    // Collect world hits without holding a grid borrow across draws.
+    // One hit per level (first mid-j crossing), then enforce pixel gaps.
     let mut world_hits: Vec<(f64, f64, String)> = Vec::new();
+    let mut found = vec![false; n];
     for i in 0..ni.saturating_sub(1) {
         let v0 = img.grid.value(i, j);
         let v1 = img.grid.value(i + 1, j);
         if !v0.is_finite() || !v1.is_finite() {
             continue;
         }
-        for &lev in &levels {
+        for (li, &lev) in levels.iter().enumerate() {
+            if found[li] {
+                continue;
+            }
             let cross = (v0 - lev) * (v1 - lev) <= 0.0 && (v0 - v1).abs() > 1e-30;
             if !cross {
                 continue;
@@ -373,11 +377,9 @@ fn draw_level_labels(img: &mut ContourImage, vmin: f64, vmax: f64, nlevels: u32)
                 y0 + t * (y1 - y0),
                 format_tick(lev),
             ));
-            if world_hits.len() >= n.min(12) {
-                break;
-            }
+            found[li] = true;
         }
-        if world_hits.len() >= n.min(12) {
+        if found.iter().all(|&f| f) {
             break;
         }
     }
@@ -386,7 +388,19 @@ fn draw_level_labels(img: &mut ContourImage, vmin: f64, vmax: f64, nlevels: u32)
         let (px, py) = crate::contour::world_to_pixel_plot(img, wx, wy, plot_w, margin);
         stamps.push((px, py, text));
     }
+    // Sort left→right and keep only stamps with a comfortable gap (Tecplot-like).
+    stamps.sort_by_key(|(px, _, _)| *px);
+    let min_gap = ((img.width as f32) * 0.07).clamp(48.0, 96.0);
+    let mut placed: Vec<(i32, i32, String)> = Vec::new();
     for (px, py, text) in stamps {
+        if let Some((lpx, _, _)) = placed.last() {
+            if (px - lpx).abs() < min_gap as i32 {
+                continue;
+            }
+        }
+        placed.push((px, py, text));
+    }
+    for (px, py, text) in placed {
         let (tw, th) = measure_text(&text, font_px);
         let tx = px + 4;
         let ty = py - th - 2;

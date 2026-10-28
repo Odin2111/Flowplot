@@ -109,8 +109,10 @@ class FlowplotGui(tk.Tk):
         self._legend_options_dialog: LegendOptionsDialog | None = None
         self._probe_dialog: ProbeDialog | None = None
         self.contour_details = ContourDetailsState()
-        self.tool_mode = tk.StringVar(value="orbit")  # orbit | probe | label
+        self.tool_mode = tk.StringVar(value="orbit")  # orbit | probe | pathlines
         self.probe_marks: list[tuple[int, int, str]] = []
+        self.pathline_seeds: list[tuple[float, float]] = []
+        self._pl_drag_start: tuple[int, int] | None = None
         self._preview_offset: tuple[int, int] = (0, 0)
         self._preview_size: tuple[int, int] = (0, 0)
         self._preview_native: tuple[int, int] = (0, 0)
@@ -159,8 +161,7 @@ class FlowplotGui(tk.Tk):
         }
 
         self._style()
-        self._build_menu()
-        self._build_menubar_row()
+        self._build_menu()  # single native menubar only (no duplicate button row)
         self._build_contour_toolbar()
         self._build_chrome()
         self._build_body()
@@ -199,9 +200,6 @@ class FlowplotGui(tk.Tk):
         style.configure("TCheckbutton", background=PANEL, foreground=FG)
         style.configure("TCombobox", fieldbackground="#ffffff", foreground=FG)
 
-    def _stub_menu(self, name: str):
-        return lambda: self.stub_plot(name)
-
     def _file_menu_items(self, menu: tk.Menu) -> None:
         menu.add_command(label="Open…", command=self.action_load, accelerator="Ctrl+O")
         menu.add_command(label="Export PNG…", command=self.action_export_png)
@@ -225,33 +223,18 @@ class FlowplotGui(tk.Tk):
         menu.add_radiobutton(label="Style · JFM", variable=self.plot_style, value="jfm")
 
     def _plot_menu_items(self, menu: tk.Menu) -> None:
-        """Tecplot-like Plot menu (Flowplot names)."""
-        menu.add_command(label="Axes…", command=self._stub_menu("Axes"))
-        menu.add_command(label="Assign XY…", command=self._stub_menu("Assign XY"))
+        """Tecplot-like Plot menu — only wired actions (no stub placeholders)."""
         menu.add_command(label="Zone Style…", command=self.action_zone_style)
         menu.add_separator()
         menu.add_command(label="Contour Details…", command=self.action_contour_details)
         menu.add_command(label="Legend Options…", command=self.action_legend_options)
-        menu.add_command(label="Pathlines…", command=self.action_pathlines_dialog)
+        menu.add_command(label="Pathlines (insert)…", command=self.action_pathlines_tool)
         menu.add_command(label="Iso-Surfaces…", command=self.action_isosurfaces)
         menu.add_command(label="Slices…", command=self.action_slices_focus)
-        menu.add_command(label="Vector…", command=self._stub_menu("Vector"))
-        menu.add_command(label="Scatter…", command=self._stub_menu("Scatter"))
         menu.add_separator()
-        menu.add_command(label="Blanking…", command=self._stub_menu("Blanking"))
-        menu.add_command(label="Label Points…", command=self._stub_menu("Label Points"))
-        menu.add_separator()
+        menu.add_command(label="Clear pathline seeds", command=self.clear_pathline_seeds)
         menu.add_command(label="Redraw", command=self.action_redraw)
         menu.add_command(label="Apply nondim scales", command=self.action_nondim)
-
-    def _insert_menu_items(self, menu: tk.Menu) -> None:
-        menu.add_command(label="Text…", command=self._stub_menu("Insert Text"))
-        menu.add_command(label="Geometry…", command=self._stub_menu("Insert Geometry"))
-        menu.add_command(label="Image…", command=self._stub_menu("Insert Image"))
-
-    def _animate_menu_items(self, menu: tk.Menu) -> None:
-        menu.add_command(label="Animate zones…", command=self._stub_menu("Animate zones"))
-        menu.add_command(label="Movie…", command=self._stub_menu("Movie"))
 
     def _data_menu_items(self, menu: tk.Menu) -> None:
         menu.add_command(label="Dataset info…", command=self.action_dataset_info)
@@ -262,7 +245,6 @@ class FlowplotGui(tk.Tk):
 
     def _frame_menu_items(self, menu: tk.Menu) -> None:
         menu.add_command(label="Fit to Viewport", command=self.action_redraw)
-        menu.add_command(label="Frame style…", command=self._stub_menu("Frame style"))
 
     def _options_menu_items(self, menu: tk.Menu) -> None:
         menu.add_command(label="Legend Options…", command=self.action_legend_options)
@@ -271,13 +253,13 @@ class FlowplotGui(tk.Tk):
         menu.add_radiobutton(label="Plot style · Default", variable=self.plot_style, value="default")
         menu.add_radiobutton(label="Plot style · JFM", variable=self.plot_style, value="jfm")
 
-    def _scripting_menu_items(self, menu: tk.Menu) -> None:
-        menu.add_command(label="PyMacro…", command=self._stub_menu("PyMacro"))
-        menu.add_command(label="Run script…", command=self._stub_menu("Run script"))
-
     def _tools_menu_items(self, menu: tk.Menu) -> None:
+        menu.add_command(label="Orbit (drag)", command=lambda: self._set_tool_mode("orbit"))
         menu.add_command(label="Probe tool", command=self.action_toggle_probe)
-        menu.add_command(label="Contour ± Level", command=self.action_contour_add_level)
+        menu.add_command(label="Pathlines insert", command=self.action_pathlines_tool)
+        menu.add_separator()
+        menu.add_command(label="Contour ＋ Level", command=self.action_contour_add_level)
+        menu.add_command(label="Contour － Level", command=self.action_contour_remove_level)
         menu.add_command(label="Contour Abc Label", command=self.action_toggle_contour_labels)
 
     def _analyze_menu_items(self, menu: tk.Menu) -> None:
@@ -293,18 +275,16 @@ class FlowplotGui(tk.Tk):
         menu.add_command(label="About Flowplot", command=self.show_about)
 
     def _build_menu(self) -> None:
+        """Single native menubar. Stub-only menus (Insert/Animate/Scripting) omitted until wired."""
         menubar = tk.Menu(self, tearoff=0, bg=MENU_BG, fg=FG, activebackground=ACCENT, activeforeground="#fff")
         builders = (
             ("File", self._file_menu_items),
             ("Edit", self._edit_menu_items),
             ("View", self._view_menu_items),
             ("Plot", self._plot_menu_items),
-            ("Insert", self._insert_menu_items),
-            ("Animate", self._animate_menu_items),
             ("Data", self._data_menu_items),
             ("Frame", self._frame_menu_items),
             ("Options", self._options_menu_items),
-            ("Scripting", self._scripting_menu_items),
             ("Tools", self._tools_menu_items),
             ("Analyze", self._analyze_menu_items),
             ("Help", self._help_menu_items),
@@ -315,50 +295,6 @@ class FlowplotGui(tk.Tk):
             menubar.add_cascade(label=label, menu=m)
         self.config(menu=menubar)
         self.bind("<Control-o>", lambda _e: self.action_load())
-
-    def _build_menubar_row(self) -> None:
-        """Visible menu strip so names stay obvious on X11 / screenshots."""
-        row = tk.Frame(self, bg=MENU_BG, highlightthickness=0)
-        row.pack(side=tk.TOP, fill=tk.X)
-
-        def menubutton(label: str) -> tk.Menubutton:
-            b = tk.Menubutton(
-                row,
-                text=label,
-                bg=MENU_BG,
-                fg=FG,
-                activebackground=ACCENT,
-                activeforeground="#ffffff",
-                relief=tk.FLAT,
-                font=("Helvetica", 9),
-                padx=6,
-                pady=3,
-            )
-            b.pack(side=tk.LEFT)
-            return b
-
-        builders = (
-            ("File", self._file_menu_items),
-            ("Edit", self._edit_menu_items),
-            ("View", self._view_menu_items),
-            ("Plot", self._plot_menu_items),
-            ("Insert", self._insert_menu_items),
-            ("Animate", self._animate_menu_items),
-            ("Data", self._data_menu_items),
-            ("Frame", self._frame_menu_items),
-            ("Options", self._options_menu_items),
-            ("Scripting", self._scripting_menu_items),
-            ("Tools", self._tools_menu_items),
-            ("Analyze", self._analyze_menu_items),
-            ("Help", self._help_menu_items),
-        )
-        for label, fill in builders:
-            mb = menubutton(label)
-            m = tk.Menu(mb, tearoff=0)
-            fill(m)
-            mb.configure(menu=m)
-
-        tk.Frame(self, bg="#b8c0c8", height=1).pack(side=tk.TOP, fill=tk.X)
 
     def _build_contour_toolbar(self) -> None:
         """Always-visible Contour ± / Label / Probe / Details strip under the menu."""
@@ -381,6 +317,7 @@ class FlowplotGui(tk.Tk):
         tool_btn("－ Level", self.action_contour_remove_level)
         tool_btn("Abc Label", self.action_toggle_contour_labels)
         self._probe_btn = tool_btn("✎ Probe", self.action_toggle_probe)
+        tool_btn("⇢ Pathlines", self.action_pathlines_tool)
         ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=6)
         tool_btn("Details…", self.action_contour_details)
         tool_btn("Legend…", self.action_legend_options)
@@ -397,9 +334,11 @@ class FlowplotGui(tk.Tk):
     def _levels_status_text(self) -> str:
         cd = self.contour_details
         mode = "banded" if cd.cli_coloring() == "banded" else "continuous"
-        probe = " · probe" if self.tool_mode.get() == "probe" else ""
+        tool = self.tool_mode.get()
+        tool_tag = f" · {tool}" if tool != "orbit" else ""
         labels = " · labels" if cd.show_labels else ""
-        return f"{cd.nlevels} levels · {mode} · {cd.colormap}{labels}{probe}"
+        seeds = f" · {len(self.pathline_seeds)} seed(s)" if self.pathline_seeds else ""
+        return f"{cd.nlevels} levels · {mode} · {cd.colormap}{labels}{tool_tag}{seeds}"
 
     def _refresh_levels_label(self) -> None:
         if hasattr(self, "levels_label"):
@@ -476,7 +415,7 @@ class FlowplotGui(tk.Tk):
         self.viewport.bind("<ButtonRelease-1>", self._on_view_release)
         tip = ttk.Label(
             view_wrap,
-            text="Menus · Contour ±/Label/Probe/Legend · Analyze charts · Drag=orbit · Viewport full width",
+            text="Single menubar · Probe / Pathlines exclusive · Contour ± levels · Drag=orbit",
             font=("Helvetica", 8),
             foreground=MUTED,
         )
@@ -1005,8 +944,13 @@ class FlowplotGui(tk.Tk):
         self.action_redraw(interactive=False)
 
     def _on_view_press(self, event: tk.Event) -> None:
-        if self.tool_mode.get() == "probe":
+        mode = self.tool_mode.get()
+        if mode == "probe":
             self._probe_at_canvas(event.x, event.y)
+            return
+        if mode == "pathlines":
+            self._pl_drag_start = (event.x, event.y)
+            self.viewport.delete("pathline_drag")
             return
         self._drag_last = (event.x, event.y)
         self._dragging = True
@@ -1016,7 +960,22 @@ class FlowplotGui(tk.Tk):
         self._render_gen += 1
 
     def _on_view_drag(self, event: tk.Event) -> None:
-        if self.tool_mode.get() == "probe" or self._drag_last is None:
+        mode = self.tool_mode.get()
+        if mode == "probe":
+            return
+        if mode == "pathlines":
+            if self._pl_drag_start is None:
+                return
+            x0, y0 = self._pl_drag_start
+            self.viewport.delete("pathline_drag")
+            self.viewport.create_line(
+                x0, y0, event.x, event.y, fill="#c00000", width=2, tags="pathline_drag"
+            )
+            self.viewport.create_oval(
+                x0 - 4, y0 - 4, x0 + 4, y0 + 4, outline="#c00000", width=1, tags="pathline_drag"
+            )
+            return
+        if self._drag_last is None:
             return
         dx = event.x - self._drag_last[0]
         dy = event.y - self._drag_last[1]
@@ -1029,8 +988,12 @@ class FlowplotGui(tk.Tk):
         # Tecplot / GPU display-list style: transform last frame — no CLI.
         self._warp_last_frame()
 
-    def _on_view_release(self, _event: tk.Event) -> None:
-        if self.tool_mode.get() == "probe":
+    def _on_view_release(self, event: tk.Event) -> None:
+        mode = self.tool_mode.get()
+        if mode == "probe":
+            return
+        if mode == "pathlines":
+            self._finish_pathline_drag(event.x, event.y)
             return
         self._drag_last = None
         self._dragging = False
@@ -1254,6 +1217,9 @@ class FlowplotGui(tk.Tk):
         self.layer_vector.set(False)
         self.layer_edge.set(False)
         self.layer_scatter.set(False)
+        self.pathline_seeds.clear()
+        self.clear_probe_marks()
+        self._set_tool_mode("orbit")
         self.plane_axis.set("auto")
         self.plane_index.set(0)
         self.active_zone = 0
@@ -1377,6 +1343,7 @@ class FlowplotGui(tk.Tk):
         cd = self.contour_details
         contour_args = self._contour_cli_args()
 
+        seed_key = ";".join(f"{x:.6g},{y:.6g}" for x, y in self.pathline_seeds[-24:])
         cache_key = "|".join(
             [
                 str(ds),
@@ -1384,6 +1351,7 @@ class FlowplotGui(tk.Tk):
                 f"c={want_contour}",
                 f"s={want_shade}",
                 f"p={want_pathlines}",
+                f"seeds={seed_key}",
                 f"z={zone_idx}",
                 f"mc={','.join(mesh_color_args)}",
                 f"cd={','.join(contour_args)}",
@@ -1499,6 +1467,7 @@ class FlowplotGui(tk.Tk):
                 args.extend(mesh_color_args)
             if want_pathlines and not interactive:
                 args.append("--pathlines")
+                args.extend(self._pathline_seed_args())
             return self._run_cli(args)
         if want_pathlines:
             args = [
@@ -1516,6 +1485,9 @@ class FlowplotGui(tk.Tk):
             ]
             if var:
                 args.extend(["--var", var])
+            seeds = self._pathline_seed_args()
+            if seeds:
+                args.extend(seeds)
             return self._run_cli(args)
         args = [
             "mesh",
@@ -1598,22 +1570,28 @@ class FlowplotGui(tk.Tk):
         self.action_redraw()
 
     def action_contour_add_level(self) -> None:
+        """Tecplot Contour ＋ Level — bump count, force Banded Contour, redraw."""
         self.contour_details.nlevels = min(64, int(self.contour_details.nlevels) + 1)
-        if self.contour_details.coloring.lower().startswith("cont"):
-            self.contour_details.coloring = "Banded"
+        self.contour_details.coloring = "Banded"
+        self.layer_contour.set(True)
+        if not self.var_name.get().strip() and self.variables:
+            self.var_name.set(first_scalar(self.variables))
         self._refresh_levels_label()
-        if self.layer_contour.get():
-            self._render_cache.clear()
-            self.action_redraw()
+        self._log(f"Contour levels → {self.contour_details.nlevels} (banded)")
+        self._render_cache.clear()
+        self.action_redraw()
 
     def action_contour_remove_level(self) -> None:
+        """Tecplot Contour － Level — drop count, force Banded Contour, redraw."""
         self.contour_details.nlevels = max(2, int(self.contour_details.nlevels) - 1)
-        if self.contour_details.coloring.lower().startswith("cont"):
-            self.contour_details.coloring = "Banded"
+        self.contour_details.coloring = "Banded"
+        self.layer_contour.set(True)
+        if not self.var_name.get().strip() and self.variables:
+            self.var_name.set(first_scalar(self.variables))
         self._refresh_levels_label()
-        if self.layer_contour.get():
-            self._render_cache.clear()
-            self.action_redraw()
+        self._log(f"Contour levels → {self.contour_details.nlevels} (banded)")
+        self._render_cache.clear()
+        self.action_redraw()
 
     def action_toggle_contour_labels(self) -> None:
         self.contour_details.show_labels = not self.contour_details.show_labels
@@ -1651,34 +1629,74 @@ class FlowplotGui(tk.Tk):
 
         self._legend_options_dialog = LegendOptionsDialog(self, state, on_apply=on_apply)
 
-    def action_toggle_probe(self) -> None:
-        if self.tool_mode.get() == "probe":
-            self.tool_mode.set("orbit")
+    def _set_tool_mode(self, mode: str) -> None:
+        """Exclusive tool modes: orbit | probe | pathlines."""
+        mode = mode if mode in ("orbit", "probe", "pathlines") else "orbit"
+        prev = self.tool_mode.get()
+        self.tool_mode.set(mode)
+        self.viewport.delete("pathline_drag")
+        self._pl_drag_start = None
+        if mode == "probe":
+            self.viewport.configure(cursor="crosshair")
+            self._set_status("Probe — click Viewport (Pathlines drag disabled)")
+            self.action_open_probe_window()
+        elif mode == "pathlines":
+            self.viewport.configure(cursor="pencil")
+            self.layer_pathlines.set(True)
+            self._set_status("Pathlines — click-drag to place seeds (Probe disabled)")
+        else:
             self.viewport.configure(cursor="fleur")
             self._set_status("Orbit")
-        else:
-            self.tool_mode.set("probe")
-            self.viewport.configure(cursor="crosshair")
-            self._set_status("Probe — click the Viewport; Probe window lists all variables")
-            self.action_open_probe_window()
+        if prev != mode:
+            self._log(f"Tool mode: {prev} → {mode}")
         self._refresh_levels_label()
+
+    def action_toggle_probe(self) -> None:
+        if self.tool_mode.get() == "probe":
+            self._set_tool_mode("orbit")
+        else:
+            self._set_tool_mode("probe")
+
+    def action_pathlines_tool(self) -> None:
+        """Enter Pathlines insert mode (Tecplot-style click-drag seeds)."""
+        self._set_tool_mode("pathlines")
 
     def action_open_probe_window(self) -> None:
         existing = self._probe_dialog
         if existing is not None and existing.winfo_exists():
+            try:
+                existing.attributes("-topmost", True)
+            except tk.TclError:
+                pass
             existing.lift()
             existing.focus_force()
             return
         self._probe_dialog = ProbeDialog(
             self,
             on_clear=self.clear_probe_marks,
-            on_close=self.clear_probe_marks,
+            on_close=self._on_probe_window_close,
         )
+
+    def _on_probe_window_close(self) -> None:
+        """Clear all markers when Probe closes; leave exclusive probe mode."""
+        self.clear_probe_marks()
+        self._probe_dialog = None
+        if self.tool_mode.get() == "probe":
+            self._set_tool_mode("orbit")
 
     def clear_probe_marks(self) -> None:
         self.probe_marks.clear()
         self.viewport.delete("probe")
         self._log("Probe markers cleared")
+
+    def clear_pathline_seeds(self) -> None:
+        self.pathline_seeds.clear()
+        self.viewport.delete("pathline_drag")
+        self._refresh_levels_label()
+        self._log("Pathline seeds cleared")
+        if self.layer_pathlines.get():
+            self._render_cache.clear()
+            self.action_redraw()
 
     def _draw_probe_overlays(self) -> None:
         self.viewport.delete("probe")
@@ -1780,8 +1798,97 @@ class FlowplotGui(tk.Tk):
         self._set_status(label)
 
     def action_pathlines_dialog(self) -> None:
+        self.action_pathlines_tool()
+
+    def _canvas_to_native_px(self, cx: int, cy: int) -> tuple[int, int] | None:
+        ox, oy = self._preview_offset
+        pw, ph = self._preview_size
+        nw, nh = self._preview_native
+        if pw < 2 or ph < 2 or nw < 2 or nh < 2:
+            return None
+        lx = cx - ox
+        ly = cy - oy
+        if lx < 0 or ly < 0 or lx >= pw or ly >= ph:
+            return None
+        return int(lx * nw / pw), int(ly * nh / ph)
+
+    def _world_at_canvas(self, cx: int, cy: int) -> tuple[float, float] | None:
+        """Map Viewport click → world (x,y) via `flowplot probe --json`."""
+        ds = self.dataset_path
+        if not ds or not ds.is_file():
+            return None
+        native = self._canvas_to_native_px(cx, cy)
+        if native is None:
+            return None
+        px, py = native
+        nw, nh = self._preview_native
+        args = [
+            "probe",
+            str(ds),
+            "--px",
+            str(px),
+            "--py",
+            str(py),
+            "--width",
+            str(nw),
+            "--height",
+            str(nh),
+            *self._plane_cli_arg(),
+            *self._view_cli_arg(),
+            "--zone",
+            str(self._active_zone_index()),
+            "--json",
+        ]
+        var = self.var_name.get().strip()
+        if var:
+            args.extend(["--var", var])
+        result = self._run_cli(args)
+        if not result or result.returncode != 0 or not result.stdout:
+            return None
+        try:
+            payload = json.loads(result.stdout.strip().splitlines()[-1])
+            if payload.get("status") != "ok":
+                return None
+            return float(payload["x"]), float(payload["y"])
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError, IndexError):
+            return None
+
+    def _finish_pathline_drag(self, cx: int, cy: int) -> None:
+        self.viewport.delete("pathline_drag")
+        start = self._pl_drag_start
+        self._pl_drag_start = None
+        if start is None:
+            return
+        x0, y0 = start
+        # Seed at press; if dragged meaningfully, also seed along the segment.
+        points = [(x0, y0)]
+        dist = ((cx - x0) ** 2 + (cy - y0) ** 2) ** 0.5
+        if dist > 12:
+            for t in (0.35, 0.7, 1.0):
+                points.append((int(x0 + t * (cx - x0)), int(y0 + t * (cy - y0))))
+        added = 0
+        for px, py in points:
+            world = self._world_at_canvas(px, py)
+            if world is None:
+                continue
+            if world in self.pathline_seeds:
+                continue
+            self.pathline_seeds.append(world)
+            added += 1
+        if added == 0:
+            self._log("Pathlines: click outside plot or probe failed — no seed")
+            return
         self.layer_pathlines.set(True)
+        self._refresh_levels_label()
+        self._log(f"Pathlines: +{added} seed(s) → {len(self.pathline_seeds)} total")
+        self._render_cache.clear()
         self.action_redraw()
+
+    def _pathline_seed_args(self) -> list[str]:
+        args: list[str] = []
+        for x, y in self.pathline_seeds[-24:]:
+            args.extend(["--seed", f"{x:.8g},{y:.8g}"])
+        return args
 
     def action_isosurfaces(self) -> None:
         """Iso-Surfaces derived object — first slice uses banded Contour levels."""
