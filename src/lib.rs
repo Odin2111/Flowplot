@@ -43,8 +43,11 @@ pub mod readers;
 pub mod validate;
 pub mod view;
 
-pub use annotate::{draw_annotations, AnnotationInfo};
-pub use contour::{render_contour, write_png, ContourImage, ContourOptions, PlotStyle};
+pub use annotate::{draw_annotations, draw_probe_label, AnnotationInfo};
+pub use contour::{
+    pixel_to_world, render_contour, world_to_pixel, world_to_pixel_plot, write_png, ColorMapName,
+    ContourColoring, ContourImage, ContourOptions, PlotStyle,
+};
 pub use dataset::{
     Connectivity, Dataset, ElementType, Location, OrderedDims, Topology, VariableData, Zone,
     ZoneMeta,

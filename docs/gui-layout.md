@@ -6,17 +6,19 @@ Native **tkinter** shell under `gui/flowplot_gui.py`. The viewport previews PNGs
 
 | Region | Contents |
 |--------|----------|
-| Top | Wordmark, menus **File / Plot / Style / Agents / Help**, tool strip **Open · Redraw · Export PNG** |
-| Left | **Plot** panel: plot type (2D/3D Cartesian…), **Show Zone Layers** (Mesh / Contour / Shade / Vector / Edge / Scatter), **Show Derived Objects** (Pathlines), contour variable combo from `flowplot info`, **Zone Style…** |
-| Center | Viewport — Mesh PNG by default; Contour / Pathlines when those layers are on. **Drag** warps the last settled frame (no CLI); **settle** runs preview then full fill |
-| Right | Nondim scales **U_ref, Lx, Ly, Lz, T_ref** → CLI flags, plus a short log |
+| Top | Menus **File / Plot / Style / Agents / Help**, always-visible Contour toolbar **＋ Level / － Level / Abc Label / ✎ Probe / Details…**, wordmark + **Open · Redraw · Export PNG** |
+| Left | **Plot** panel (scrollable): layers, variable, cut/view, Zone Style / Contour Details, collapsible **Nondim scales ▸**, Log |
+| Center | **Viewport full width** (no right column). CLI raster sized 1:1 to canvas; mesh `--fill`. **✎ Probe** click prints values; drag = orbit |
+| Right | *(removed — Nondim moved under Plot)* |
 
 ## Defaults (match Tecplot)
 
 - Mesh **on**, Contour **off** after load
 - Variable combo filled from dataset; default = first non-coordinate scalar (e.g. cone20 → `Pressure`, not `P`)
-- Plot menu: Axis…, Assign XY…, **Zone Style…** (Mesh + Contour working; other tabs stub), Pathlines…, Contour…, Vector…, Scatter…, Blanking…, Label Points… (stubs where not yet implemented; Pathlines = Tecplot “Streamtraces”)
+- Plot menu: Axis…, Assign XY…, **Zone Style…** (Mesh + Contour working; other tabs stub), Pathlines…, **Contour…** (Contour Details), Vector…, Scatter…, Blanking…, Label Points… (stubs where not yet implemented; Pathlines = Tecplot “Streamtraces”)
 - Zone Style Apply → per-zone Show Zone / Show Mesh / Contour + mesh color → CLI `--zone` / `--mesh-color`
+- Contour Details (Levels and Color / Bands / Lines / Labels / Legend): working slice = levels, colormap, banded vs continuous, legend; other tabs stub
+- Annotation HUD uses native fontdue AA at 1:1 Viewport size (no stretch); colorbar labels sized to fit
 
 ## Run
 

@@ -36,7 +36,7 @@ cargo build
 python3 gui/flowplot_gui.py
 ```
 
-**File → Open** runs `info`, fills the variable list, enables **Mesh**, leaves **Contour** off, and draws an equal-aspect wireframe into the viewport. Turn on Contour (and pick e.g. `Pressure`) to overlay. **XYZ** buttons and viewport drag rotate the crate; **Cut / Track** sets the I/J/K plane for mesh and contours. **Plot → Zone Style…** sets per-zone Show Zone / Mesh / Contour (other Zone Style tabs stub). See [docs/gui-layout.md](docs/gui-layout.md).
+**File → Open** runs `info`, fills the variable list, enables **Mesh**, leaves **Contour** off, and fills the Viewport (no letterbox waste). Turn on Contour (and pick e.g. `Pressure`) to overlay. Contour toolbar under the menu: **＋/－** levels, **Abc** labels, **✎ Probe** (click prints values on the plot), **Details…** → Contour & Multi-Coloring Details. **XYZ** buttons and viewport drag rotate; **Cut / Track** sets the plane. **Plot → Zone Style…** / **Plot → Contour…** for zone and contour details. See [docs/gui-layout.md](docs/gui-layout.md).
 
 ## CLI
 
@@ -46,18 +46,24 @@ flowplot load <path> [--json]
 flowplot <path> [--json]          # same as load
 flowplot info <path> [--json]
 
-# Mesh / zone grid (equal aspect; Contour off) — default first view
+# Mesh / zone grid (equal aspect by default; --fill for viewport fill)
 flowplot mesh <path> -o mesh.png [--zone 0] [--plane k=0] \
   [--view auto|+x|-x|+y|-y|+z|-z|az=35,el=55] \
-  [--width 800] [--height 600] [--style default|jfm] [--json]
+  [--width 800] [--height 600] [--style default|jfm] [--fill] [--margin 4] [--json]
 
-# Contour any scalar to PNG
+# Contour any scalar to PNG (banded/continuous, colormap, legend)
 flowplot contour <path> --var P -o out.png [--plane k=0] \
   [--view +z] [--vmin 0] [--vmax 1] \
   [--width 512] [--height 512] [--zone 0] [--style default|jfm] \
+  [--coloring continuous|banded] [--levels 16] [--colormap default|turbo|jfm|coolwarm|grayscale] \
+  [--legend|--no-legend] [--margin 4] \
   [--u-ref U] [--lx Lx] [--ly Ly] [--lz Lz] [--t-ref T] \
   [--mesh] [--pathlines] [--pathlines-out lines.png] [--seed x,y] [--u-var U] [--v-var V] [--dt 0.02] \
   [--json]
+
+# Probe scalar at world or pixel coords (Tecplot-like)
+flowplot probe <path> --var P --x X --y Y [--json]
+flowplot probe <path> --var P --px PX --py PY --width W --height H [-o stamped.png] [--json]
 
 # Nondim suggestions / apply scales (no invented physics)
 flowplot nondim <path> [--u-ref U] [--lx Lx] [--ly Ly] [--lz Lz] [--t-ref T] \

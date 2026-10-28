@@ -23,6 +23,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from agents_panel import AgentsPanel
+from contour_details_dialog import ContourDetailsDialog, ContourDetailsState
 from zone_style_dialog import (
     DEFAULT_MESH_COLOR,
     ZoneStyleDialog,
@@ -102,6 +103,13 @@ class FlowplotGui(tk.Tk):
         self._preview_photo = None
         self._preview_after: str | None = None
         self._zone_style_dialog: ZoneStyleDialog | None = None
+        self._contour_details_dialog: ContourDetailsDialog | None = None
+        self.contour_details = ContourDetailsState()
+        self.tool_mode = tk.StringVar(value="orbit")  # orbit | probe | label
+        self.probe_marks: list[tuple[int, int, str]] = []
+        self._preview_offset: tuple[int, int] = (0, 0)
+        self._preview_size: tuple[int, int] = (0, 0)
+        self._preview_native: tuple[int, int] = (0, 0)
 
         # Tecplot Show Zone Layers — Mesh ON, Contour OFF by default.
         self.layer_mesh = tk.BooleanVar(value=True)
@@ -146,6 +154,7 @@ class FlowplotGui(tk.Tk):
         self._style()
         self._build_menu()
         self._build_menubar_row()
+        self._build_contour_toolbar()
         self._build_chrome()
         self._build_body()
         self._build_status()
@@ -190,7 +199,7 @@ class FlowplotGui(tk.Tk):
         menu.add_command(label="Zone Style…", command=self.action_zone_style)
         menu.add_separator()
         menu.add_command(label="Pathlines…", command=self.action_pathlines_dialog)
-        menu.add_command(label="Contour…", command=self.action_enable_contour)
+        menu.add_command(label="Contour…", command=self.action_contour_details)
         menu.add_command(label="Vector…", command=lambda: self.stub_plot("Vector"))
         menu.add_command(label="Scatter…", command=lambda: self.stub_plot("Scatter"))
         menu.add_separator()
@@ -281,6 +290,50 @@ class FlowplotGui(tk.Tk):
 
         tk.Frame(self, bg="#b8c0c8", height=1).pack(side=tk.TOP, fill=tk.X)
 
+    def _build_contour_toolbar(self) -> None:
+        """Always-visible Contour ± / Label / Probe / Details strip under the menu."""
+        bar = tk.Frame(self, bg="#cfd5db", highlightthickness=0)
+        bar.pack(side=tk.TOP, fill=tk.X)
+        tk.Label(
+            bar,
+            text="Contour tools",
+            bg="#cfd5db",
+            fg=ACCENT,
+            font=("Helvetica", 9, "bold"),
+        ).pack(side=tk.LEFT, padx=(10, 8), pady=5)
+
+        def tool_btn(text: str, cmd) -> ttk.Button:
+            b = ttk.Button(bar, text=text, style="Tool.TButton", command=cmd)
+            b.pack(side=tk.LEFT, padx=2, pady=4)
+            return b
+
+        tool_btn("＋ Level", self.action_contour_add_level)
+        tool_btn("－ Level", self.action_contour_remove_level)
+        tool_btn("Abc Label", self.action_toggle_contour_labels)
+        self._probe_btn = tool_btn("✎ Probe", self.action_toggle_probe)
+        ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=6)
+        tool_btn("Details…", self.action_contour_details)
+        self.levels_label = tk.Label(
+            bar,
+            text=self._levels_status_text(),
+            bg="#cfd5db",
+            fg=FG,
+            font=("Helvetica", 9),
+        )
+        self.levels_label.pack(side=tk.LEFT, padx=10)
+        tk.Frame(self, bg="#9aa3ab", height=1).pack(side=tk.TOP, fill=tk.X)
+
+    def _levels_status_text(self) -> str:
+        cd = self.contour_details
+        mode = "banded" if cd.cli_coloring() == "banded" else "continuous"
+        probe = " · probe" if self.tool_mode.get() == "probe" else ""
+        labels = " · labels" if cd.show_labels else ""
+        return f"{cd.nlevels} levels · {mode} · {cd.colormap}{labels}{probe}"
+
+    def _refresh_levels_label(self) -> None:
+        if hasattr(self, "levels_label"):
+            self.levels_label.configure(text=self._levels_status_text())
+
     def _build_chrome(self) -> None:
         chrome = ttk.Frame(self, style="MenuBar.TFrame")
         chrome.pack(side=tk.TOP, fill=tk.X)
@@ -311,21 +364,32 @@ class FlowplotGui(tk.Tk):
 
     def _build_body(self) -> None:
         body = ttk.Frame(self)
-        body.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8, pady=6)
+        body.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=4, pady=4)
 
-        # Left: Tecplot-like Plot sidebar
-        left = ttk.Frame(body, style="Panel.TFrame", width=240)
-        left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
-        left.pack_propagate(False)
+        # Left Plot sidebar (scrollable). Nondim lives here; no right column.
+        left_wrap = ttk.Frame(body, style="Panel.TFrame", width=252)
+        left_wrap.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 4))
+        left_wrap.pack_propagate(False)
+
+        left_canvas = tk.Canvas(left_wrap, bg=PANEL, highlightthickness=0, width=236)
+        left_scroll = ttk.Scrollbar(left_wrap, orient=tk.VERTICAL, command=left_canvas.yview)
+        left_canvas.configure(yscrollcommand=left_scroll.set)
+        left_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        left_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        left = ttk.Frame(left_canvas, style="Panel.TFrame")
+        left_win = left_canvas.create_window((0, 0), window=left, anchor="nw")
+
+        def _sync_left(_event: tk.Event | None = None) -> None:
+            left_canvas.configure(scrollregion=left_canvas.bbox("all"))
+            left_canvas.itemconfigure(left_win, width=max(left_canvas.winfo_width(), 220))
+
+        left.bind("<Configure>", _sync_left)
+        left_canvas.bind("<Configure>", _sync_left)
         self._build_plot_panel(left)
 
-        # Center viewport
+        # Viewport takes the full remaining width.
         view_wrap = ttk.Frame(body)
-        view_wrap.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
-        view_label = ttk.Label(
-            view_wrap, text="Viewport", font=("Helvetica", 9, "bold"), foreground=MUTED
-        )
-        view_label.pack(anchor="w", pady=(0, 4))
+        view_wrap.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.viewport = tk.Canvas(
             view_wrap,
@@ -341,55 +405,12 @@ class FlowplotGui(tk.Tk):
         self.viewport.bind("<ButtonRelease-1>", self._on_view_release)
         tip = ttk.Label(
             view_wrap,
-            text="Drag = cheap last-frame warp · settle = preview then full · Cut/Track sets plane",
+            text="Contour toolbar above · Drag = orbit · ✎ Probe click prints values · Viewport full width",
             font=("Helvetica", 8),
             foreground=MUTED,
         )
-        tip.pack(anchor="w", pady=(4, 0))
-
-        # Right nondim column
-        right = ttk.Frame(body, style="Panel.TFrame", width=200)
-        right.pack(side=tk.RIGHT, fill=tk.Y)
-        right.pack_propagate(False)
-
-        ttk.Label(right, text="Nondim scales", style="Panel.TLabel", font=("Helvetica", 10, "bold")).pack(
-            anchor="w", padx=12, pady=(12, 4)
-        )
-        ttk.Label(
-            right,
-            text="--u-ref / --lx / --ly / --lz / --t-ref",
-            style="Muted.TLabel",
-            justify=tk.LEFT,
-        ).pack(anchor="w", padx=12, pady=(0, 10))
-
-        form = ttk.Frame(right, style="Panel.TFrame")
-        form.pack(fill=tk.X, padx=12)
-        for key, var in self.scale_vars.items():
-            row = ttk.Frame(form, style="Panel.TFrame")
-            row.pack(fill=tk.X, pady=3)
-            ttk.Label(row, text=key, width=7, style="Panel.TLabel").pack(side=tk.LEFT)
-            ttk.Entry(row, textvariable=var, width=12, style="Scale.TEntry").pack(
-                side=tk.LEFT, fill=tk.X, expand=True
-            )
-
-        ttk.Button(right, text="Apply nondim", style="Tool.TButton", command=self.action_nondim).pack(
-            padx=12, pady=14, anchor="w"
-        )
-
-        self.log = tk.Text(
-            right,
-            height=12,
-            width=24,
-            bg="#fafbfc",
-            fg=FG,
-            relief=tk.FLAT,
-            highlightthickness=1,
-            highlightbackground="#b8c0c8",
-            font=("DejaVu Sans Mono", 8),
-            wrap=tk.WORD,
-        )
-        self.log.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
-        self._log("Open a dataset — Mesh layer on by default (crate / wireframe).")
+        tip.pack(anchor="w", pady=(2, 0))
+        self._log("Open a dataset — Contour toolbar always visible; Viewport uses full width.")
 
     def _build_plot_panel(self, parent: ttk.Frame) -> None:
         ttk.Label(parent, text="Plot", style="Panel.TLabel", font=("Helvetica", 11, "bold")).pack(
@@ -519,16 +540,71 @@ class FlowplotGui(tk.Tk):
         ttk.Button(parent, text="Zone Style…", style="Tool.TButton", command=self.action_zone_style).pack(
             padx=12, pady=(2, 4), anchor="w"
         )
+        ttk.Button(parent, text="Contour Details…", style="Tool.TButton", command=self.action_contour_details).pack(
+            padx=12, pady=(2, 4), anchor="w"
+        )
         ttk.Button(parent, text="Redraw layers", style="Tool.TButton", command=self.action_redraw).pack(
             padx=12, pady=(4, 8), anchor="w"
         )
 
+        # Collapsible Nondim (was a right column — Viewport now full width).
+        self.nondim_expanded = tk.BooleanVar(value=False)
+        self._nondim_hdr = ttk.Frame(parent, style="Panel.TFrame")
+        self._nondim_hdr.pack(fill=tk.X, padx=10, pady=(4, 0))
+        ttk.Checkbutton(
+            self._nondim_hdr,
+            text="Nondim scales ▸",
+            variable=self.nondim_expanded,
+            command=self._toggle_nondim_panel,
+        ).pack(side=tk.LEFT)
+        self.nondim_body = ttk.LabelFrame(parent, text="U_ref / Lx / Ly / Lz / T_ref", padding=(8, 4))
+        form = ttk.Frame(self.nondim_body, style="Panel.TFrame")
+        form.pack(fill=tk.X)
+        for key, var in self.scale_vars.items():
+            row = ttk.Frame(form, style="Panel.TFrame")
+            row.pack(fill=tk.X, pady=2)
+            ttk.Label(row, text=key, width=7, style="Panel.TLabel").pack(side=tk.LEFT)
+            ttk.Entry(row, textvariable=var, width=12, style="Scale.TEntry").pack(
+                side=tk.LEFT, fill=tk.X, expand=True
+            )
+        ttk.Button(
+            self.nondim_body, text="Apply nondim", style="Tool.TButton", command=self.action_nondim
+        ).pack(pady=(4, 2), anchor="w")
+
+        self._log_label = ttk.Label(parent, text="Log", style="Muted.TLabel")
+        self._log_label.pack(anchor="w", padx=12, pady=(8, 0))
+        self.log = tk.Text(
+            parent,
+            height=8,
+            width=26,
+            bg="#fafbfc",
+            fg=FG,
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground="#b8c0c8",
+            font=("DejaVu Sans Mono", 8),
+            wrap=tk.WORD,
+        )
+        self.log.pack(fill=tk.BOTH, expand=True, padx=10, pady=(2, 10))
+
         ttk.Label(
             parent,
-            text="Mesh on = grid first.\nZone Style… per zone.\nDrag = warp; settle = fill.",
+            text="Mesh first. Contour toolbar = ± / Label / Probe / Details.\n"
+            "Nondim is optional above. Viewport uses full width.",
             style="Muted.TLabel",
             justify=tk.LEFT,
-        ).pack(anchor="w", padx=12, pady=(4, 12))
+        ).pack(anchor="w", padx=12, pady=(0, 12))
+
+    def _toggle_nondim_panel(self) -> None:
+        for child in self._nondim_hdr.winfo_children():
+            if isinstance(child, ttk.Checkbutton):
+                child.configure(
+                    text=("Nondim scales ▾" if self.nondim_expanded.get() else "Nondim scales ▸")
+                )
+        if self.nondim_expanded.get():
+            self.nondim_body.pack(fill=tk.X, padx=10, pady=(2, 4), after=self._nondim_hdr)
+        else:
+            self.nondim_body.pack_forget()
 
     def _layer_stub(self, name: str):
         def _cb() -> None:
@@ -596,6 +672,8 @@ class FlowplotGui(tk.Tk):
         )
 
     def _log(self, msg: str) -> None:
+        if not hasattr(self, "log") or self.log is None:
+            return
         self.log.insert(tk.END, msg.rstrip() + "\n")
         self.log.see(tk.END)
 
@@ -836,6 +914,9 @@ class FlowplotGui(tk.Tk):
         self.action_redraw(interactive=False)
 
     def _on_view_press(self, event: tk.Event) -> None:
+        if self.tool_mode.get() == "probe":
+            self._probe_at_canvas(event.x, event.y)
+            return
         self._drag_last = (event.x, event.y)
         self._dragging = True
         # Cancel any settle / CLI — drag uses display-list warp only.
@@ -844,7 +925,7 @@ class FlowplotGui(tk.Tk):
         self._render_gen += 1
 
     def _on_view_drag(self, event: tk.Event) -> None:
-        if self._drag_last is None:
+        if self.tool_mode.get() == "probe" or self._drag_last is None:
             return
         dx = event.x - self._drag_last[0]
         dy = event.y - self._drag_last[1]
@@ -858,6 +939,8 @@ class FlowplotGui(tk.Tk):
         self._warp_last_frame()
 
     def _on_view_release(self, _event: tk.Event) -> None:
+        if self.tool_mode.get() == "probe":
+            return
         self._drag_last = None
         self._dragging = False
         self._schedule_settle(delay_ms=50)
@@ -970,16 +1053,36 @@ class FlowplotGui(tk.Tk):
             pass
         self.viewport.delete("placeholder")
         self.viewport.delete("preview")
-        max_w = max(cw - 16, 16)
-        max_h = max(ch - 16, 16)
-        img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
-        if img.width < 4 or img.height < 4:
+        self.viewport.delete("probe")
+        native = (img.width, img.height)
+        # Exact Viewport fill: prefer 1:1 (CLI rendered at canvas size).
+        target_w = max(cw - 2, 16)
+        target_h = max(ch - 2, 16)
+        if abs(img.width - target_w) <= 2 and abs(img.height - target_h) <= 2:
+            show = img
+        else:
+            sx = target_w / max(img.width, 1)
+            sy = target_h / max(img.height, 1)
+            scale = max(sx, sy)  # cover — fill Viewport
+            new_w = max(1, int(round(img.width * scale)))
+            new_h = max(1, int(round(img.height * scale)))
+            show = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            left = max(0, (new_w - target_w) // 2)
+            top = max(0, (new_h - target_h) // 2)
+            show = show.crop((left, top, left + target_w, top + target_h))
+        if show.width < 4 or show.height < 4:
             self._log(
-                f"Preview image too small after fit ({img.width}×{img.height}); "
+                f"Preview image too small after fit ({show.width}×{show.height}); "
                 "check plane/coords (thin domain)."
             )
-        self._preview_photo = ImageTk.PhotoImage(img)
-        self.viewport.create_image(cw // 2, ch // 2, image=self._preview_photo, tags="preview")
+        self._preview_photo = ImageTk.PhotoImage(show)
+        ox = cw // 2
+        oy = ch // 2
+        self.viewport.create_image(ox, oy, image=self._preview_photo, tags="preview")
+        self._preview_offset = (ox - show.width // 2, oy - show.height // 2)
+        self._preview_size = (show.width, show.height)
+        self._preview_native = native
+        self._draw_probe_overlays()
         # Keep a full-res settle copy for drag-time warping (before thumbnail).
         try:
             settle_src = Image.open(preview_path).convert("RGBA")
@@ -987,10 +1090,12 @@ class FlowplotGui(tk.Tk):
         except OSError:
             self._remember_settle_frame(img)
         prev = getattr(self, "_preview_logged", None)
-        key = (str(path), img.width, img.height)
+        key = (str(path), show.width, show.height, cw, ch)
         if prev != key:
             self._preview_logged = key
-            self._log(f"Viewport: showed {path.name} ({img.width}×{img.height} px)")
+            self._log(
+                f"Viewport: showed {path.name} ({native[0]}×{native[1]} → {show.width}×{show.height} in {cw}×{ch})"
+            )
 
     def _set_variables(self, variables: list[str]) -> None:
         self.variables = list(variables)
@@ -1159,12 +1264,14 @@ class FlowplotGui(tk.Tk):
             self._set_status("No layers enabled")
             return
 
-        # Two-tier: preview (downsampled) then full contour fill on settle.
+        # Exact Viewport raster → 1:1 display (fonts stay crisp; no letterbox).
+        cw = max(self.viewport.winfo_width(), 64)
+        ch = max(self.viewport.winfo_height(), 64)
         if interactive:
-            width, height = 360, 270
+            width, height = max(cw // 2, 320), max(ch // 2, 240)
             quality = "preview"
         else:
-            width, height = 800, 600
+            width, height = min(max(cw, 64), 1920), min(max(ch, 64), 1440)
             quality = "full"
 
         out = Path(tempfile.gettempdir()) / f"flowplot_gui_view_{quality}.png"
@@ -1174,6 +1281,8 @@ class FlowplotGui(tk.Tk):
         view = self._view_cli_arg()
         var = self.var_name.get().strip()
         size = ["--width", str(width), "--height", str(height)]
+        cd = self.contour_details
+        contour_args = self._contour_cli_args()
 
         cache_key = "|".join(
             [
@@ -1183,6 +1292,7 @@ class FlowplotGui(tk.Tk):
                 f"p={want_pathlines}",
                 f"z={zone_idx}",
                 f"mc={','.join(mesh_color_args)}",
+                f"cd={','.join(contour_args)}",
                 var,
                 style,
                 *plane,
@@ -1285,6 +1395,7 @@ class FlowplotGui(tk.Tk):
                 *plane,
                 *view,
                 *nondim,
+                *self._contour_cli_args(),
             ]
             if want_mesh:
                 args.append("--mesh")
@@ -1316,6 +1427,9 @@ class FlowplotGui(tk.Tk):
             str(out),
             "--style",
             style,
+            "--fill",
+            "--margin",
+            "2",
             *zone_args,
             *mesh_color_args,
             *size,
@@ -1324,6 +1438,24 @@ class FlowplotGui(tk.Tk):
             *nondim,
         ]
         return self._run_cli(args)
+
+    def _contour_cli_args(self) -> list[str]:
+        cd = self.contour_details
+        args = [
+            "--coloring",
+            cd.cli_coloring(),
+            "--levels",
+            str(max(2, int(cd.nlevels))),
+            "--colormap",
+            cd.cli_colormap(),
+            "--margin",
+            "2",
+        ]
+        if cd.legend:
+            args.append("--legend")
+        else:
+            args.append("--no-legend")
+        return args
 
     def action_enable_contour(self) -> None:
         self.layer_contour.set(True)
@@ -1335,6 +1467,158 @@ class FlowplotGui(tk.Tk):
             zs.show_contour = True
             zs.show_zone = True
         self.action_redraw()
+
+    def action_contour_details(self) -> None:
+        """Plot → Contour… / toolbar Details — Tecplot Contour Details."""
+        self.action_enable_contour()
+        existing = self._contour_details_dialog
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            existing.focus_force()
+            return
+        dlg = ContourDetailsDialog(
+            self,
+            self.contour_details,
+            on_apply=self._apply_contour_details,
+        )
+        self._contour_details_dialog = dlg
+
+    def _apply_contour_details(self, state: ContourDetailsState) -> None:
+        self.contour_details = state
+        self._refresh_levels_label()
+        self.layer_contour.set(True)
+        self._render_cache.clear()
+        self.action_redraw()
+
+    def action_contour_add_level(self) -> None:
+        self.contour_details.nlevels = min(64, int(self.contour_details.nlevels) + 1)
+        if self.contour_details.coloring.lower().startswith("cont"):
+            self.contour_details.coloring = "Banded"
+        self._refresh_levels_label()
+        if self.layer_contour.get():
+            self._render_cache.clear()
+            self.action_redraw()
+
+    def action_contour_remove_level(self) -> None:
+        self.contour_details.nlevels = max(2, int(self.contour_details.nlevels) - 1)
+        if self.contour_details.coloring.lower().startswith("cont"):
+            self.contour_details.coloring = "Banded"
+        self._refresh_levels_label()
+        if self.layer_contour.get():
+            self._render_cache.clear()
+            self.action_redraw()
+
+    def action_toggle_contour_labels(self) -> None:
+        self.contour_details.show_labels = not self.contour_details.show_labels
+        self._refresh_levels_label()
+        self._log(
+            "Contour labels "
+            + ("on (placement stub — use probe for values)" if self.contour_details.show_labels else "off")
+        )
+
+    def action_toggle_probe(self) -> None:
+        if self.tool_mode.get() == "probe":
+            self.tool_mode.set("orbit")
+            self.viewport.configure(cursor="fleur")
+            self._set_status("Orbit")
+        else:
+            self.tool_mode.set("probe")
+            self.viewport.configure(cursor="crosshair")
+            self._set_status("Probe — click the Viewport to print values")
+        self._refresh_levels_label()
+
+    def _draw_probe_overlays(self) -> None:
+        self.viewport.delete("probe")
+        for cx, cy, text in self.probe_marks:
+            self.viewport.create_line(cx - 6, cy, cx + 6, cy, fill="#1f2a33", width=1, tags="probe")
+            self.viewport.create_line(cx, cy - 6, cx, cy + 6, fill="#1f2a33", width=1, tags="probe")
+            self.viewport.create_rectangle(
+                cx + 8,
+                cy - 18,
+                cx + 8 + max(70, 7 * len(text)),
+                cy + 2,
+                fill="#fafbfc",
+                outline="#5c6b76",
+                tags="probe",
+            )
+            self.viewport.create_text(
+                cx + 12,
+                cy - 8,
+                text=text,
+                anchor="w",
+                fill="#1f2a33",
+                font=("DejaVu Sans", 9),
+                tags="probe",
+            )
+
+    def _probe_at_canvas(self, cx: int, cy: int) -> None:
+        ds = self._require_dataset()
+        if not ds:
+            return
+        var = self.var_name.get().strip() or first_scalar(self.variables)
+        if not var:
+            messagebox.showwarning("Probe", "Select a contour variable first.")
+            return
+        ox, oy = self._preview_offset
+        pw, ph = self._preview_size
+        nw, nh = self._preview_native
+        if pw < 2 or ph < 2 or nw < 2 or nh < 2:
+            self._log("Probe: no preview mapped yet — redraw first")
+            return
+        # Canvas → displayed image → native raster pixels.
+        lx = cx - ox
+        ly = cy - oy
+        if lx < 0 or ly < 0 or lx >= pw or ly >= ph:
+            self._log("Probe: click outside the plot image")
+            return
+        px = int(lx * nw / pw)
+        py = int(ly * nh / ph)
+        args = [
+            "probe",
+            str(ds),
+            "--var",
+            var,
+            "--px",
+            str(px),
+            "--py",
+            str(py),
+            "--width",
+            str(nw),
+            "--height",
+            str(nh),
+            *self._plane_cli_arg(),
+            *self._view_cli_arg(),
+            "--zone",
+            str(self._active_zone_index()),
+            "--json",
+        ]
+        result = self._run_cli(args)
+        if not result or result.returncode != 0:
+            return
+        label = f"{var}=?"
+        try:
+            payload = json.loads(result.stdout.strip().splitlines()[-1])
+            if payload.get("status") == "ok":
+                label = str(payload.get("label") or label)
+                self._log(
+                    f"probe {label} @ world=({payload.get('x')}, {payload.get('y')}) "
+                    f"px=({payload.get('px')}, {payload.get('py')})"
+                )
+            else:
+                self._log(result.stdout.strip())
+                return
+        except (json.JSONDecodeError, IndexError, TypeError):
+            # Plain-text fallback.
+            for line in result.stdout.strip().splitlines():
+                if "→" in line or "probe" in line.lower():
+                    label = line.strip()
+                    break
+            self._log(label)
+        self.probe_marks.append((cx, cy, label))
+        if len(self.probe_marks) > 12:
+            self.probe_marks = self.probe_marks[-12:]
+        self._draw_probe_overlays()
+        self._set_status(label)
 
     def action_pathlines_dialog(self) -> None:
         self.layer_pathlines.set(True)
