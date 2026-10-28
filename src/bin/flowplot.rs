@@ -19,12 +19,16 @@ use flowplot::pathlines::{
     default_seeds, guess_velocity_vars, overlay_pathlines_styled, render_pathlines_png_styled,
     trace_pathlines, PathlineOptions,
 };
+use flowplot::profile::{
+    compare_profile_rmse, extract_profile, load_ref_csv, ProfileLine,
+};
+use flowplot::validate::validate_dataset;
 use flowplot::{load_path, Dataset};
 
 #[derive(Parser, Debug)]
 #[command(
     name = "flowplot",
-    about = "CFD post-processor: load Tecplot/VTK, mesh, contour, nondim, pathlines, menu",
+    about = "CFD post-processor: load Tecplot/VTK, mesh, contour, nondim, pathlines, validate, profile, menu",
     arg_required_else_help = true
 )]
 struct Cli {
@@ -150,6 +154,36 @@ enum Commands {
         #[arg(long)]
         vmax: Option<f64>,
     },
+    /// Field sanity / positivity checks (NaN, Inf, extrema; optional ρ/p/T ≥ 0).
+    Validate {
+        path: PathBuf,
+        /// Also flag negative samples on density / pressure / temperature names.
+        #[arg(long, default_value_t = false)]
+        positivity: bool,
+        /// Zone index filter (default: all zones).
+        #[arg(long)]
+        zone: Option<usize>,
+    },
+    /// Extract a 1-D profile / centerline (lehar extract-line analogue).
+    Profile {
+        path: PathBuf,
+        /// Variable name to sample.
+        #[arg(long = "var", short = 'v')]
+        variable: String,
+        /// Output JSON path (default: stdout via --json / text).
+        #[arg(long, short = 'o')]
+        out: Option<PathBuf>,
+        /// Line: `mid-j` (default), `mid-i`, `centerline`, `i=N`, `j=N`.
+        #[arg(long, default_value = "mid-j")]
+        line: String,
+        #[arg(long, default_value_t = 0)]
+        zone: usize,
+        #[arg(long)]
+        plane: Option<String>,
+        /// Optional two-column reference CSV (`s,value`) for RMSE compare.
+        #[arg(long = "ref")]
+        reference: Option<PathBuf>,
+    },
     /// List / show / run CFD post-processing menu items (lehar ↔ Flowplot).
     Menu {
         /// Override path to `agents/postprocess-menu.yaml`.
@@ -269,7 +303,7 @@ fn dispatch(
         None => {
             let Some(path) = bare_path else {
                 return Err(flowplot::Error::plot(
-                    "usage: flowplot [--json] <path> | flowplot [--json] <load|info|mesh|contour|nondim|pathlines|menu> ...",
+                    "usage: flowplot [--json] <path> | flowplot [--json] <load|info|mesh|contour|nondim|pathlines|validate|profile|menu> ...",
                 ));
             };
             run_info(&path, json)
@@ -362,8 +396,153 @@ fn dispatch(
             vmax,
             json,
         ),
+        Some(Commands::Validate {
+            path,
+            positivity,
+            zone,
+        }) => run_validate(&path, positivity, zone, json),
+        Some(Commands::Profile {
+            path,
+            variable,
+            out,
+            line,
+            zone,
+            plane,
+            reference,
+        }) => run_profile(
+            &path,
+            &variable,
+            out.as_ref(),
+            &line,
+            zone,
+            plane.as_deref(),
+            reference.as_ref(),
+            json,
+        ),
         Some(Commands::Menu { menu_file, action }) => run_menu(menu_file.as_ref(), action, json),
     }
+}
+
+fn run_validate(
+    path: &PathBuf,
+    positivity: bool,
+    zone_filter: Option<usize>,
+    json: bool,
+) -> flowplot::Result<()> {
+    let ds = load_path(path)?;
+    let mut report = validate_dataset(&ds, positivity);
+    report.path_hint = Some(path.display().to_string());
+    if let Some(zi) = zone_filter {
+        report.fields.retain(|f| f.zone == zi);
+        report.ok = report.fields.iter().all(|f| f.ok);
+        report.issue_count = report.fields.iter().map(|f| f.issues.len()).sum();
+        report.summary = if report.ok {
+            format!("ok: zone {zi}; {} field(s) clean", report.fields.len())
+        } else {
+            format!(
+                "issues: {} on zone {zi}",
+                report.issue_count
+            )
+        };
+    }
+    if json {
+        let payload = serde_json::json!({
+            "status": if report.ok { "ok" } else { "issues" },
+            "command": "validate",
+            "path": path.display().to_string(),
+            "positivity": positivity,
+            "report": report,
+        });
+        println!("{payload}");
+    } else {
+        println!("validate: {}", path.display());
+        println!("{}", report.summary);
+        for f in &report.fields {
+            let mark = if f.ok { "ok" } else { "!!" };
+            println!(
+                "  [{mark}] zone {}  {:<16} n={} finite={} nan={} inf={} min={:?} max={:?}",
+                f.zone, f.name, f.count, f.finite, f.nan, f.inf, f.min, f.max
+            );
+            for issue in &f.issues {
+                println!("       - {issue}");
+            }
+        }
+    }
+    // Always Ok after a completed scan — callers inspect `status` / summary for issues.
+    Ok(())
+}
+
+fn run_profile(
+    path: &PathBuf,
+    variable: &str,
+    out: Option<&PathBuf>,
+    line: &str,
+    zone: usize,
+    plane: Option<&str>,
+    reference: Option<&PathBuf>,
+    json: bool,
+) -> flowplot::Result<()> {
+    let ds = load_path(path)?;
+    let plane_spec = match plane {
+        Some(p) => PlaneSpec::parse(p)?,
+        None => PlaneSpec::Auto,
+    };
+    let line_spec = ProfileLine::parse(line)?;
+    let profile = extract_profile(&ds, variable, zone, line_spec, plane_spec)?;
+
+    let mut rmse: Option<f64> = None;
+    if let Some(ref_path) = reference {
+        let text = std::fs::read_to_string(ref_path).map_err(|e| {
+            flowplot::Error::plot(format!("failed to read --ref {}: {e}", ref_path.display()))
+        })?;
+        let (xs, ys) = load_ref_csv(&text)?;
+        rmse = compare_profile_rmse(&profile, &xs, &ys);
+    }
+
+    if !json && out.is_none() {
+        println!(
+            "profile: {}  var={}  {}={}  n={}",
+            path.display(),
+            profile.variable,
+            profile.axis,
+            profile.index,
+            profile.samples.len()
+        );
+        println!("# s  x  y  value");
+        for s in &profile.samples {
+            println!("{:.8}  {:.8}  {:.8}  {:.8}", s.s, s.x, s.y, s.value);
+        }
+        if let Some(r) = rmse {
+            println!("rmse vs ref: {r}");
+        }
+        return Ok(());
+    }
+
+    let payload = serde_json::json!({
+        "status": "ok",
+        "command": "profile",
+        "path": path.display().to_string(),
+        "profile": profile,
+        "rmse": rmse,
+        "reference": reference.map(|p| p.display().to_string()),
+    });
+
+    if let Some(out_path) = out {
+        std::fs::write(out_path, serde_json::to_string_pretty(&payload).unwrap_or_default())
+            .map_err(|e| {
+                flowplot::Error::plot(format!("failed to write {}: {e}", out_path.display()))
+            })?;
+        if !json {
+            println!("wrote {}", out_path.display());
+            if let Some(r) = rmse {
+                println!("rmse vs ref: {r}");
+            }
+        }
+    }
+    if json {
+        println!("{payload}");
+    }
+    Ok(())
 }
 
 fn load_menu(menu_file: Option<&PathBuf>) -> flowplot::Result<PostprocessMenu> {
@@ -485,6 +664,10 @@ fn dispatch_ready_item(item: &MenuItem, args: Vec<String>, json: bool) -> flowpl
         && !forwarded.iter().any(|a| a == "--pathlines" || a == "--pathlines-out")
     {
         forwarded.push("--pathlines".into());
+    }
+    // positivity-check always enables the positivity scan.
+    if item.id == "positivity-check" && !forwarded.iter().any(|a| a == "--positivity") {
+        forwarded.push("--positivity".into());
     }
     if json && !forwarded.iter().any(|a| a == "--json") {
         forwarded.push("--json".into());

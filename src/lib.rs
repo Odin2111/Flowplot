@@ -25,6 +25,8 @@
 //! - [`contour`] — scalar color-field / contour PNG for any variable
 //! - [`nondim`] — reference-scale nondimensionalization (CLI/config; no invented physics)
 //! - [`pathlines`] — particle traces / streamlines of the velocity field
+//! - [`validate`] — field sanity / positivity checks (lehar validation ideas)
+//! - [`profile`] — line / centerline extracts (lehar extract-line analogue)
 
 pub mod contour;
 pub mod dataset;
@@ -34,7 +36,9 @@ pub mod menu;
 pub mod mesh;
 pub mod nondim;
 pub mod pathlines;
+pub mod profile;
 pub mod readers;
+pub mod validate;
 
 pub use contour::{render_contour, write_png, ContourImage, ContourOptions, PlotStyle};
 pub use dataset::{
@@ -53,4 +57,8 @@ pub use pathlines::{
     default_seeds, guess_velocity_vars, overlay_pathlines, overlay_pathlines_styled,
     render_pathlines_png, render_pathlines_png_styled, trace_pathlines, Pathline, PathlineOptions,
 };
+pub use profile::{
+    compare_profile_rmse, extract_profile, load_ref_csv, Profile, ProfileLine, ProfileSample,
+};
 pub use readers::{load_path, Reader};
+pub use validate::{validate_dataset, FieldReport, ValidationReport};

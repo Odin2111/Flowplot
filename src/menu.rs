@@ -239,17 +239,28 @@ mod tests {
     #[test]
     fn embedded_menu_parses_and_has_ready_items() {
         let menu = PostprocessMenu::from_yaml(EMBEDDED_MENU_YAML).expect("yaml");
-        assert_eq!(menu.groups.len(), 7);
+        assert_eq!(menu.groups.len(), 8);
         let ids: Vec<_> = menu
             .groups
             .iter()
             .flat_map(|g| g.items.iter().map(|i| i.id.as_str()))
             .collect();
-        for need in ["load", "contour", "nondim-suggest", "pathlines", "contour-pathlines"] {
+        for need in [
+            "load",
+            "contour",
+            "nondim-suggest",
+            "pathlines",
+            "contour-pathlines",
+            "field-sanity",
+            "positivity-check",
+            "extract-profile",
+        ] {
             assert!(ids.contains(&need), "missing {need}");
         }
         let (_, load) = menu.find_item("load").unwrap();
         assert_eq!(load.status, "ready");
+        let (_, sanity) = menu.find_item("field-sanity").unwrap();
+        assert_eq!(sanity.status, "ready");
         let (_, bow) = menu.find_item("bow-shock-field").unwrap();
         assert_eq!(bow.status, "stub");
         assert_eq!(bow.lehar.agent.as_deref(), Some("bow_shock_validation"));

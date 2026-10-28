@@ -30,4 +30,4 @@ CLI mesh (no contour):
 flowplot mesh path/to/file.plt -o mesh.png
 ```
 
-Agents menu is a stub pointing at the lehar ↔ Flowplot bridge. Look is restrained scientific slate/gray — no purple chrome.
+**Agents → Post-process agents…** opens an interactive panel (not a stub): browse `agents/postprocess-menu.yaml`, run ready actions against the **currently loaded** file via `flowplot menu run`, and show JSON/stdout in a results pane. Look is restrained scientific slate/gray — no purple chrome.

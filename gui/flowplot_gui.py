@@ -19,6 +19,8 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from agents_panel import AgentsPanel
+
 ROOT = Path(__file__).resolve().parent
 ASSETS = ROOT / "assets"
 WORDMARK = ASSETS / "flowplot-wordmark.svg"
@@ -175,7 +177,7 @@ class FlowplotGui(tk.Tk):
         menubar.add_cascade(label="Style", menu=style_m)
 
         agents_m = tk.Menu(menubar, tearoff=0)
-        agents_m.add_command(label="Post-process agents…", command=self.stub_agents)
+        agents_m.add_command(label="Post-process agents…", command=self.open_agents_panel)
         menubar.add_cascade(label="Agents", menu=agents_m)
 
         help_m = tk.Menu(menubar, tearoff=0)
@@ -227,7 +229,7 @@ class FlowplotGui(tk.Tk):
 
         mb_agents = menubutton("Agents")
         agents_m = tk.Menu(mb_agents, tearoff=0)
-        agents_m.add_command(label="Post-process agents…", command=self.stub_agents)
+        agents_m.add_command(label="Post-process agents…", command=self.open_agents_panel)
         mb_agents.configure(menu=agents_m)
 
         mb_help = menubutton("Help")
@@ -752,12 +754,39 @@ class FlowplotGui(tk.Tk):
             "Not implemented in this slice (stub).",
         )
 
-    def stub_agents(self) -> None:
-        messagebox.showinfo(
-            "Agents",
-            "Agent post-process menu is wired in the lehar ↔ Flowplot bridge (PR #3).\n"
-            "This GUI entry is a stub until the interactive agent panel lands.",
+    def open_agents_panel(self) -> None:
+        bin_path = self._require_cli()
+        if not bin_path:
+            return
+        # Reuse an existing panel if still open.
+        existing = getattr(self, "_agents_panel", None)
+        if existing is not None and existing.winfo_exists():
+            existing.dataset_path = self.dataset_path
+            existing.variables = list(self.variables)
+            existing.var_name.set(self.var_name.get() or first_scalar(self.variables))
+            existing.nondim_args = self._nondim_args()
+            existing.ds_label.configure(
+                text=str(self.dataset_path) if self.dataset_path else "(no file loaded)"
+            )
+            existing.var_combo.configure(
+                values=self.variables,
+                state="readonly" if self.variables else "disabled",
+            )
+            existing.lift()
+            existing.focus_force()
+            return
+        panel = AgentsPanel(
+            self,
+            flowplot_bin=bin_path,
+            dataset_path=self.dataset_path,
+            variables=self.variables,
+            var_name=self.var_name.get(),
+            nondim_args=self._nondim_args(),
+            plot_style=self.plot_style.get(),
+            on_png=self._show_png_preview,
+            repo_root=ROOT.parent,
         )
+        self._agents_panel = panel
 
     def show_about(self) -> None:
         messagebox.showinfo(
