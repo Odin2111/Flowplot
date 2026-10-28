@@ -4,7 +4,7 @@ Rust CFD post-processing library with a Tecplot-like data model:
 
 **Dataset → Zone → named Variables**, with ordered (I / IJ / IJK) or finite-element connectivity, and nodal or cell-centered values.
 
-The GUI comes later. This first slice is the core crate, format readers, and a small CLI.
+This slice adds **scalar contour PNGs**, **reference-scale nondimensionalization** (CLI/config), and **pathlines** (streamlines of the velocity field). The GUI comes later.
 
 ## Build
 
@@ -12,6 +12,7 @@ The GUI comes later. This first slice is the core crate, format readers, and a s
 cargo build
 cargo test
 cargo run --bin flowplot -- tests/fixtures/simple.dat
+cargo run --bin flowplot -- contour tests/fixtures/flow.dat --var P -o /tmp/p.png
 ```
 
 Requires a recent stable Rust toolchain (`edition = "2021"`).
@@ -19,10 +20,25 @@ Requires a recent stable Rust toolchain (`edition = "2021"`).
 ## CLI
 
 ```bash
+# Summary + name-based nondim suggestions
 flowplot <path>
+flowplot info <path>
+
+# Contour any scalar to PNG
+flowplot contour <path> --var P -o out.png [--plane k=0] [--vmin 0] [--vmax 1] \
+  [--width 512] [--height 512] [--zone 0] \
+  [--u-ref U] [--lx Lx] [--ly Ly] [--lz Lz] [--t-ref T] \
+  [--pathlines] [--pathlines-out lines.png] [--seed x,y] [--u-var U] [--v-var V] [--dt 0.02]
+
+# Nondim suggestions / apply scales (no invented physics)
+flowplot nondim <path> [--u-ref U] [--lx Lx] [--ly Ly] [--lz Lz] [--t-ref T] \
+  [--x-var X] [--y-var Y] [--z-var Z]
+
+# Pathlines (particle traces / streamlines)
+flowplot pathlines <path> -o lines.png [--var P] [--seed x,y] [--u-var U] [--v-var V]
 ```
 
-Detects format by extension, loads into a `Dataset`, and prints zone count, variable names, and per-zone node/cell counts.
+`--pathlines` overlays traces on the contour PNG; `--pathlines-out` writes a second PNG.
 
 ## Format support
 
@@ -34,14 +50,18 @@ Detects format by extension, loads into a `Dataset`, and prints zone count, vari
 | CGNS | `.cgns` | **Stub** — documents FFI via system `libcgns` / future `cgns-sys`; optional feature `cgns` |
 | Fluent case/data | `.cas`, `.dat` | **Stub** — documents public section layout; binary returns `Unimplemented` |
 
-**Not in scope (no reverse engineering):** proprietary Tecplot binary (`.plt`) and Fluent binary case/data decoding. Public format specifications / ASCII layouts only. Do not copy proprietary sample files from vendor installs.
+**Not in scope (no reverse engineering):** proprietary Tecplot binary (`.plt`) and Fluent binary case/data decoding. Public format specifications / ASCII layouts only.
 
 ## Crate layout
 
 - `src/dataset.rs` — data model
 - `src/readers/` — `Reader` trait + Tecplot / VTK / CGNS / Fluent modules
+- `src/contour.rs` — scalar contour → PNG
+- `src/nondim.rs` — reference scales + name suggestions
+- `src/pathlines.rs` — velocity-field particle traces
+- `src/field.rs` — ordered-plane extract + bilinear sample
 - `src/bin/flowplot.rs` — CLI
-- `tests/fixtures/` — tiny synthetic Tecplot ASCII and VTK ASCII files
+- `tests/fixtures/` — synthetic Tecplot / VTK ASCII (incl. `flow.dat` for contour/pathlines)
 
 ## License
 

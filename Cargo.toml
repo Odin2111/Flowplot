@@ -14,6 +14,8 @@ path = "src/bin/flowplot.rs"
 
 [dependencies]
 thiserror = "2"
+clap = { version = "=4.5.37", features = ["derive"] }
+png = "0.17"
 
 [dev-dependencies]
 

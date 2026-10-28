@@ -1,0 +1,398 @@
+//! Shared helpers: locate variables, extract ordered 2D slices, bilinear sample.
+
+use crate::dataset::{Dataset, Location, OrderedDims, Topology, Zone};
+use crate::error::{Error, Result};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Axis {
+    I,
+    J,
+    K,
+}
+
+/// Slice specification for extracting a 2D plane from an ordered zone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaneSpec {
+    /// Whole zone when already 2D (IJ), or K=0 default for IJK.
+    Auto,
+    /// Fixed index on one structured axis.
+    Index { axis: Axis, index: usize },
+}
+
+impl PlaneSpec {
+    /// Parse `k=0`, `i=1`, `j=2` (case-insensitive).
+    pub fn parse(s: &str) -> Result<Self> {
+        let s = s.trim();
+        if s.is_empty() || s.eq_ignore_ascii_case("auto") {
+            return Ok(Self::Auto);
+        }
+        let (axis_s, idx_s) = s
+            .split_once('=')
+            .ok_or_else(|| Error::plot(format!("invalid --plane '{s}' (expected e.g. k=0)")))?;
+        let axis = match axis_s.trim().to_ascii_lowercase().as_str() {
+            "i" => Axis::I,
+            "j" => Axis::J,
+            "k" => Axis::K,
+            other => {
+                return Err(Error::plot(format!(
+                    "invalid plane axis '{other}' (use i, j, or k)"
+                )))
+            }
+        };
+        let index: usize = idx_s.trim().parse().map_err(|_| {
+            Error::plot(format!("invalid plane index in '{s}'"))
+        })?;
+        Ok(Self::Index { axis, index })
+    }
+}
+
+/// 2D nodal field on a structured ni×nj grid, with optional physical coords.
+#[derive(Debug, Clone)]
+pub struct Grid2D {
+    pub ni: usize,
+    pub nj: usize,
+    pub x: Vec<f64>,
+    pub y: Vec<f64>,
+    pub values: Vec<f64>,
+}
+
+impl Grid2D {
+    pub fn idx(&self, i: usize, j: usize) -> usize {
+        j * self.ni + i
+    }
+
+    pub fn value(&self, i: usize, j: usize) -> f64 {
+        self.values[self.idx(i, j)]
+    }
+
+    pub fn xy(&self, i: usize, j: usize) -> (f64, f64) {
+        let k = self.idx(i, j);
+        (self.x[k], self.y[k])
+    }
+
+    pub fn bounds(&self) -> (f64, f64, f64, f64) {
+        let mut xmin = f64::INFINITY;
+        let mut xmax = f64::NEG_INFINITY;
+        let mut ymin = f64::INFINITY;
+        let mut ymax = f64::NEG_INFINITY;
+        for (&x, &y) in self.x.iter().zip(self.y.iter()) {
+            xmin = xmin.min(x);
+            xmax = xmax.max(x);
+            ymin = ymin.min(y);
+            ymax = ymax.max(y);
+        }
+        if !xmin.is_finite() {
+            xmin = 0.0;
+            xmax = 1.0;
+            ymin = 0.0;
+            ymax = 1.0;
+        }
+        if (xmax - xmin).abs() < 1e-30 {
+            xmax = xmin + 1.0;
+        }
+        if (ymax - ymin).abs() < 1e-30 {
+            ymax = ymin + 1.0;
+        }
+        (xmin, xmax, ymin, ymax)
+    }
+
+    /// Bilinear sample of `values` at physical (x,y). None if outside.
+    pub fn sample(&self, x: f64, y: f64) -> Option<f64> {
+        sample_bilinear(self, &self.values, x, y)
+    }
+
+    pub fn sample_vec(&self, field: &[f64], x: f64, y: f64) -> Option<f64> {
+        sample_bilinear(self, field, x, y)
+    }
+}
+
+fn sample_bilinear(grid: &Grid2D, field: &[f64], x: f64, y: f64) -> Option<f64> {
+    if grid.ni < 2 || grid.nj < 2 || field.len() != grid.ni * grid.nj {
+        return None;
+    }
+    // Assume roughly rectilinear: locate cell by scanning bounding boxes.
+    // For tiny synthetic grids this is fine; production can add a tree later.
+    for j in 0..grid.nj - 1 {
+        for i in 0..grid.ni - 1 {
+            let (x00, y00) = grid.xy(i, j);
+            let (x10, y10) = grid.xy(i + 1, j);
+            let (x01, y01) = grid.xy(i, j + 1);
+            let (x11, y11) = grid.xy(i + 1, j + 1);
+            let xmin = x00.min(x10).min(x01).min(x11);
+            let xmax = x00.max(x10).max(x01).max(x11);
+            let ymin = y00.min(y10).min(y01).min(y11);
+            let ymax = y00.max(y10).max(y01).max(y11);
+            if x < xmin || x > xmax || y < ymin || y > ymax {
+                continue;
+            }
+            // Parametric bilinear in index space using axis-aligned assumption.
+            let dx = (x10 - x00).abs().max(1e-30);
+            let dy = (y01 - y00).abs().max(1e-30);
+            let u = ((x - x00) / dx).clamp(0.0, 1.0);
+            let v = ((y - y00) / dy).clamp(0.0, 1.0);
+            let f00 = field[grid.idx(i, j)];
+            let f10 = field[grid.idx(i + 1, j)];
+            let f01 = field[grid.idx(i, j + 1)];
+            let f11 = field[grid.idx(i + 1, j + 1)];
+            let a = f00 * (1.0 - u) + f10 * u;
+            let b = f01 * (1.0 - u) + f11 * u;
+            return Some(a * (1.0 - v) + b * v);
+        }
+    }
+    None
+}
+
+pub fn find_var(ds: &Dataset, name: &str) -> Result<usize> {
+    ds.variables
+        .iter()
+        .position(|v| v.eq_ignore_ascii_case(name))
+        .ok_or_else(|| {
+            Error::plot(format!(
+                "variable '{name}' not found; have: {}",
+                ds.variables.join(", ")
+            ))
+        })
+}
+
+pub fn guess_coord_vars(ds: &Dataset) -> (Option<usize>, Option<usize>, Option<usize>) {
+    let find = |cands: &[&str]| {
+        cands
+            .iter()
+            .find_map(|c| ds.variables.iter().position(|v| v.eq_ignore_ascii_case(c)))
+    };
+    (
+        find(&["X", "R"]),
+        find(&["Y", "THETA", "TH"]),
+        find(&["Z"]),
+    )
+}
+
+/// Extract a nodal 2D grid of `var_idx` from an ordered zone.
+pub fn extract_scalar_grid(
+    ds: &Dataset,
+    zone_idx: usize,
+    var_idx: usize,
+    plane: PlaneSpec,
+) -> Result<Grid2D> {
+    let zone = ds
+        .zones
+        .get(zone_idx)
+        .ok_or_else(|| Error::plot(format!("zone index {zone_idx} out of range")))?;
+    let Topology::Ordered(dims) = &zone.topology else {
+        return Err(Error::plot(
+            "contour/pathlines currently support ordered (I/IJ/IJK) zones only",
+        ));
+    };
+
+    let field = zone
+        .fields
+        .get(var_idx)
+        .ok_or_else(|| Error::plot("variable field missing on zone"))?;
+    if field.location != Location::Nodal {
+        return Err(Error::plot(
+            "cell-centered contour not implemented in this slice (need nodal values)",
+        ));
+    }
+
+    let (x_i, y_i, _) = guess_coord_vars(ds);
+    let (ni, nj, node_indices) = plane_nodes(*dims, plane)?;
+    let n = ni * nj;
+    let mut values = Vec::with_capacity(n);
+    let mut x = Vec::with_capacity(n);
+    let mut y = Vec::with_capacity(n);
+
+    for &node in &node_indices {
+        values.push(*field.values.get(node).unwrap_or(&f64::NAN));
+        x.push(coord_at(zone, x_i, node, node % ni.max(1)));
+        // For default index layout j = node / ni in the extracted plane.
+        let j_local = node_indices
+            .iter()
+            .position(|&n| n == node)
+            .unwrap_or(0)
+            / ni.max(1);
+        let _ = j_local;
+        y.push(coord_at(zone, y_i, node, node / dims_i(*dims).max(1)));
+    }
+
+    // Rebuild x/y using plane-local indices for consistent synthetic grids.
+    x.clear();
+    y.clear();
+    for (local, &node) in node_indices.iter().enumerate() {
+        let i = local % ni;
+        let j = local / ni;
+        x.push(coord_at(zone, x_i, node, i));
+        y.push(coord_at(zone, y_i, node, j));
+    }
+
+    Ok(Grid2D {
+        ni,
+        nj,
+        x,
+        y,
+        values,
+    })
+}
+
+fn dims_i(dims: OrderedDims) -> usize {
+    match dims {
+        OrderedDims::I { i } => i,
+        OrderedDims::Ij { i, .. } => i,
+        OrderedDims::Ijk { i, .. } => i,
+    }
+}
+
+fn coord_at(zone: &Zone, var_idx: Option<usize>, node: usize, fallback_index: usize) -> f64 {
+    if let Some(vi) = var_idx {
+        if let Some(field) = zone.fields.get(vi) {
+            if let Some(v) = field.values.get(node) {
+                return *v;
+            }
+        }
+    }
+    fallback_index as f64
+}
+
+fn plane_nodes(dims: OrderedDims, plane: PlaneSpec) -> Result<(usize, usize, Vec<usize>)> {
+    match dims {
+        OrderedDims::I { i } => {
+            // Degenerate: 1×i as a line — treat as i×1
+            Ok((i, 1, (0..i).collect()))
+        }
+        OrderedDims::Ij { i, j } => {
+            if let PlaneSpec::Index { axis, index } = plane {
+                match axis {
+                    Axis::K if index == 0 => {}
+                    Axis::I => {
+                        if index >= i {
+                            return Err(Error::plot(format!("plane i={index} out of range (I={i})")));
+                        }
+                        let nodes: Vec<_> = (0..j).map(|jj| jj * i + index).collect();
+                        return Ok((1, j, nodes));
+                    }
+                    Axis::J => {
+                        if index >= j {
+                            return Err(Error::plot(format!("plane j={index} out of range (J={j})")));
+                        }
+                        let nodes: Vec<_> = (0..i).map(|ii| index * i + ii).collect();
+                        return Ok((i, 1, nodes));
+                    }
+                    Axis::K => {
+                        return Err(Error::plot("IJ zone has no K axis"));
+                    }
+                }
+            }
+            let mut nodes = Vec::with_capacity(i * j);
+            for jj in 0..j {
+                for ii in 0..i {
+                    nodes.push(jj * i + ii);
+                }
+            }
+            Ok((i, j, nodes))
+        }
+        OrderedDims::Ijk { i, j, k } => {
+            let (axis, index) = match plane {
+                PlaneSpec::Auto => (Axis::K, 0usize),
+                PlaneSpec::Index { axis, index } => (axis, index),
+            };
+            match axis {
+                Axis::K => {
+                    if index >= k {
+                        return Err(Error::plot(format!("plane k={index} out of range (K={k})")));
+                    }
+                    let mut nodes = Vec::with_capacity(i * j);
+                    for jj in 0..j {
+                        for ii in 0..i {
+                            nodes.push(index * (i * j) + jj * i + ii);
+                        }
+                    }
+                    Ok((i, j, nodes))
+                }
+                Axis::J => {
+                    if index >= j {
+                        return Err(Error::plot(format!("plane j={index} out of range (J={j})")));
+                    }
+                    let mut nodes = Vec::with_capacity(i * k);
+                    for kk in 0..k {
+                        for ii in 0..i {
+                            nodes.push(kk * (i * j) + index * i + ii);
+                        }
+                    }
+                    Ok((i, k, nodes))
+                }
+                Axis::I => {
+                    if index >= i {
+                        return Err(Error::plot(format!("plane i={index} out of range (I={i})")));
+                    }
+                    let mut nodes = Vec::with_capacity(j * k);
+                    for kk in 0..k {
+                        for jj in 0..j {
+                            nodes.push(kk * (i * j) + jj * i + index);
+                        }
+                    }
+                    Ok((j, k, nodes))
+                }
+            }
+        }
+    }
+}
+
+/// Extract a velocity component field on the same plane as `grid` (same node order).
+pub fn extract_component_on_plane(
+    ds: &Dataset,
+    zone_idx: usize,
+    var_name: &str,
+    plane: PlaneSpec,
+) -> Result<Vec<f64>> {
+    let var_idx = find_var(ds, var_name)?;
+    let g = extract_scalar_grid(ds, zone_idx, var_idx, plane)?;
+    Ok(g.values)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dataset::{VariableData, Zone};
+
+    #[test]
+    fn parse_plane() {
+        assert_eq!(
+            PlaneSpec::parse("k=0").unwrap(),
+            PlaneSpec::Index {
+                axis: Axis::K,
+                index: 0
+            }
+        );
+    }
+
+    #[test]
+    fn extract_ij() {
+        let ds = Dataset {
+            title: None,
+            variables: vec!["X".into(), "Y".into(), "P".into()],
+            zones: vec![Zone {
+                name: "z".into(),
+                topology: Topology::Ordered(OrderedDims::Ij { i: 2, j: 2 }),
+                fields: vec![
+                    VariableData {
+                        location: Location::Nodal,
+                        values: vec![0.0, 1.0, 0.0, 1.0],
+                    },
+                    VariableData {
+                        location: Location::Nodal,
+                        values: vec![0.0, 0.0, 1.0, 1.0],
+                    },
+                    VariableData {
+                        location: Location::Nodal,
+                        values: vec![1.0, 2.0, 3.0, 4.0],
+                    },
+                ],
+            }],
+        };
+        let g = extract_scalar_grid(&ds, 0, 2, PlaneSpec::Auto).unwrap();
+        assert_eq!(g.ni, 2);
+        assert_eq!(g.nj, 2);
+        assert_eq!(g.values, vec![1.0, 2.0, 3.0, 4.0]);
+        let s = g.sample(0.5, 0.5).unwrap();
+        assert!((s - 2.5).abs() < 1e-9);
+    }
+}
