@@ -36,7 +36,7 @@ cargo build
 python3 gui/flowplot_gui.py
 ```
 
-**File → Open** runs `info`, fills the variable list, enables **Mesh**, leaves **Contour** off, and draws an equal-aspect wireframe into the viewport. Turn on Contour (and pick e.g. `Pressure`) to overlay. **XYZ** buttons and viewport drag rotate the crate; **Cut / Track** sets the I/J/K plane for mesh and contours. Plot menu uses Pathlines (Tecplot’s Streamtraces), Contour, Axis, Zone Style, …. See [docs/gui-layout.md](docs/gui-layout.md).
+**File → Open** runs `info`, fills the variable list, enables **Mesh**, leaves **Contour** off, and draws an equal-aspect wireframe into the viewport. Turn on Contour (and pick e.g. `Pressure`) to overlay. **XYZ** buttons and viewport drag rotate the crate; **Cut / Track** sets the I/J/K plane for mesh and contours. **Plot → Zone Style…** sets per-zone Show Zone / Mesh / Contour (other Zone Style tabs stub). See [docs/gui-layout.md](docs/gui-layout.md).
 
 ## CLI
 

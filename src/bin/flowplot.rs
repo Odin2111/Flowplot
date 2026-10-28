@@ -77,6 +77,9 @@ enum Commands {
         /// Plot look: `default` or `jfm` (black frame on white).
         #[arg(long, default_value = "default", value_parser = parse_plot_style)]
         style: PlotStyle,
+        /// Mesh line color as `R,G,B` or `#RRGGBB` (default green).
+        #[arg(long)]
+        mesh_color: Option<String>,
         #[command(flatten)]
         nondim: NondimArgs,
     },
@@ -116,6 +119,9 @@ enum Commands {
         /// Overlay the zone mesh (wireframe) on the contour.
         #[arg(long, default_value_t = false)]
         mesh: bool,
+        /// Mesh overlay color as `R,G,B` or `#RRGGBB` (default green / JFM black).
+        #[arg(long)]
+        mesh_color: Option<String>,
         /// Also trace pathlines and overlay them on the contour PNG.
         #[arg(long)]
         pathlines: bool,
@@ -329,6 +335,7 @@ fn dispatch(
             width,
             height,
             style,
+            mesh_color,
             nondim,
         }) => run_mesh(
             &path,
@@ -339,6 +346,7 @@ fn dispatch(
             width,
             height,
             style,
+            mesh_color.as_deref(),
             &nondim,
             json,
         ),
@@ -356,6 +364,7 @@ fn dispatch(
             style,
             nondim,
             mesh,
+            mesh_color,
             pathlines,
             pathlines_out,
             pathline: pl_args,
@@ -373,6 +382,7 @@ fn dispatch(
             style,
             &nondim,
             mesh,
+            mesh_color.as_deref(),
             pathlines,
             pathlines_out.as_ref(),
             &pl_args,
@@ -944,6 +954,46 @@ fn resolve_raster_size(style: PlotStyle, width: u32, height: u32) -> (u32, u32) 
     }
 }
 
+fn parse_mesh_color(s: &str) -> flowplot::Result<[u8; 4]> {
+    let t = s.trim();
+    if let Some(hex) = t.strip_prefix('#') {
+        if hex.len() == 6 {
+            let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| {
+                flowplot::Error::plot(format!("invalid --mesh-color '{s}' (expected #RRGGBB)"))
+            })?;
+            let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| {
+                flowplot::Error::plot(format!("invalid --mesh-color '{s}' (expected #RRGGBB)"))
+            })?;
+            let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| {
+                flowplot::Error::plot(format!("invalid --mesh-color '{s}' (expected #RRGGBB)"))
+            })?;
+            return Ok([r, g, b, 255]);
+        }
+    }
+    let parts: Vec<_> = t.split(',').map(str::trim).collect();
+    if parts.len() == 3 {
+        let parse = |p: &str| -> flowplot::Result<u8> {
+            p.parse::<u8>().map_err(|_| {
+                flowplot::Error::plot(format!("invalid --mesh-color '{s}' (expected R,G,B)"))
+            })
+        };
+        return Ok([parse(parts[0])?, parse(parts[1])?, parse(parts[2])?, 255]);
+    }
+    Err(flowplot::Error::plot(format!(
+        "invalid --mesh-color '{s}' (expected R,G,B or #RRGGBB)"
+    )))
+}
+
+fn default_mesh_line_rgba(style: PlotStyle, mesh_color: Option<&str>) -> flowplot::Result<[u8; 4]> {
+    if let Some(s) = mesh_color {
+        return parse_mesh_color(s);
+    }
+    Ok(match style {
+        PlotStyle::Jfm => [0, 0, 0, 255],
+        PlotStyle::Default => flowplot::DEFAULT_MESH_RGBA,
+    })
+}
+
 fn run_mesh(
     path: &PathBuf,
     out: &PathBuf,
@@ -953,6 +1003,7 @@ fn run_mesh(
     width: u32,
     height: u32,
     style: PlotStyle,
+    mesh_color: Option<&str>,
     nondim: &NondimArgs,
     json: bool,
 ) -> flowplot::Result<()> {
@@ -968,6 +1019,12 @@ fn run_mesh(
     } else {
         (width, height)
     };
+    // Standalone mesh defaults to green unless --mesh-color / JFM black.
+    let line_rgba = match mesh_color {
+        Some(s) => parse_mesh_color(s)?,
+        None if style == PlotStyle::Jfm => [0, 0, 0, 255],
+        None => flowplot::DEFAULT_MESH_RGBA,
+    };
     let img = render_mesh(
         &ds,
         &MeshOptions {
@@ -977,6 +1034,7 @@ fn run_mesh(
             width,
             height,
             style,
+            line_rgba,
             path_hint: Some(path.display().to_string()),
             ..Default::default()
         },
@@ -1028,6 +1086,7 @@ fn run_contour(
     style: PlotStyle,
     nondim: &NondimArgs,
     do_mesh: bool,
+    mesh_color: Option<&str>,
     do_pathlines: bool,
     pathlines_out: Option<&PathBuf>,
     pl_args: &PathlineArgs,
@@ -1062,11 +1121,7 @@ fn run_contour(
 
     if do_mesh {
         let mesh_grid = extract_mesh_grid_view(&ds, zone, plane, view)?;
-        let line = match style {
-            // JFM print style keeps black wires; default GUI/CLI mesh is green.
-            PlotStyle::Jfm => [0, 0, 0, 255],
-            PlotStyle::Default => flowplot::DEFAULT_MESH_RGBA,
-        };
+        let line = default_mesh_line_rgba(style, mesh_color)?;
         // Match stretched contour mapping so wires sit on the color field.
         overlay_mesh(&mut img, &mesh_grid, false, 0, line);
     }
