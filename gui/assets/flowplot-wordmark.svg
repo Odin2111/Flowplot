@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="36" viewBox="0 0 220 36" role="img" aria-label="Flowplot">
+  <title>Flowplot</title>
+  <!-- Restrained scientific wordmark: slate mark + pathline glyph -->
+  <g fill="none" stroke="#2c3e50" stroke-width="1.6" stroke-linecap="round">
+    <path d="M8 26 C18 10, 28 10, 38 26"/>
+    <path d="M12 28 C22 14, 32 14, 42 28"/>
+    <path d="M4 24 C14 8, 24 8, 34 24"/>
+  </g>
+  <circle cx="40" cy="18" r="2.2" fill="#2c3e50"/>
+  <text x="52" y="24" font-family="Helvetica, Arial, DejaVu Sans, sans-serif"
+        font-size="20" font-weight="600" letter-spacing="0.5" fill="#2c3e50">Flowplot</text>
+</svg>
