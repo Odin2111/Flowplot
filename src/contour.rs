@@ -213,7 +213,7 @@ impl Default for ContourOptions {
             nlevels: 16,
             colormap: ColorMapName::StyleDefault,
             legend: true,
-            margin: 4,
+            margin: 2,
         }
     }
 }
@@ -258,8 +258,9 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
     let nan = opts.style.nan_rgba();
     // Reserve a right strip for the legend so the flood fills the plot area
     // without large unused letterbox margins (Tecplot Contour Details layout).
+    // Slim legend strip — flood fills almost the whole Viewport.
     let legend_reserve = if opts.annotate && opts.legend {
-        ((opts.width as f64) * 0.14).round().clamp(56.0, 110.0) as u32
+        ((opts.width as f64) * 0.10).round().clamp(48.0, 88.0) as u32
     } else {
         0
     };

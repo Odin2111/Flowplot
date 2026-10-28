@@ -291,39 +291,37 @@ class FlowplotGui(tk.Tk):
         tk.Frame(self, bg="#b8c0c8", height=1).pack(side=tk.TOP, fill=tk.X)
 
     def _build_contour_toolbar(self) -> None:
-        """Tecplot-like Contour ± / Label / Probe strip under the menu."""
-        bar = tk.Frame(self, bg=MENU_BG, highlightthickness=0)
+        """Always-visible Contour ± / Label / Probe / Details strip under the menu."""
+        bar = tk.Frame(self, bg="#cfd5db", highlightthickness=0)
         bar.pack(side=tk.TOP, fill=tk.X)
         tk.Label(
             bar,
-            text="Contour",
-            bg=MENU_BG,
-            fg=MUTED,
-            font=("Helvetica", 8, "bold"),
-        ).pack(side=tk.LEFT, padx=(10, 4), pady=4)
+            text="Contour tools",
+            bg="#cfd5db",
+            fg=ACCENT,
+            font=("Helvetica", 9, "bold"),
+        ).pack(side=tk.LEFT, padx=(10, 8), pady=5)
 
-        def tool_btn(text: str, cmd, tip: str) -> ttk.Button:
-            b = ttk.Button(bar, text=text, style="Tool.TButton", width=4, command=cmd)
-            b.pack(side=tk.LEFT, padx=2, pady=3)
+        def tool_btn(text: str, cmd) -> ttk.Button:
+            b = ttk.Button(bar, text=text, style="Tool.TButton", command=cmd)
+            b.pack(side=tk.LEFT, padx=2, pady=4)
             return b
 
-        tool_btn("＋", self.action_contour_add_level, "Add contour level")
-        tool_btn("－", self.action_contour_remove_level, "Remove contour level")
-        tool_btn("Abc", self.action_toggle_contour_labels, "Contour labels")
-        self._probe_btn = tool_btn("✎", self.action_toggle_probe, "Probe")
-        ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6, pady=4)
-        ttk.Button(
-            bar, text="Details…", style="Tool.TButton", command=self.action_contour_details
-        ).pack(side=tk.LEFT, padx=2, pady=3)
+        tool_btn("＋ Level", self.action_contour_add_level)
+        tool_btn("－ Level", self.action_contour_remove_level)
+        tool_btn("Abc Label", self.action_toggle_contour_labels)
+        self._probe_btn = tool_btn("✎ Probe", self.action_toggle_probe)
+        ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=6)
+        tool_btn("Details…", self.action_contour_details)
         self.levels_label = tk.Label(
             bar,
             text=self._levels_status_text(),
-            bg=MENU_BG,
+            bg="#cfd5db",
             fg=FG,
-            font=("Helvetica", 8),
+            font=("Helvetica", 9),
         )
-        self.levels_label.pack(side=tk.LEFT, padx=8)
-        tk.Frame(self, bg="#b8c0c8", height=1).pack(side=tk.TOP, fill=tk.X)
+        self.levels_label.pack(side=tk.LEFT, padx=10)
+        tk.Frame(self, bg="#9aa3ab", height=1).pack(side=tk.TOP, fill=tk.X)
 
     def _levels_status_text(self) -> str:
         cd = self.contour_details
@@ -366,17 +364,32 @@ class FlowplotGui(tk.Tk):
 
     def _build_body(self) -> None:
         body = ttk.Frame(self)
-        body.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8, pady=6)
+        body.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=4, pady=4)
 
-        # Left: Tecplot-like Plot sidebar
-        left = ttk.Frame(body, style="Panel.TFrame", width=240)
-        left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
-        left.pack_propagate(False)
+        # Left Plot sidebar (scrollable). Nondim lives here; no right column.
+        left_wrap = ttk.Frame(body, style="Panel.TFrame", width=252)
+        left_wrap.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 4))
+        left_wrap.pack_propagate(False)
+
+        left_canvas = tk.Canvas(left_wrap, bg=PANEL, highlightthickness=0, width=236)
+        left_scroll = ttk.Scrollbar(left_wrap, orient=tk.VERTICAL, command=left_canvas.yview)
+        left_canvas.configure(yscrollcommand=left_scroll.set)
+        left_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        left_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        left = ttk.Frame(left_canvas, style="Panel.TFrame")
+        left_win = left_canvas.create_window((0, 0), window=left, anchor="nw")
+
+        def _sync_left(_event: tk.Event | None = None) -> None:
+            left_canvas.configure(scrollregion=left_canvas.bbox("all"))
+            left_canvas.itemconfigure(left_win, width=max(left_canvas.winfo_width(), 220))
+
+        left.bind("<Configure>", _sync_left)
+        left_canvas.bind("<Configure>", _sync_left)
         self._build_plot_panel(left)
 
-        # Center viewport — fills remaining body (no large letterbox chrome).
+        # Viewport takes the full remaining width.
         view_wrap = ttk.Frame(body)
-        view_wrap.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
+        view_wrap.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.viewport = tk.Canvas(
             view_wrap,
@@ -392,55 +405,12 @@ class FlowplotGui(tk.Tk):
         self.viewport.bind("<ButtonRelease-1>", self._on_view_release)
         tip = ttk.Label(
             view_wrap,
-            text="Drag = orbit · ✎ Probe prints values · Contour Details for levels/colormap",
+            text="Contour toolbar above · Drag = orbit · ✎ Probe click prints values · Viewport full width",
             font=("Helvetica", 8),
             foreground=MUTED,
         )
         tip.pack(anchor="w", pady=(2, 0))
-
-        # Right nondim column
-        right = ttk.Frame(body, style="Panel.TFrame", width=200)
-        right.pack(side=tk.RIGHT, fill=tk.Y)
-        right.pack_propagate(False)
-
-        ttk.Label(right, text="Nondim scales", style="Panel.TLabel", font=("Helvetica", 10, "bold")).pack(
-            anchor="w", padx=12, pady=(12, 4)
-        )
-        ttk.Label(
-            right,
-            text="--u-ref / --lx / --ly / --lz / --t-ref",
-            style="Muted.TLabel",
-            justify=tk.LEFT,
-        ).pack(anchor="w", padx=12, pady=(0, 10))
-
-        form = ttk.Frame(right, style="Panel.TFrame")
-        form.pack(fill=tk.X, padx=12)
-        for key, var in self.scale_vars.items():
-            row = ttk.Frame(form, style="Panel.TFrame")
-            row.pack(fill=tk.X, pady=3)
-            ttk.Label(row, text=key, width=7, style="Panel.TLabel").pack(side=tk.LEFT)
-            ttk.Entry(row, textvariable=var, width=12, style="Scale.TEntry").pack(
-                side=tk.LEFT, fill=tk.X, expand=True
-            )
-
-        ttk.Button(right, text="Apply nondim", style="Tool.TButton", command=self.action_nondim).pack(
-            padx=12, pady=14, anchor="w"
-        )
-
-        self.log = tk.Text(
-            right,
-            height=12,
-            width=24,
-            bg="#fafbfc",
-            fg=FG,
-            relief=tk.FLAT,
-            highlightthickness=1,
-            highlightbackground="#b8c0c8",
-            font=("DejaVu Sans Mono", 8),
-            wrap=tk.WORD,
-        )
-        self.log.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
-        self._log("Open a dataset — Mesh layer on by default (crate / wireframe).")
+        self._log("Open a dataset — Contour toolbar always visible; Viewport uses full width.")
 
     def _build_plot_panel(self, parent: ttk.Frame) -> None:
         ttk.Label(parent, text="Plot", style="Panel.TLabel", font=("Helvetica", 11, "bold")).pack(
@@ -570,16 +540,71 @@ class FlowplotGui(tk.Tk):
         ttk.Button(parent, text="Zone Style…", style="Tool.TButton", command=self.action_zone_style).pack(
             padx=12, pady=(2, 4), anchor="w"
         )
+        ttk.Button(parent, text="Contour Details…", style="Tool.TButton", command=self.action_contour_details).pack(
+            padx=12, pady=(2, 4), anchor="w"
+        )
         ttk.Button(parent, text="Redraw layers", style="Tool.TButton", command=self.action_redraw).pack(
             padx=12, pady=(4, 8), anchor="w"
         )
 
+        # Collapsible Nondim (was a right column — Viewport now full width).
+        self.nondim_expanded = tk.BooleanVar(value=False)
+        self._nondim_hdr = ttk.Frame(parent, style="Panel.TFrame")
+        self._nondim_hdr.pack(fill=tk.X, padx=10, pady=(4, 0))
+        ttk.Checkbutton(
+            self._nondim_hdr,
+            text="Nondim scales ▸",
+            variable=self.nondim_expanded,
+            command=self._toggle_nondim_panel,
+        ).pack(side=tk.LEFT)
+        self.nondim_body = ttk.LabelFrame(parent, text="U_ref / Lx / Ly / Lz / T_ref", padding=(8, 4))
+        form = ttk.Frame(self.nondim_body, style="Panel.TFrame")
+        form.pack(fill=tk.X)
+        for key, var in self.scale_vars.items():
+            row = ttk.Frame(form, style="Panel.TFrame")
+            row.pack(fill=tk.X, pady=2)
+            ttk.Label(row, text=key, width=7, style="Panel.TLabel").pack(side=tk.LEFT)
+            ttk.Entry(row, textvariable=var, width=12, style="Scale.TEntry").pack(
+                side=tk.LEFT, fill=tk.X, expand=True
+            )
+        ttk.Button(
+            self.nondim_body, text="Apply nondim", style="Tool.TButton", command=self.action_nondim
+        ).pack(pady=(4, 2), anchor="w")
+
+        self._log_label = ttk.Label(parent, text="Log", style="Muted.TLabel")
+        self._log_label.pack(anchor="w", padx=12, pady=(8, 0))
+        self.log = tk.Text(
+            parent,
+            height=8,
+            width=26,
+            bg="#fafbfc",
+            fg=FG,
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground="#b8c0c8",
+            font=("DejaVu Sans Mono", 8),
+            wrap=tk.WORD,
+        )
+        self.log.pack(fill=tk.BOTH, expand=True, padx=10, pady=(2, 10))
+
         ttk.Label(
             parent,
-            text="Mesh on = grid first.\nZone Style… per zone.\nDrag = warp; settle = fill.",
+            text="Mesh first. Contour toolbar = ± / Label / Probe / Details.\n"
+            "Nondim is optional above. Viewport uses full width.",
             style="Muted.TLabel",
             justify=tk.LEFT,
-        ).pack(anchor="w", padx=12, pady=(4, 12))
+        ).pack(anchor="w", padx=12, pady=(0, 12))
+
+    def _toggle_nondim_panel(self) -> None:
+        for child in self._nondim_hdr.winfo_children():
+            if isinstance(child, ttk.Checkbutton):
+                child.configure(
+                    text=("Nondim scales ▾" if self.nondim_expanded.get() else "Nondim scales ▸")
+                )
+        if self.nondim_expanded.get():
+            self.nondim_body.pack(fill=tk.X, padx=10, pady=(2, 4), after=self._nondim_hdr)
+        else:
+            self.nondim_body.pack_forget()
 
     def _layer_stub(self, name: str):
         def _cb() -> None:
@@ -647,6 +672,8 @@ class FlowplotGui(tk.Tk):
         )
 
     def _log(self, msg: str) -> None:
+        if not hasattr(self, "log") or self.log is None:
+            return
         self.log.insert(tk.END, msg.rstrip() + "\n")
         self.log.see(tk.END)
 
@@ -1028,21 +1055,21 @@ class FlowplotGui(tk.Tk):
         self.viewport.delete("preview")
         self.viewport.delete("probe")
         native = (img.width, img.height)
-        # Fill the viewport with minimal padding (2 px) — no large letterbox waste.
-        max_w = max(cw - 2, 16)
-        max_h = max(ch - 2, 16)
-        # Prefer cover-ish fit: scale uniformly so the shorter side fills.
-        sx = max_w / max(img.width, 1)
-        sy = max_h / max(img.height, 1)
-        scale = min(sx, sy)
-        new_w = max(1, int(round(img.width * scale)))
-        new_h = max(1, int(round(img.height * scale)))
-        if (new_w, new_h) != (img.width, img.height):
-            # High-quality resize; integer 1:1 keeps supersampled fonts sharp.
-            resample = Image.Resampling.NEAREST if abs(scale - 1.0) < 1e-6 else Image.Resampling.LANCZOS
-            show = img.resize((new_w, new_h), resample)
-        else:
+        # Exact Viewport fill: prefer 1:1 (CLI rendered at canvas size).
+        target_w = max(cw - 2, 16)
+        target_h = max(ch - 2, 16)
+        if abs(img.width - target_w) <= 2 and abs(img.height - target_h) <= 2:
             show = img
+        else:
+            sx = target_w / max(img.width, 1)
+            sy = target_h / max(img.height, 1)
+            scale = max(sx, sy)  # cover — fill Viewport
+            new_w = max(1, int(round(img.width * scale)))
+            new_h = max(1, int(round(img.height * scale)))
+            show = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            left = max(0, (new_w - target_w) // 2)
+            top = max(0, (new_h - target_h) // 2)
+            show = show.crop((left, top, left + target_w, top + target_h))
         if show.width < 4 or show.height < 4:
             self._log(
                 f"Preview image too small after fit ({show.width}×{show.height}); "
@@ -1237,14 +1264,14 @@ class FlowplotGui(tk.Tk):
             self._set_status("No layers enabled")
             return
 
-        # Match raster size to the Viewport so the plot fills available space.
+        # Exact Viewport raster → 1:1 display (fonts stay crisp; no letterbox).
         cw = max(self.viewport.winfo_width(), 64)
         ch = max(self.viewport.winfo_height(), 64)
         if interactive:
             width, height = max(cw // 2, 320), max(ch // 2, 240)
             quality = "preview"
         else:
-            width, height = min(cw, 1600), min(ch, 1200)
+            width, height = min(max(cw, 64), 1920), min(max(ch, 64), 1440)
             quality = "full"
 
         out = Path(tempfile.gettempdir()) / f"flowplot_gui_view_{quality}.png"
@@ -1402,7 +1429,7 @@ class FlowplotGui(tk.Tk):
             style,
             "--fill",
             "--margin",
-            "4",
+            "2",
             *zone_args,
             *mesh_color_args,
             *size,
@@ -1422,7 +1449,7 @@ class FlowplotGui(tk.Tk):
             "--colormap",
             cd.cli_colormap(),
             "--margin",
-            "4",
+            "2",
         ]
         if cd.legend:
             args.append("--legend")

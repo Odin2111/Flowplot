@@ -1,7 +1,7 @@
 //! VisIt-style plot annotations: title / time / cycle, variable name, colorbar.
 //!
-//! Text is drawn with 2× supersampled TrueType coverage (DejaVu Sans via
-//! `fontdue`) so HUD labels stay sharp and undistorted at viewport scale.
+//! Text uses native fontdue coverage AA at the destination pixel size (no
+//! bitmap stretch / supersample mismatch). Pair with a 1:1 Viewport raster.
 
 use std::sync::OnceLock;
 
@@ -100,10 +100,6 @@ const FG_SOFT: [u8; 4] = [55, 64, 72, 255];
 const PANEL: [u8; 4] = [250, 251, 252, 230];
 const BAR_FRAME: [u8; 4] = [30, 30, 30, 255];
 
-/// Supersample factor for glyph coverage (reduces stretch/jaggies when PNGs
-/// are shown near 1:1 in the GUI viewport).
-const AA_SCALE: f32 = 2.0;
-
 fn annotation_font() -> &'static Font {
     static FONT: OnceLock<Font> = OnceLock::new();
     FONT.get_or_init(|| {
@@ -128,20 +124,20 @@ pub fn draw_annotations(img: &mut ContourImage, info: &AnnotationInfo) {
         return;
     }
     let lines = info_lines(info);
-    // Slightly larger HUD so supersampled glyphs stay readable after LANCZOS fit.
-    let title_px = if img.width >= 900 {
+    // Larger HUD readable at 1:1 Viewport pixels (no post-scale stretch).
+    let title_px = if img.width >= 1000 {
+        18.0
+    } else if img.width >= 700 {
         16.0
-    } else if img.width >= 700 {
-        15.0
     } else {
-        13.0
+        14.0
     };
-    let body_px = if img.width >= 900 {
-        13.0
+    let body_px = if img.width >= 1000 {
+        14.0
     } else if img.width >= 700 {
-        12.0
+        13.0
     } else {
-        11.0
+        12.0
     };
     let pad = 10i32;
     let line_gap = 3i32;
@@ -343,59 +339,35 @@ fn measure_text(text: &str, px: f32) -> (i32, i32) {
     ((w.ceil() as i32).max(1), h.max(1))
 }
 
-/// Anti-aliased TrueType text via 2× coverage supersample.
-///
-/// Glyphs are rasterized at `2×px` and downsampled with matching 2× metrics
-/// (xmin/ymin/advance all ÷2) so strokes never look horizontally stretched.
+/// Anti-aliased TrueType text at exact destination size (coverage blend).
 fn draw_text_aa(img: &mut ContourImage, x: f32, y: f32, text: &str, px: f32, rgba: [u8; 4]) {
     let font = annotation_font();
     let (ascent, _descent) = line_metrics(px);
     let baseline = y + ascent;
     let mut pen_x = x;
-    let hi_px = px * AA_SCALE;
-    let scale = AA_SCALE as i32;
     for ch in text.chars() {
-        let (metrics, bitmap) = font.rasterize(ch, hi_px);
-        // All placement from the high-res metrics, scaled back to destination.
-        let glyph_x0 = pen_x + (metrics.xmin as f32) / AA_SCALE;
-        let glyph_y0 = baseline + (metrics.ymin as f32) / AA_SCALE;
-        let dst_w = ((metrics.width as f32) / AA_SCALE).ceil() as i32;
-        let dst_h = ((metrics.height as f32) / AA_SCALE).ceil() as i32;
-        for row in 0..dst_h {
-            for col in 0..dst_w {
-                let mut acc = 0u32;
-                let mut n = 0u32;
-                for sy in 0..scale {
-                    for sx in 0..scale {
-                        let src_x = col * scale + sx;
-                        let src_y = row * scale + sy;
-                        if src_x >= 0
-                            && src_y >= 0
-                            && src_x < metrics.width as i32
-                            && src_y < metrics.height as i32
-                        {
-                            acc += bitmap[src_y as usize * metrics.width + src_x as usize] as u32;
-                            n += 1;
-                        }
-                    }
-                }
-                if n == 0 || acc == 0 {
+        let (metrics, bitmap) = font.rasterize(ch, px);
+        let glyph_x = (pen_x + metrics.xmin as f32).round() as i32;
+        let glyph_y = (baseline + metrics.ymin as f32).round() as i32;
+        for row in 0..metrics.height {
+            for col in 0..metrics.width {
+                let cover = bitmap[row * metrics.width + col];
+                if cover == 0 {
                     continue;
                 }
-                let cover = ((acc + n / 2) / n) as u8;
                 let a = ((cover as u16 * rgba[3] as u16) / 255) as u8;
                 if a == 0 {
                     continue;
                 }
                 blend_pixel(
                     img,
-                    (glyph_x0 + col as f32).round() as i32,
-                    (glyph_y0 + row as f32).round() as i32,
+                    glyph_x + col as i32,
+                    glyph_y + row as i32,
                     [rgba[0], rgba[1], rgba[2], a],
                 );
             }
         }
-        pen_x += metrics.advance_width / AA_SCALE;
+        pen_x += metrics.advance_width;
     }
 }
 

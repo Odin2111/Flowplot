@@ -6,10 +6,10 @@ Native **tkinter** shell under `gui/flowplot_gui.py`. The viewport previews PNGs
 
 | Region | Contents |
 |--------|----------|
-| Top | Menus **File / Plot / Style / Agents / Help**, Contour toolbar **＋/－ · Abc · ✎ Probe · Details…**, wordmark + **Open · Redraw · Export PNG** |
-| Left | **Plot** panel: plot type (2D/3D Cartesian…), **Show Zone Layers** (Mesh / Contour / Shade / Vector / Edge / Scatter), **Show Derived Objects** (Pathlines), contour variable combo from `flowplot info`, **Zone Style…** |
-| Center | Viewport fills available space (CLI raster sized to canvas; `--fill` mesh). **Drag** warps last frame; **✎ Probe** click prints values on the plot; **settle** = preview then full fill |
-| Right | Nondim scales **U_ref, Lx, Ly, Lz, T_ref** → CLI flags, plus a short log |
+| Top | Menus **File / Plot / Style / Agents / Help**, always-visible Contour toolbar **＋ Level / － Level / Abc Label / ✎ Probe / Details…**, wordmark + **Open · Redraw · Export PNG** |
+| Left | **Plot** panel (scrollable): layers, variable, cut/view, Zone Style / Contour Details, collapsible **Nondim scales ▸**, Log |
+| Center | **Viewport full width** (no right column). CLI raster sized 1:1 to canvas; mesh `--fill`. **✎ Probe** click prints values; drag = orbit |
+| Right | *(removed — Nondim moved under Plot)* |
 
 ## Defaults (match Tecplot)
 
