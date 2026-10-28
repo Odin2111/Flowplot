@@ -879,7 +879,6 @@ fn run_pathlines_cmd(
     } else {
         render_pathlines_png_styled(&ds, &pl_opts, width, height, style)?
     };
-    let _ = &mut img;
     write_png(out, &img)?;
     if json {
         println!(
