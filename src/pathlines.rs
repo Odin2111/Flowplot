@@ -3,7 +3,7 @@
 //! On a steady loaded dataset these are streamlines of (U,V[,W]); the user-facing
 //! name is pathlines.
 
-use crate::contour::{draw_line, world_to_pixel, ContourImage};
+use crate::contour::{draw_frame, draw_line, world_to_pixel, ContourImage, PlotStyle};
 use crate::dataset::Dataset;
 use crate::error::{Error, Result};
 use crate::field::{extract_scalar_grid, find_var, Grid2D, PlaneSpec};
@@ -187,12 +187,25 @@ fn velocity_at(grid: &Grid2D, u: &[f64], v: &[f64], x: f64, y: f64) -> Option<(f
 
 /// Overlay pathlines onto an existing contour image (black strokes).
 pub fn overlay_pathlines(img: &mut ContourImage, lines: &[Pathline]) {
-    const COLOR: [u8; 4] = [10, 10, 10, 255];
+    overlay_pathlines_styled(img, lines, PlotStyle::Default);
+}
+
+/// Overlay pathlines with a publication style (stroke color / weight).
+pub fn overlay_pathlines_styled(img: &mut ContourImage, lines: &[Pathline], style: PlotStyle) {
+    let color = style.pathline_rgba();
+    let width = style.pathline_width().max(1);
     for line in lines {
         for w in line.points.windows(2) {
             let (x0, y0) = world_to_pixel(img, w[0][0], w[0][1]);
             let (x1, y1) = world_to_pixel(img, w[1][0], w[1][1]);
-            draw_line(img, x0, y0, x1, y1, COLOR);
+            if width <= 1 {
+                draw_line(img, x0, y0, x1, y1, color);
+            } else {
+                // Slight thickening for visibility without a full stroke engine.
+                for dy in -(width as i32 / 2)..=(width as i32 / 2) {
+                    draw_line(img, x0, y0 + dy, x1, y1 + dy, color);
+                }
+            }
         }
     }
 }
@@ -204,11 +217,26 @@ pub fn render_pathlines_png(
     width: u32,
     height: u32,
 ) -> Result<ContourImage> {
+    render_pathlines_png_styled(ds, opts, width, height, PlotStyle::Default)
+}
+
+/// Pathlines-only PNG with a publication style (white paper + black frame for JFM).
+pub fn render_pathlines_png_styled(
+    ds: &Dataset,
+    opts: &PathlineOptions,
+    width: u32,
+    height: u32,
+    style: PlotStyle,
+) -> Result<ContourImage> {
     let u_idx = find_var(ds, &opts.u_var)?;
     let grid = extract_scalar_grid(ds, opts.zone, u_idx, opts.plane)?;
-    let mut rgba = vec![245u8; (width as usize) * (height as usize) * 4];
+    let bg = match style {
+        PlotStyle::Jfm => [255u8, 255, 255, 255],
+        PlotStyle::Default => [245u8, 245, 245, 255],
+    };
+    let mut rgba = vec![0u8; (width as usize) * (height as usize) * 4];
     for px in rgba.chunks_mut(4) {
-        px[3] = 255;
+        px.copy_from_slice(&bg);
     }
     let mut img = ContourImage {
         width,
@@ -219,7 +247,10 @@ pub fn render_pathlines_png(
         grid,
     };
     let lines = trace_pathlines(ds, opts)?;
-    overlay_pathlines(&mut img, &lines);
+    overlay_pathlines_styled(&mut img, &lines, style);
+    if style.draw_frame() {
+        draw_frame(&mut img, style.frame_rgba(), style.frame_thickness());
+    }
     Ok(img)
 }
 

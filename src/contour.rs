@@ -1,10 +1,108 @@
 //! Scalar contour / color-field render to PNG.
 
 use std::path::Path;
+use std::str::FromStr;
 
 use crate::dataset::Dataset;
 use crate::error::{Error, Result};
 use crate::field::{extract_scalar_grid, find_var, Grid2D, PlaneSpec};
+
+/// Publication / screen look for contour and pathline PNGs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlotStyle {
+    /// Saturated Turbo colormap, dark NaN fill (default screen look).
+    #[default]
+    Default,
+    /// Journal of Fluid Mechanics–like: restrained coolwarm, white exterior,
+    /// black frame, thin black pathlines. Single-column aspect when size is left
+    /// at the CLI default (512×512 → 700×525).
+    Jfm,
+}
+
+impl FromStr for PlotStyle {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "default" | "turbo" => Ok(Self::Default),
+            "jfm" => Ok(Self::Jfm),
+            other => Err(format!("unknown plot style '{other}' (expected default|jfm)")),
+        }
+    }
+}
+
+impl PlotStyle {
+    /// Suggested raster size for a single-column JFM figure (~88 mm at ~200 dpi).
+    pub const JFM_WIDTH: u32 = 700;
+    pub const JFM_HEIGHT: u32 = 525;
+
+    pub fn colormap(self, t: f64) -> (u8, u8, u8) {
+        match self {
+            Self::Default => colormap_turbo(t),
+            Self::Jfm => colormap_jfm(t),
+        }
+    }
+
+    pub fn nan_rgba(self) -> [u8; 4] {
+        match self {
+            Self::Default => [20, 20, 20, 255],
+            Self::Jfm => [255, 255, 255, 255],
+        }
+    }
+
+    pub fn pathline_rgba(self) -> [u8; 4] {
+        match self {
+            Self::Default => [10, 10, 10, 255],
+            Self::Jfm => [0, 0, 0, 255],
+        }
+    }
+
+    pub fn pathline_width(self) -> u32 {
+        match self {
+            Self::Default => 1,
+            Self::Jfm => 1,
+        }
+    }
+
+    pub fn draw_frame(self) -> bool {
+        matches!(self, Self::Jfm)
+    }
+
+    pub fn frame_rgba(self) -> [u8; 4] {
+        [0, 0, 0, 255]
+    }
+
+    pub fn frame_thickness(self) -> u32 {
+        2
+    }
+
+    /// CSS / matplotlib-oriented defaults for a future GUI or companion plots.
+    pub fn css_defaults(self) -> &'static str {
+        match self {
+            Self::Default => {
+                "--fp-font-family: system-ui, sans-serif;\n\
+                 --fp-axis-color: #141414;\n\
+                 --fp-axis-lw: 1.0px;\n\
+                 --fp-pathline-lw: 1.0px;\n\
+                 --fp-colormap: turbo;\n\
+                 --fp-bg: #141414;"
+            }
+            Self::Jfm => {
+                "--fp-font-family: \"Times New Roman\", Times, \"Liberation Serif\", serif;\n\
+                 --fp-math-font: \"STIX Two Math\", \"Latin Modern Math\", serif;\n\
+                 --fp-label-size: 9pt;\n\
+                 --fp-tick-size: 8pt;\n\
+                 --fp-axis-color: #000000;\n\
+                 --fp-axis-lw: 0.75pt;\n\
+                 --fp-pathline-lw: 0.5pt;\n\
+                 --fp-colormap: coolwarm-restrained;\n\
+                 --fp-bg: #ffffff;\n\
+                 --fp-fig-width: 88mm;\n\
+                 --fp-dpi: 300;"
+            }
+        }
+    }
+}
 
 /// Options for rendering a scalar contour of any variable present in the dataset.
 #[derive(Debug, Clone)]
@@ -16,6 +114,7 @@ pub struct ContourOptions {
     pub vmax: Option<f64>,
     pub width: u32,
     pub height: u32,
+    pub style: PlotStyle,
 }
 
 impl Default for ContourOptions {
@@ -28,6 +127,7 @@ impl Default for ContourOptions {
             vmax: None,
             width: 512,
             height: 512,
+            style: PlotStyle::Default,
         }
     }
 }
@@ -69,6 +169,7 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
     }
 
     let (xmin, xmax, ymin, ymax) = grid.bounds();
+    let nan = opts.style.nan_rgba();
     let mut rgba = vec![0u8; (opts.width as usize) * (opts.height as usize) * 4];
     for py in 0..opts.height {
         let v = 1.0 - (py as f64 + 0.5) / opts.height as f64;
@@ -77,28 +178,33 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
             let u = (px as f64 + 0.5) / opts.width as f64;
             let x = xmin + u * (xmax - xmin);
             let val = grid.sample(x, y).unwrap_or(f64::NAN);
-            let (r, g, b) = if val.is_finite() {
+            let (r, g, b, a) = if val.is_finite() {
                 let t = ((val - vmin) / (vmax - vmin)).clamp(0.0, 1.0);
-                colormap_turbo(t)
+                let (r, g, b) = opts.style.colormap(t);
+                (r, g, b, 255)
             } else {
-                (20, 20, 20)
+                (nan[0], nan[1], nan[2], nan[3])
             };
             let i = ((py * opts.width + px) * 4) as usize;
             rgba[i] = r;
             rgba[i + 1] = g;
             rgba[i + 2] = b;
-            rgba[i + 3] = 255;
+            rgba[i + 3] = a;
         }
     }
 
-    Ok(ContourImage {
+    let mut img = ContourImage {
         width: opts.width,
         height: opts.height,
         rgba,
         vmin,
         vmax,
         grid,
-    })
+    };
+    if opts.style.draw_frame() {
+        draw_frame(&mut img, opts.style.frame_rgba(), opts.style.frame_thickness());
+    }
+    Ok(img)
 }
 
 /// Write contour (or overlay) raster as PNG.
@@ -165,6 +271,50 @@ fn colormap_turbo(t: f64) -> (u8, u8, u8) {
                 + t * (27814.0 + t * (-22569.18 + t * 6838.66)))))
         .clamp(0.0, 255.0);
     (r as u8, g as u8, b as u8)
+}
+
+/// Restrained coolwarm (blue → soft gray → muted red) for JFM-style figures.
+fn colormap_jfm(t: f64) -> (u8, u8, u8) {
+    let t = t.clamp(0.0, 1.0);
+    // Anchors chosen to avoid neon saturation; mid is near paper white-gray.
+    const STOPS: [(f64, (f64, f64, f64)); 5] = [
+        (0.0, (33.0, 68.0, 120.0)),    // navy-blue
+        (0.25, (95.0, 140.0, 185.0)),  // soft blue
+        (0.5, (235.0, 235.0, 235.0)),  // light gray
+        (0.75, (200.0, 120.0, 100.0)), // muted coral
+        (1.0, (140.0, 45.0, 40.0)),    // brick red
+    ];
+    for w in STOPS.windows(2) {
+        let (t0, c0) = w[0];
+        let (t1, c1) = w[1];
+        if t <= t1 || (t1 - t0).abs() < 1e-12 {
+            let u = if (t1 - t0).abs() < 1e-12 {
+                0.0
+            } else {
+                ((t - t0) / (t1 - t0)).clamp(0.0, 1.0)
+            };
+            let r = c0.0 + u * (c1.0 - c0.0);
+            let g = c0.1 + u * (c1.1 - c0.1);
+            let b = c0.2 + u * (c1.2 - c0.2);
+            return (r as u8, g as u8, b as u8);
+        }
+    }
+    (140, 45, 40)
+}
+
+/// Draw a rectangular frame (black axes look) around the image.
+pub fn draw_frame(img: &mut ContourImage, rgba: [u8; 4], thickness: u32) {
+    let t = thickness.max(1);
+    let w = img.width;
+    let h = img.height;
+    for y in 0..h {
+        for x in 0..w {
+            let on_border = x < t || y < t || x >= w.saturating_sub(t) || y >= h.saturating_sub(t);
+            if on_border {
+                put_pixel(img, x as i32, y as i32, rgba);
+            }
+        }
+    }
 }
 
 /// Map physical (x,y) in grid bounds to pixel coordinates.
@@ -266,5 +416,26 @@ mod tests {
         write_png(&path, &img).unwrap();
         assert!(path.metadata().unwrap().len() > 32);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn jfm_style_draws_black_frame() {
+        let img = render_contour(
+            &ds(),
+            &ContourOptions {
+                variable: "P".into(),
+                width: 40,
+                height: 30,
+                style: PlotStyle::Jfm,
+                vmin: Some(0.0),
+                vmax: Some(3.0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // Corner pixel should be black frame.
+        assert_eq!(&img.rgba[0..4], &[0, 0, 0, 255]);
+        assert!(PlotStyle::Jfm.css_defaults().contains("Times"));
+        assert_eq!("jfm".parse::<PlotStyle>().unwrap(), PlotStyle::Jfm);
     }
 }
