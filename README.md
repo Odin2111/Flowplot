@@ -4,7 +4,7 @@ Rust CFD post-processing library with a Tecplot-like data model:
 
 **Dataset → Zone → named Variables**, with ordered (I / IJ / IJK) or finite-element connectivity, and nodal or cell-centered values.
 
-This slice adds **scalar contour PNGs**, **reference-scale nondimensionalization** (CLI/config), and **pathlines** (streamlines of the velocity field). The GUI comes later.
+This slice adds **scalar contour PNGs**, **reference-scale nondimensionalization** (CLI/config), and **pathlines** (streamlines of the velocity field). A first **GUI shell** (layout only; CLI-backed) lives under `gui/`.
 
 ## Build
 
@@ -16,6 +16,15 @@ cargo run --bin flowplot -- contour tests/fixtures/flow.dat --var P -o /tmp/p.pn
 ```
 
 Requires a recent stable Rust toolchain (`edition = "2021"`).
+
+## GUI (layout shell)
+
+```bash
+cargo build
+python3 gui/flowplot_gui.py
+```
+
+Menus: File, Plot, Style, Agents, Help. Tool strip: Load, Contour, Nondim, Pathlines, Export PNG. Right column: nondim scales (`U_ref`, `Lx`, `Ly`, `Lz`, `T_ref`). See [docs/gui-layout.md](docs/gui-layout.md).
 
 ## CLI
 
@@ -63,6 +72,7 @@ flowplot pathlines <path> -o lines.png [--var P] [--seed x,y] [--u-var U] [--v-v
 - `src/pathlines.rs` — velocity-field particle traces
 - `src/field.rs` — ordered-plane extract + bilinear sample
 - `src/bin/flowplot.rs` — CLI
+- `gui/` — first tkinter layout shell + SVG wordmark
 - `tests/fixtures/` — synthetic Tecplot / VTK ASCII (incl. `flow.dat` for contour/pathlines)
 
 ## License
