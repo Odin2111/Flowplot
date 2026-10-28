@@ -6,6 +6,8 @@ Tools mirror lehar-facing Flowplot commands:
   flowplot_contour   — `flowplot contour … --json`
   flowplot_nondim    — `flowplot nondim … --json`
   flowplot_pathlines — `flowplot pathlines … --json`
+  flowplot_menu      — `flowplot menu [--group …] --json`
+  flowplot_menu_run  — `flowplot menu run <id> -- … --json`
 
 No third-party deps. Set FLOWPLOT_BIN to the `flowplot` executable (default: flowplot on PATH).
 Protocol: JSON-RPC 2.0 MCP subset over newline-delimited stdin/stdout.
@@ -114,6 +116,45 @@ TOOLS = [
                 "t_ref": {"type": "number"},
             },
             "required": ["path"],
+        },
+    },
+    {
+        "name": "flowplot_menu",
+        "description": (
+            "List the CFD post-processing menu (groups/items from "
+            "agents/postprocess-menu.yaml) as JSON."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "group": {
+                    "type": "string",
+                    "description": "Optional group id filter (e.g. shocks, suites).",
+                },
+                "id": {
+                    "type": "string",
+                    "description": "If set, show one menu item instead of listing.",
+                },
+            },
+        },
+    },
+    {
+        "name": "flowplot_menu_run",
+        "description": (
+            "Run a menu item id. Ready items dispatch to Flowplot; stubs return "
+            "requires-agent documentation and planned flags."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Menu item id (e.g. contour, bow-shock-field)"},
+                "args": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Args forwarded after `flowplot <command>` (path, --var, -o, …).",
+                },
+            },
+            "required": ["id"],
         },
     },
 ]
@@ -235,6 +276,20 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         argv.extend(_seed_args(arguments))
         argv.extend(_nondim_args(arguments))
         argv.append("--json")
+        return run_flowplot(argv)
+
+    if name == "flowplot_menu":
+        if arguments.get("id"):
+            return run_flowplot(["--json", "menu", "show", str(arguments["id"])])
+        argv = ["--json", "menu", "list"]
+        if arguments.get("group"):
+            argv.extend(["--group", str(arguments["group"])])
+        return run_flowplot(argv)
+
+    if name == "flowplot_menu_run":
+        argv = ["--json", "menu", "run", str(arguments["id"]), "--"]
+        for a in arguments.get("args") or []:
+            argv.append(str(a))
         return run_flowplot(argv)
 
     return {"status": "error", "error": f"unknown tool: {name}"}

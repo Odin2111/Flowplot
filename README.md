@@ -38,11 +38,17 @@ flowplot nondim <path> [--u-ref U] [--lx Lx] [--ly Ly] [--lz Lz] [--t-ref T] \
 
 # Pathlines (particle traces / streamlines)
 flowplot pathlines <path> -o lines.png [--var P] [--seed x,y] [--u-var U] [--v-var V] [--json]
+
+# CFD post-processing menu (lehar agents ↔ Flowplot)
+flowplot menu
+flowplot menu show contour
+flowplot menu run load -- tests/fixtures/simple.dat --json
+flowplot menu run bow-shock-field   # stub: requires agent + planned flags
 ```
 
 `--pathlines` overlays traces on the contour PNG; `--pathlines-out` writes a second PNG.
 
-Agents (lehar-agent / MCP): prefer `--json` or `FLOWPLOT_BIN=… python3 agents/flowplot_mcp.py` — see [`docs/agent-bridge.md`](docs/agent-bridge.md).
+Agents (lehar-agent / MCP): prefer `--json` or `FLOWPLOT_BIN=… python3 agents/flowplot_mcp.py` — see [`docs/agent-bridge.md`](docs/agent-bridge.md) and [`docs/postprocess-menu.md`](docs/postprocess-menu.md).
 
 ## Format support
 
@@ -64,9 +70,12 @@ Agents (lehar-agent / MCP): prefer `--json` or `FLOWPLOT_BIN=… python3 agents/
 - `src/nondim.rs` — reference scales + name suggestions
 - `src/pathlines.rs` — velocity-field particle traces
 - `src/field.rs` — ordered-plane extract + bilinear sample
-- `src/bin/flowplot.rs` — CLI (`load` / `contour` / `nondim` / `pathlines`, `--json`)
+- `src/bin/flowplot.rs` — CLI (`load` / `contour` / `nondim` / `pathlines` / `menu`, `--json`)
+- `src/menu.rs` — postprocess menu loader (embedded YAML)
+- `agents/postprocess-menu.yaml` — machine-readable CFD postprocess menu
 - `agents/flowplot_mcp.py` — stdio MCP wrapper for lehar agents
 - `docs/agent-bridge.md` — lehar ↔ Flowplot contract
+- `docs/postprocess-menu.md` — human-facing menu (groups ↔ lehar ↔ CLI/MCP)
 - `tests/fixtures/` — synthetic Tecplot / VTK ASCII (incl. `flow.dat` for contour/pathlines)
 
 ## License

@@ -12,7 +12,11 @@ export FLOWPLOT_BIN="$(pwd)/target/release/flowplot"
 "$FLOWPLOT_BIN" contour <path> --var NAME -o out.png [--plane k=0] [--u-ref …] [--pathlines] --json
 "$FLOWPLOT_BIN" nondim <path> [--u-ref U] [--lx Lx] [--ly Ly] [--lz Lz] [--t-ref T] --json
 "$FLOWPLOT_BIN" pathlines <path> -o lines.png [--seed x,y] [--u-var U] [--v-var V] [--var P] --json
+"$FLOWPLOT_BIN" menu --json
+"$FLOWPLOT_BIN" menu run <id> -- <flowplot-args…> --json
 ```
+
+Post-processing menu (lehar agent ↔ Flowplot): [`docs/postprocess-menu.md`](postprocess-menu.md), machine-readable [`agents/postprocess-menu.yaml`](../agents/postprocess-menu.yaml).
 
 Bare `flowplot <path> --json` is an alias of `load`. Every successful JSON payload has `"status":"ok"`; failures use `"status":"error"` and a non-zero exit code.
 
@@ -24,7 +28,7 @@ Bare `flowplot <path> --json` is an alias of `load`. Every successful JSON paylo
 FLOWPLOT_BIN=./target/release/flowplot python3 agents/flowplot_mcp.py
 ```
 
-Tools: `flowplot_load`, `flowplot_contour`, `flowplot_nondim`, `flowplot_pathlines`. Newline-delimited JSON-RPC on stdin/stdout.
+Tools: `flowplot_load`, `flowplot_contour`, `flowplot_nondim`, `flowplot_pathlines`, `flowplot_menu`, `flowplot_menu_run`. Newline-delimited JSON-RPC on stdin/stdout.
 
 ## Match to lehar-agent interfaces
 
