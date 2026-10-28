@@ -754,8 +754,9 @@ fn dataset_load_json(path: &PathBuf, ds: &Dataset, suggestions: &[NondimSuggesti
             zone.cell_count()
         ));
     }
+    let effectively_2d = flowplot::dataset_is_effectively_2d(ds);
     format!(
-        "{{\"status\":\"ok\",\"command\":\"load\",\"path\":{},\"title\":{},\"variables\":{},\"zones\":[{}],\"nondim_suggestions\":{}}}",
+        "{{\"status\":\"ok\",\"command\":\"load\",\"path\":{},\"title\":{},\"variables\":{},\"zones\":[{}],\"effectively_2d\":{},\"nondim_suggestions\":{}}}",
         json_string(&path.display().to_string()),
         ds.title
             .as_ref()
@@ -763,6 +764,7 @@ fn dataset_load_json(path: &PathBuf, ds: &Dataset, suggestions: &[NondimSuggesti
             .unwrap_or_else(|| "null".into()),
         json_string_list(&ds.variables),
         zones.join(","),
+        if effectively_2d { "true" } else { "false" },
         suggestions_json(suggestions)
     )
 }
@@ -1010,8 +1012,9 @@ fn run_contour(
     if do_mesh {
         let mesh_grid = extract_mesh_grid(&ds, zone, plane)?;
         let line = match style {
+            // JFM print style keeps black wires; default GUI/CLI mesh is green.
             PlotStyle::Jfm => [0, 0, 0, 255],
-            PlotStyle::Default => [20, 20, 20, 220],
+            PlotStyle::Default => flowplot::DEFAULT_MESH_RGBA,
         };
         // Match stretched contour mapping so wires sit on the color field.
         overlay_mesh(&mut img, &mesh_grid, false, 0, line);
