@@ -11,6 +11,7 @@ use flowplot::field::{extract_scalar_grid, find_var, PlaneSpec};
 use flowplot::menu::{
     format_item_text, format_menu_text, format_stub_run, MenuItem, PostprocessMenu,
 };
+use flowplot::mesh::{extract_mesh_grid, overlay_mesh, render_mesh, MeshOptions};
 use flowplot::nondim::{
     apply_nondim, format_suggestions, suggest_scales, NondimScales, NondimSuggestion,
 };
@@ -23,7 +24,7 @@ use flowplot::{load_path, Dataset};
 #[derive(Parser, Debug)]
 #[command(
     name = "flowplot",
-    about = "CFD post-processor: load Tecplot/VTK ASCII, contour, nondim, pathlines, menu",
+    about = "CFD post-processor: load Tecplot/VTK, mesh, contour, nondim, pathlines, menu",
     arg_required_else_help = true
 )]
 struct Cli {
@@ -47,6 +48,28 @@ enum Commands {
     /// Load a CFD file and summarize zones / variables (preferred agent entry).
     Load {
         path: PathBuf,
+    },
+    /// Wireframe mesh / zone grid PNG (default first view; equal aspect, no contour).
+    Mesh {
+        path: PathBuf,
+        /// Output PNG path.
+        #[arg(long, short = 'o')]
+        out: PathBuf,
+        /// Zone index (default 0).
+        #[arg(long, default_value_t = 0)]
+        zone: usize,
+        /// Plane/slice, e.g. k=0, i=1, j=2 (default: auto).
+        #[arg(long)]
+        plane: Option<String>,
+        #[arg(long, default_value_t = 800)]
+        width: u32,
+        #[arg(long, default_value_t = 600)]
+        height: u32,
+        /// Plot look: `default` or `jfm` (black frame on white).
+        #[arg(long, default_value = "default", value_parser = parse_plot_style)]
+        style: PlotStyle,
+        #[command(flatten)]
+        nondim: NondimArgs,
     },
     /// Contour (pseudocolor) any scalar variable to PNG.
     Contour {
@@ -78,6 +101,9 @@ enum Commands {
         style: PlotStyle,
         #[command(flatten)]
         nondim: NondimArgs,
+        /// Overlay the zone mesh (wireframe) on the contour.
+        #[arg(long, default_value_t = false)]
+        mesh: bool,
         /// Also trace pathlines and overlay them on the contour PNG.
         #[arg(long)]
         pathlines: bool,
@@ -243,12 +269,32 @@ fn dispatch(
         None => {
             let Some(path) = bare_path else {
                 return Err(flowplot::Error::plot(
-                    "usage: flowplot [--json] <path> | flowplot [--json] <load|info|contour|nondim|pathlines|menu> ...",
+                    "usage: flowplot [--json] <path> | flowplot [--json] <load|info|mesh|contour|nondim|pathlines|menu> ...",
                 ));
             };
             run_info(&path, json)
         }
         Some(Commands::Info { path }) | Some(Commands::Load { path }) => run_info(&path, json),
+        Some(Commands::Mesh {
+            path,
+            out,
+            zone,
+            plane,
+            width,
+            height,
+            style,
+            nondim,
+        }) => run_mesh(
+            &path,
+            &out,
+            zone,
+            plane.as_deref(),
+            width,
+            height,
+            style,
+            &nondim,
+            json,
+        ),
         Some(Commands::Contour {
             path,
             variable,
@@ -261,6 +307,7 @@ fn dispatch(
             height,
             style,
             nondim,
+            mesh,
             pathlines,
             pathlines_out,
             pathline: pl_args,
@@ -276,6 +323,7 @@ fn dispatch(
             height,
             style,
             &nondim,
+            mesh,
             pathlines,
             pathlines_out.as_ref(),
             &pl_args,
@@ -672,6 +720,70 @@ fn resolve_raster_size(style: PlotStyle, width: u32, height: u32) -> (u32, u32) 
     }
 }
 
+fn run_mesh(
+    path: &PathBuf,
+    out: &PathBuf,
+    zone: usize,
+    plane: Option<&str>,
+    width: u32,
+    height: u32,
+    style: PlotStyle,
+    nondim: &NondimArgs,
+    json: bool,
+) -> flowplot::Result<()> {
+    let mut nondim_args = nondim.clone();
+    if json {
+        nondim_args.suggest = false;
+    }
+    let ds = maybe_nondim(load_path(path)?, &nondim_args, nondim_args.suggest)?;
+    let plane = parse_plane(plane)?;
+    let (width, height) = if style == PlotStyle::Jfm && width == 800 && height == 600 {
+        (PlotStyle::JFM_WIDTH, PlotStyle::JFM_HEIGHT)
+    } else {
+        (width, height)
+    };
+    let img = render_mesh(
+        &ds,
+        &MeshOptions {
+            zone,
+            plane,
+            width,
+            height,
+            style,
+            ..Default::default()
+        },
+    )?;
+    write_png(out, &img)?;
+    let (xmin, xmax, ymin, ymax) = img.grid.bounds();
+    if json {
+        println!(
+            "{{\"status\":\"ok\",\"command\":\"mesh\",\"path\":{},\"zone\":{},\"out\":{},\"ni\":{},\"nj\":{},\"bounds\":[{},{},{},{}]}}",
+            json_string(&path.display().to_string()),
+            zone,
+            json_string(&out.display().to_string()),
+            img.grid.ni,
+            img.grid.nj,
+            json_f64(xmin),
+            json_f64(xmax),
+            json_f64(ymin),
+            json_f64(ymax)
+        );
+    } else {
+        println!(
+            "wrote mesh {} (zone={}, {}×{}, equal-aspect bounds=[{}, {}]×[{}, {}])",
+            out.display(),
+            zone,
+            img.grid.ni,
+            img.grid.nj,
+            xmin,
+            xmax,
+            ymin,
+            ymax
+        );
+    }
+    Ok(())
+}
+
 fn run_contour(
     path: &PathBuf,
     variable: &str,
@@ -684,6 +796,7 @@ fn run_contour(
     height: u32,
     style: PlotStyle,
     nondim: &NondimArgs,
+    do_mesh: bool,
     do_pathlines: bool,
     pathlines_out: Option<&PathBuf>,
     pl_args: &PathlineArgs,
@@ -711,6 +824,16 @@ fn run_contour(
         },
     )?;
 
+    if do_mesh {
+        let mesh_grid = extract_mesh_grid(&ds, zone, plane)?;
+        let line = match style {
+            PlotStyle::Jfm => [0, 0, 0, 255],
+            PlotStyle::Default => [20, 20, 20, 220],
+        };
+        // Match stretched contour mapping so wires sit on the color field.
+        overlay_mesh(&mut img, &mesh_grid, false, 0, line);
+    }
+
     let mut n_traces = 0usize;
     let mut pathlines_out_written: Option<String> = None;
     if do_pathlines || pathlines_out.is_some() {
@@ -736,13 +859,14 @@ fn run_contour(
     write_png(out, &img)?;
     if json {
         println!(
-            "{{\"status\":\"ok\",\"command\":\"contour\",\"path\":{},\"var\":{},\"zone\":{},\"out\":{},\"vmin\":{},\"vmax\":{},\"pathline_traces\":{},\"pathlines_out\":{}}}",
+            "{{\"status\":\"ok\",\"command\":\"contour\",\"path\":{},\"var\":{},\"zone\":{},\"out\":{},\"vmin\":{},\"vmax\":{},\"mesh\":{},\"pathline_traces\":{},\"pathlines_out\":{}}}",
             json_string(&path.display().to_string()),
             json_string(variable),
             zone,
             json_string(&out.display().to_string()),
             json_f64(img.vmin),
             json_f64(img.vmax),
+            if do_mesh { "true" } else { "false" },
             n_traces,
             pathlines_out_written
                 .as_ref()
@@ -751,10 +875,11 @@ fn run_contour(
         );
     } else {
         println!(
-            "wrote contour {} (var={}, style={:?}, range=[{}, {}])",
+            "wrote contour {} (var={}, style={:?}, mesh={}, range=[{}, {}])",
             out.display(),
             variable,
             style,
+            do_mesh,
             img.vmin,
             img.vmax
         );

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use flowplot::contour::{render_contour, write_png, ContourOptions};
 use flowplot::field::PlaneSpec;
+use flowplot::mesh::{render_mesh, MeshOptions};
 use flowplot::nondim::{apply_nondim, suggest_scales, NondimScales, ScaleKind};
 use flowplot::pathlines::{overlay_pathlines, trace_pathlines, PathlineOptions};
 use flowplot::load_path;
@@ -93,6 +94,32 @@ fn tiny_pathline_on_flow_fixture_and_overlay() {
     let out = std::env::temp_dir().join("flowplot-test-pathlines.png");
     write_png(&out, &img).unwrap();
     assert!(out.metadata().unwrap().len() > 48);
+    let _ = std::fs::remove_file(&out);
+}
+
+#[test]
+fn mesh_png_from_flow_fixture_equal_aspect() {
+    let ds = load_path(&fixture("flow.dat")).expect("flow.dat");
+    let img = render_mesh(
+        &ds,
+        &MeshOptions {
+            width: 160,
+            height: 120,
+            ..Default::default()
+        },
+    )
+    .expect("mesh");
+    assert_eq!(img.width, 160);
+    assert_eq!(img.height, 120);
+    let dark = img
+        .rgba
+        .chunks_exact(4)
+        .filter(|p| p[0] < 200)
+        .count();
+    assert!(dark > 20, "expected wireframe strokes, got {dark}");
+    let out = std::env::temp_dir().join("flowplot-test-mesh.png");
+    write_png(&out, &img).unwrap();
+    assert!(out.metadata().unwrap().len() > 64);
     let _ = std::fs::remove_file(&out);
 }
 

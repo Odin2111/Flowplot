@@ -19,6 +19,16 @@ fn load_tecplot_ascii_fixture() {
 }
 
 #[test]
+fn load_tecplot_binary_plt_fixture() {
+    let ds = load_path(&fixture("simple.plt")).expect("Tecplot binary .plt fixture");
+    assert_eq!(ds.title.as_deref(), Some("demo"));
+    assert_eq!(ds.variables, vec!["X", "Y", "P"]);
+    assert_eq!(ds.zone_count(), 1);
+    assert_eq!(ds.zones[0].node_count(), 4);
+    assert_eq!(ds.zones[0].fields[2].values, vec![1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
 fn load_vtk_ascii_fixture() {
     let ds = load_path(&fixture("simple.vtk")).expect("VTK ASCII fixture");
     assert_eq!(ds.zone_count(), 1);
@@ -27,4 +37,26 @@ fn load_vtk_ascii_fixture() {
     assert_eq!(ds.zones[0].node_count(), 4);
     let p_idx = ds.variables.iter().position(|v| v == "P").unwrap();
     assert_eq!(ds.zones[0].fields[p_idx].values, vec![1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
+fn load_cgns_fixture_or_clear_stub() {
+    let path = fixture("simple.cgns");
+    match load_path(&path) {
+        Ok(ds) => {
+            assert!(ds.zone_count() >= 1, "expected at least one CGNS zone");
+            assert!(
+                ds.variables.iter().any(|v| v == "X" || v == "CoordinateX" || v == "P"),
+                "vars={:?}",
+                ds.variables
+            );
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            assert!(
+                msg.contains("libcgns") || msg.contains("CGNS"),
+                "unexpected error without clear CGNS guidance: {msg}"
+            );
+        }
+    }
 }
