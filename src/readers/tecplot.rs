@@ -1,8 +1,8 @@
-//! Tecplot ASCII (`.dat` / `.tp`) reader — public ASCII layout only.
+//! Tecplot ASCII (`.dat` / `.tp` / ASCII `.plt`) reader — public ASCII layout.
 //!
 //! Supports a minimal subset: `TITLE`, `VARIABLES`, and `ZONE` with
 //! `I`/`J`/`K` ordered data or `N`/`E`/`ET` finite-element connectivity.
-//! Binary `.plt` is not implemented (no reverse engineering).
+//! Binary `.plt` (`#!TDV…`) is handled by [`super::tecplot_binary`].
 
 use std::path::Path;
 

@@ -292,7 +292,7 @@ class FlowplotGui(tk.Tk):
             wrap=tk.WORD,
         )
         self.log.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
-        self._log("Idle layout. Load a Tecplot/VTK ASCII file to begin.")
+        self._log("Idle layout. Load Tecplot (.plt/.dat), CGNS, or VTK to begin.")
 
     def _build_status(self) -> None:
         bar = ttk.Frame(self, style="MenuBar.TFrame")
@@ -434,7 +434,14 @@ class FlowplotGui(tk.Tk):
         path = filedialog.askopenfilename(
             title="Open CFD dataset",
             filetypes=[
-                ("CFD / Tecplot / VTK", "*.dat *.tp *.vtk"),
+                (
+                    "CFD datasets",
+                    "*.plt *.dat *.tp *.cgns *.cgz *.vtk *.vtu *.vtp *.vti *.vts *.vtr *.cas",
+                ),
+                ("Tecplot", "*.plt *.dat *.tp"),
+                ("CGNS", "*.cgns *.cgz"),
+                ("VTK", "*.vtk *.vtu *.vtp *.vti *.vts *.vtr"),
+                ("Fluent", "*.cas *.dat"),
                 ("All files", "*.*"),
             ],
         )
@@ -443,7 +450,8 @@ class FlowplotGui(tk.Tk):
         self.dataset_path = Path(path)
         self._log(f"Loaded path: {self.dataset_path}")
         self._set_status(str(self.dataset_path))
-        self._run_cli(["info", str(self.dataset_path)])
+        # Prefer `load` (same summary as `info`) so CLI and GUI share one entry.
+        self._run_cli(["load", str(self.dataset_path)])
 
     def action_contour(self) -> None:
         ds = self._require_dataset()
