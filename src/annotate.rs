@@ -260,7 +260,7 @@ fn info_lines(info: &AnnotationInfo) -> Vec<String> {
         }
     }
     if lines.is_empty() {
-        lines.push("Flowplot".into());
+        lines.push("Fieldplot".into());
     }
     lines
 }
@@ -450,33 +450,43 @@ fn blend_pixel(img: &mut ContourImage, x: i32, y: i32, rgba: [u8; 4]) {
 
 fn measure_text(text: &str, px: f32) -> (i32, i32) {
     let font = annotation_font();
-    // Match draw_text_aa: integer px so measure and paint share one baseline grid.
     let px = px.round().clamp(8.0, 48.0);
     let (ascent, descent) = line_metrics(px);
-    let mut w = 0.0f32;
+    let mut w = 0i32;
     for ch in text.chars() {
+        // Skip unknowns that would leave empty tofu boxes looking "broken".
+        if font.lookup_glyph_index(ch) == 0 && ch != ' ' {
+            let (metrics, _) = font.rasterize('?', px);
+            w += metrics.advance_width.round() as i32;
+            continue;
+        }
         let (metrics, _) = font.rasterize(ch, px);
-        w += metrics.advance_width;
+        w += metrics.advance_width.round() as i32;
     }
-    let h = (ascent.round() + descent.round()).ceil() as i32 + 2;
-    ((w.ceil() as i32).max(1), h.max(1))
+    let h = (ascent.round() as i32) + (descent.round() as i32) + 2;
+    (w.max(1), h.max(1))
 }
 
 /// Anti-aliased TrueType text at exact destination size (coverage blend).
 ///
-/// `y` is the top of the line box. Baseline is snapped to an integer once so
-/// glyphs share one alignment line (avoids Viewport "jittery" annotations).
+/// `y` is the top of the line box. Pen and baseline are integers so every glyph
+/// shares one alignment line — no float floor/round jitter in the Viewport.
 fn draw_text_aa(img: &mut ContourImage, x: f32, y: f32, text: &str, px: f32, rgba: [u8; 4]) {
     let font = annotation_font();
     let px = px.round().clamp(8.0, 48.0);
     let (ascent, _descent) = line_metrics(px);
-    let baseline = (y.round() + ascent.round()).round();
-    let mut pen_x = x.round();
+    let baseline = y.round() as i32 + ascent.round() as i32;
+    let mut pen_x = x.round() as i32;
     for ch in text.chars() {
-        let (metrics, bitmap) = font.rasterize(ch, px);
-        // Floor glyph origins onto the shared integer baseline.
-        let glyph_x = (pen_x + metrics.xmin as f32).floor() as i32;
-        let glyph_y = (baseline + metrics.ymin as f32).floor() as i32;
+        let draw_ch = if font.lookup_glyph_index(ch) == 0 && ch != ' ' {
+            '?'
+        } else {
+            ch
+        };
+        let (metrics, bitmap) = font.rasterize(draw_ch, px);
+        // Integer glyph origin from shared baseline (fontdue ymin is relative to baseline).
+        let glyph_x = pen_x + metrics.xmin;
+        let glyph_y = baseline + metrics.ymin;
         for row in 0..metrics.height {
             for col in 0..metrics.width {
                 let cover = bitmap[row * metrics.width + col];
@@ -495,7 +505,7 @@ fn draw_text_aa(img: &mut ContourImage, x: f32, y: f32, text: &str, px: f32, rgb
                 );
             }
         }
-        pen_x += metrics.advance_width;
+        pen_x += metrics.advance_width.round().max(1.0) as i32;
     }
 }
 

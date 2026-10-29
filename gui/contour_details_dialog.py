@@ -91,7 +91,7 @@ class ContourDetailsDialog(tk.Toplevel):
 
         self._build()
         self.protocol("WM_DELETE_WINDOW", self.destroy)
-        stay_above(self, master, modal=True)
+        stay_above(self, master, modal=False)
 
     def _build(self) -> None:
         hdr = tk.Frame(self, bg=HEADER_BG)

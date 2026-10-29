@@ -37,6 +37,7 @@ pub mod field;
 pub mod menu;
 pub mod mesh;
 pub mod nondim;
+pub mod overlays;
 pub mod pathlines;
 pub mod profile;
 pub mod readers;
@@ -64,6 +65,9 @@ pub use mesh::{
 pub use view::{LookAxis, ViewSpec};
 pub use nondim::{
     apply_nondim, format_suggestions, suggest_scales, NondimScales, NondimSuggestion, ScaleKind,
+};
+pub use overlays::{
+    overlay_boundary_edges, overlay_isolines, overlay_scatter, overlay_vectors,
 };
 pub use pathlines::{
     default_seeds, guess_velocity_vars, overlay_pathlines, overlay_pathlines_styled,

@@ -166,6 +166,21 @@ enum Commands {
         /// Pixel margin around the filled plot area.
         #[arg(long, default_value_t = 4)]
         margin: u32,
+        /// Overlay velocity vectors (needs --u-var/--v-var or auto-guess).
+        #[arg(long, default_value_t = false)]
+        vectors: bool,
+        /// Overlay boundary edges only (ordered grid perimeter).
+        #[arg(long, default_value_t = false)]
+        edges: bool,
+        /// Overlay subsampled scatter markers at nodes.
+        #[arg(long, default_value_t = false)]
+        scatter: bool,
+        /// Overlay isolines of the active scalar (2D iso-surfaces).
+        #[arg(long, default_value_t = false)]
+        isolines: bool,
+        /// Subsample stride for vectors / scatter (default 4).
+        #[arg(long, default_value_t = 4)]
+        overlay_skip: usize,
     },
     /// Probe all (or one) variables at world or pixel coordinates (Tecplot-like).
     Probe {
@@ -452,6 +467,11 @@ fn dispatch(
             legend_font,
             legend_align,
             margin,
+            vectors,
+            edges,
+            scatter,
+            isolines,
+            overlay_skip,
         }) => run_contour(
             &path,
             &variable,
@@ -478,6 +498,11 @@ fn dispatch(
             legend_font,
             parse_legend_align(&legend_align),
             margin,
+            vectors,
+            edges,
+            scatter,
+            isolines,
+            overlay_skip,
             json,
         ),
         Some(Commands::Probe {
@@ -1264,6 +1289,11 @@ fn run_contour(
     legend_font_px: f32,
     legend_align: LegendAlign,
     margin: u32,
+    do_vectors: bool,
+    do_edges: bool,
+    do_scatter: bool,
+    do_isolines: bool,
+    overlay_skip: usize,
     json: bool,
 ) -> flowplot::Result<()> {
     // Avoid human-only suggestion prints when agents request JSON.
@@ -1306,6 +1336,31 @@ fn run_contour(
         let line = default_mesh_line_rgba(style, mesh_color)?;
         // Match stretched contour mapping so wires sit on the color field.
         overlay_mesh(&mut img, &mesh_grid, false, 0, line);
+    }
+
+    if do_edges {
+        let mesh_grid = extract_mesh_grid_view(&ds, zone, plane, view)?;
+        flowplot::overlay_boundary_edges(&mut img, &mesh_grid, None);
+    }
+    if do_scatter {
+        let mesh_grid = extract_mesh_grid_view(&ds, zone, plane, view)?;
+        flowplot::overlay_scatter(&mut img, &mesh_grid, overlay_skip.max(1), None);
+    }
+    if do_isolines {
+        flowplot::overlay_isolines(&mut img, levels.max(2), None);
+    }
+    if do_vectors {
+        let (gu, gv) = guess_velocity_vars(&ds)?;
+        let u_name = pl_args.u_var.clone().unwrap_or(gu);
+        let v_name = pl_args.v_var.clone().unwrap_or(gv);
+        let u_idx = find_var(&ds, &u_name)?;
+        let v_idx = find_var(&ds, &v_name)?;
+        let u_grid = extract_scalar_grid_view(&ds, zone, u_idx, plane, view)?;
+        let v_grid = extract_scalar_grid_view(&ds, zone, v_idx, plane, view)?;
+        flowplot::overlay_vectors(&mut img, &u_grid, &v_grid, overlay_skip.max(1), None);
+        if !json {
+            println!("vectors: U={u_name} V={v_name} skip={}", overlay_skip.max(1));
+        }
     }
 
     let mut n_traces = 0usize;

@@ -85,7 +85,7 @@ def first_scalar(variables: list[str]) -> str:
 class FlowplotGui(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Flowplot")
+        self.title("Fieldplot")
         self.geometry("1180x720")
         self.minsize(960, 600)
         self.configure(bg=BG)
@@ -114,6 +114,8 @@ class FlowplotGui(tk.Tk):
         self.probe_marks: list[tuple[int, int, str]] = []
         self.pathline_seeds: list[tuple[float, float]] = []
         self._pl_drag_start: tuple[int, int] | None = None
+        # Last rake as fractions of the preview image (survives redraw / pan).
+        self._rake_frac: tuple[tuple[float, float], tuple[float, float]] | None = None
         self._preview_offset: tuple[int, int] = (0, 0)
         self._preview_size: tuple[int, int] = (0, 0)
         self._preview_native: tuple[int, int] = (0, 0)
@@ -122,6 +124,9 @@ class FlowplotGui(tk.Tk):
         self.view_pan_y = 0.0
         self._pan_last: tuple[int, int] | None = None
         self._panning = False
+        self.vector_u = tk.StringVar(value="")
+        self.vector_v = tk.StringVar(value="")
+        self.vector_w = tk.StringVar(value="")
 
         # Tecplot Show Zone Layers — Mesh ON, Contour OFF by default.
         self.layer_mesh = tk.BooleanVar(value=True)
@@ -287,7 +292,7 @@ class FlowplotGui(tk.Tk):
         menu.add_command(label="All Analyze actions…", command=self.open_agents_panel)
 
     def _help_menu_items(self, menu: tk.Menu) -> None:
-        menu.add_command(label="About Flowplot", command=self.show_about)
+        menu.add_command(label="About Fieldplot", command=self.show_about)
 
     def _build_menu(self) -> None:
         """Single native menubar. Stub-only menus (Insert/Animate/Scripting) omitted until wired."""
@@ -323,7 +328,7 @@ class FlowplotGui(tk.Tk):
         logo.pack(side=tk.LEFT, padx=(8, 4), pady=2)
         logo.create_line(4, 18, 10, 8, 16, 8, 22, 18, smooth=True, fill=ACCENT, width=2)
         logo.create_oval(22, 10, 26, 14, fill=ACCENT, outline=ACCENT)
-        logo.create_text(30, 12, text="Flowplot", anchor="w", fill=FG, font=("Helvetica", 11, "bold"))
+        logo.create_text(30, 12, text="Fieldplot", anchor="w", fill=FG, font=("Helvetica", 11, "bold"))
         self._logo_canvas = logo
         self._wordmark_path = WORDMARK
 
@@ -443,19 +448,14 @@ class FlowplotGui(tk.Tk):
 
         layers = ttk.LabelFrame(parent, text="Show Zone Layers", padding=(8, 6))
         layers.pack(fill=tk.X, padx=10, pady=(0, 8))
-        for label, var in (
-            ("Mesh", self.layer_mesh),
-            ("Contour", self.layer_contour),
-            ("Shade", self.layer_shade),
-            ("Vector", self.layer_vector),
-            ("Edge", self.layer_edge),
-            ("Scatter", self.layer_scatter),
+        for label, var, cmd in (
+            ("Mesh", self.layer_mesh, self.action_redraw),
+            ("Contour", self.layer_contour, self.action_redraw),
+            ("Shade", self.layer_shade, self.action_redraw),
+            ("Vector", self.layer_vector, self.action_vector_layer),
+            ("Edge", self.layer_edge, self.action_edge_layer),
+            ("Scatter", self.layer_scatter, self.action_scatter_layer),
         ):
-            cmd = (
-                self.action_redraw
-                if label in ("Mesh", "Contour", "Shade")
-                else self._layer_stub(label)
-            )
             ttk.Checkbutton(
                 layers,
                 text=label,
@@ -644,20 +644,6 @@ class FlowplotGui(tk.Tk):
             self.nondim_body.pack(fill=tk.X, padx=10, pady=(2, 4), after=self._nondim_hdr)
         else:
             self.nondim_body.pack_forget()
-
-    def _layer_stub(self, name: str):
-        def _cb() -> None:
-            # Keep unchecked unimplemented layers from sticking on.
-            var_map = {
-                "Vector": self.layer_vector,
-                "Edge": self.layer_edge,
-                "Scatter": self.layer_scatter,
-            }
-            v = var_map.get(name)
-            if v is not None and v.get():
-                v.set(False)
-                self.stub_plot(name)
-        return _cb
 
     def _build_status(self) -> None:
         bar = ttk.Frame(self, style="MenuBar.TFrame")
@@ -1283,7 +1269,7 @@ class FlowplotGui(tk.Tk):
         self.viewport.delete("preview")
         self.viewport.delete("probe")
         native = (img.width, img.height)
-        # Exact Viewport fill: prefer 1:1 (CLI rendered at canvas size).
+        # Prefer exact 1:1 — bilinear cover stretch destroys annotation glyphs.
         target_w = max(cw - 2, 16)
         target_h = max(ch - 2, 16)
         if abs(img.width - target_w) <= 2 and abs(img.height - target_h) <= 2:
@@ -1291,13 +1277,16 @@ class FlowplotGui(tk.Tk):
         else:
             sx = target_w / max(img.width, 1)
             sy = target_h / max(img.height, 1)
-            scale = max(sx, sy)  # cover — fill Viewport
+            scale = min(sx, sy)  # contain — whole domain, no crop
             new_w = max(1, int(round(img.width * scale)))
             new_h = max(1, int(round(img.height * scale)))
-            show = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-            left = max(0, (new_w - target_w) // 2)
-            top = max(0, (new_h - target_h) // 2)
-            show = show.crop((left, top, left + target_w, top + target_h))
+            # NEAREST keeps HUD/label glyphs crisp when a scale is unavoidable.
+            resample = (
+                Image.Resampling.NEAREST
+                if abs(scale - 1.0) < 0.02 or scale > 0.85
+                else Image.Resampling.BILINEAR
+            )
+            show = img.resize((new_w, new_h), resample)
         if show.width < 4 or show.height < 4:
             self._log(
                 f"Preview image too small after fit ({show.width}×{show.height}); "
@@ -1310,6 +1299,7 @@ class FlowplotGui(tk.Tk):
         self._preview_size = (show.width, show.height)
         self._preview_native = native
         self._draw_probe_overlays()
+        self._draw_persistent_rake()
         # Keep a full-res settle copy for drag-time warping (before thumbnail).
         try:
             settle_src = Image.open(preview_path).convert("RGBA")
@@ -1513,29 +1503,50 @@ class FlowplotGui(tk.Tk):
 
         want_mesh = self.layer_mesh.get()
         want_shade = self.layer_shade.get()
-        # Shade = continuous flood under mesh (first slice); Contour may add bands/labels.
-        want_contour = self.layer_contour.get() or want_shade
-        want_pathlines = self.layer_pathlines.get()
+        want_vector = self.layer_vector.get()
+        want_edge = self.layer_edge.get()
+        want_scatter = self.layer_scatter.get()
+        want_iso = self.layer_isosurfaces.get()
+        # Shade/iso/vector/edge/scatter need a scalar raster base.
+        want_contour = (
+            self.layer_contour.get()
+            or want_shade
+            or want_iso
+            or want_vector
+            or want_edge
+            or want_scatter
+        )
+        want_pathlines = self.layer_pathlines.get() and bool(self.pathline_seeds)
         zone_idx = self._active_zone_index()
         zone_args = ["--zone", str(zone_idx)]
         mesh_color_args = self._mesh_color_cli_args()
 
-        if not want_mesh and not want_contour and not want_pathlines:
+        if (
+            not want_mesh
+            and not want_contour
+            and not want_pathlines
+            and not self.layer_pathlines.get()
+        ):
             self.last_png = None
             self._settle_image = None
             self._draw_viewport_placeholder()
             self._set_status("No layers enabled")
             return
+        if (
+            self.layer_pathlines.get()
+            and not self.pathline_seeds
+            and not want_contour
+            and not want_mesh
+        ):
+            self._set_status("Pathlines — click-drag a rake/seed line")
+            return
 
-        # Exact Viewport raster → 1:1 display (fonts stay crisp; no letterbox).
+        # Exact Viewport raster → 1:1 display (annotation glyphs stay crisp).
         cw = max(self.viewport.winfo_width(), 64)
         ch = max(self.viewport.winfo_height(), 64)
-        if interactive:
-            width, height = max(cw // 2, 320), max(ch // 2, 240)
-            quality = "preview"
-        else:
-            width, height = min(max(cw, 64), 1920), min(max(ch, 64), 1440)
-            quality = "full"
+        # Always match canvas size (half-res interactive stretched glyphs → "broken").
+        width, height = min(max(cw, 64), 1920), min(max(ch, 64), 1440)
+        quality = "preview" if interactive else "full"
 
         out = Path(tempfile.gettempdir()) / f"flowplot_gui_view_{quality}.png"
         style = self.plot_style.get()
@@ -1555,6 +1566,10 @@ class FlowplotGui(tk.Tk):
                 f"c={want_contour}",
                 f"s={want_shade}",
                 f"p={want_pathlines}",
+                f"vec={want_vector}:{self.vector_u.get()}:{self.vector_v.get()}",
+                f"edge={want_edge}",
+                f"sc={want_scatter}",
+                f"iso={want_iso}",
                 f"seeds={seed_key}",
                 f"z={zone_idx}",
                 f"mc={','.join(mesh_color_args)}",
@@ -1593,6 +1608,10 @@ class FlowplotGui(tk.Tk):
                 want_mesh=want_mesh,
                 want_contour=want_contour,
                 want_pathlines=want_pathlines,
+                want_vector=want_vector,
+                want_edge=want_edge,
+                want_scatter=want_scatter,
+                want_iso=want_iso,
                 interactive=interactive,
             )
         finally:
@@ -1619,8 +1638,16 @@ class FlowplotGui(tk.Tk):
                 layers.append(f"Shade({var})")
             elif self.layer_contour.get():
                 layers.append(f"Contour({var})")
-            if want_pathlines and not interactive:
+            if want_pathlines:
                 layers.append("Pathlines")
+            if want_vector:
+                layers.append("Vector")
+            if want_edge:
+                layers.append("Edge")
+            if want_scatter:
+                layers.append("Scatter")
+            if want_iso:
+                layers.append("Iso")
             tag = "preview" if quality == "preview" else "full"
             zname = self._zone_label(zone_idx)
             self._set_status(
@@ -1643,11 +1670,24 @@ class FlowplotGui(tk.Tk):
         want_mesh: bool,
         want_contour: bool,
         want_pathlines: bool,
-        interactive: bool,
+        want_vector: bool = False,
+        want_edge: bool = False,
+        want_scatter: bool = False,
+        want_iso: bool = False,
+        interactive: bool = False,
     ) -> subprocess.CompletedProcess[str] | None:
-        if want_contour:
+        del interactive  # always full-size raster; overlays stay on every settle.
+        if want_contour or want_pathlines or want_vector or want_edge or want_scatter or want_iso:
             if not var:
-                messagebox.showwarning("Contour", "Select a contour variable (e.g. Pressure).")
+                var = first_scalar(self.variables) or ""
+                if var:
+                    self.var_name.set(var)
+            if not var:
+                messagebox.showwarning(
+                    "Fieldplot",
+                    "Select a contour / iso variable (e.g. Pressure).",
+                    parent=self,
+                )
                 return None
             args = [
                 "contour",
@@ -1669,29 +1709,19 @@ class FlowplotGui(tk.Tk):
             if want_mesh or self.layer_shade.get():
                 args.append("--mesh")
                 args.extend(mesh_color_args)
-            if want_pathlines and not interactive:
+            if want_pathlines:
                 args.append("--pathlines")
                 args.extend(self._pathline_seed_args())
-            return self._run_cli(args)
-        if want_pathlines:
-            args = [
-                "pathlines",
-                str(ds),
-                "-o",
-                str(out),
-                "--style",
-                style,
-                *zone_args,
-                *size,
-                *plane,
-                *view,
-                *nondim,
-            ]
-            if var:
-                args.extend(["--var", var])
-            seeds = self._pathline_seed_args()
-            if seeds:
-                args.extend(seeds)
+                args.extend(self._vector_cli_vars())
+            if want_vector:
+                args.append("--vectors")
+                args.extend(self._vector_cli_vars())
+            if want_edge:
+                args.append("--edges")
+            if want_scatter:
+                args.append("--scatter")
+            if want_iso:
+                args.append("--isolines")
             return self._run_cli(args)
         args = [
             "mesh",
@@ -1756,7 +1786,7 @@ class FlowplotGui(tk.Tk):
         self.action_enable_contour()
         existing = self._contour_details_dialog
         if existing is not None and existing.winfo_exists():
-            stay_above(existing, self, modal=True)
+            stay_above(existing, self, modal=False)
             return
         dlg = ContourDetailsDialog(
             self,
@@ -1818,7 +1848,7 @@ class FlowplotGui(tk.Tk):
         )
         existing = self._legend_options_dialog
         if existing is not None and existing.winfo_exists():
-            stay_above(existing, self, modal=True)
+            stay_above(existing, self, modal=False)
             return
 
         def on_apply(st: LegendOptionsState) -> None:
@@ -1902,7 +1932,9 @@ class FlowplotGui(tk.Tk):
 
     def clear_pathline_seeds(self) -> None:
         self.pathline_seeds.clear()
+        self._rake_frac = None
         self.viewport.delete("pathline_drag")
+        self.viewport.delete("pathline_rake")
         self._refresh_levels_label()
         self._log("Pathline seeds cleared")
         if self.layer_pathlines.get():
@@ -2073,8 +2105,8 @@ class FlowplotGui(tk.Tk):
             return
         x0, y0 = start
         dist = ((cx - x0) ** 2 + (cy - y0) ** 2) ** 0.5
-        # Keep rake preview until redraw; dense seeds along the segment.
         self._draw_pathline_rake_preview(x0, y0, cx, cy)
+        self._remember_rake_frac(x0, y0, cx, cy)
         if dist < 8:
             points = [(x0, y0)]
         else:
@@ -2091,18 +2123,150 @@ class FlowplotGui(tk.Tk):
             world = self._world_at_canvas(px, py)
             if world is None:
                 continue
-            # Dedup near-duplicates in world space.
             if any(abs(world[0] - sx) < 1e-9 and abs(world[1] - sy) < 1e-9 for sx, sy in self.pathline_seeds):
                 continue
             self.pathline_seeds.append(world)
             added += 1
         if added == 0:
-            self.viewport.delete("pathline_drag")
-            self._log("Pathlines: rake outside plot or probe failed — no seeds")
+            self._log("Pathlines: rake outside plot or probe failed — no seeds (rake kept)")
+            self._draw_persistent_rake()
             return
         self.layer_pathlines.set(True)
         self._refresh_levels_label()
         self._log(f"Pathlines rake: +{added} seed(s) on segment → {len(self.pathline_seeds)} total")
+        self._render_cache.clear()
+        # Full redraw so pathlines stay in the PNG (not only the transient canvas stroke).
+        self.action_redraw(interactive=False)
+        self._draw_persistent_rake()
+
+    def _remember_rake_frac(self, x0: int, y0: int, x1: int, y1: int) -> None:
+        ox, oy = self._preview_offset
+        pw, ph = self._preview_size
+        if pw < 2 or ph < 2:
+            self._rake_frac = None
+            return
+        self._rake_frac = (
+            ((x0 - ox) / pw, (y0 - oy) / ph),
+            ((x1 - ox) / pw, (y1 - oy) / ph),
+        )
+
+    def _draw_persistent_rake(self) -> None:
+        """Keep the rake seed line visible after redraw (canvas overlay)."""
+        self.viewport.delete("pathline_drag")
+        self.viewport.delete("pathline_rake")
+        if self._rake_frac is None or not self.layer_pathlines.get():
+            return
+        ox, oy = self._preview_offset
+        pw, ph = self._preview_size
+        if pw < 2 or ph < 2:
+            return
+        (fx0, fy0), (fx1, fy1) = self._rake_frac
+        x0 = int(round(ox + fx0 * pw))
+        y0 = int(round(oy + fy0 * ph))
+        x1 = int(round(ox + fx1 * pw))
+        y1 = int(round(oy + fy1 * ph))
+        self.viewport.create_line(
+            x0, y0, x1, y1, fill="#c00000", width=2, tags="pathline_rake"
+        )
+        for sx, sy in ((x0, y0), (x1, y1)):
+            self.viewport.create_oval(
+                sx - 3, sy - 3, sx + 3, sy + 3,
+                outline="#c00000", fill="#ffd0d0", width=1, tags="pathline_rake",
+            )
+
+    def _vector_cli_vars(self) -> list[str]:
+        args: list[str] = []
+        u = self.vector_u.get().strip()
+        v = self.vector_v.get().strip()
+        w = self.vector_w.get().strip()
+        if u:
+            args.extend(["--u-var", u])
+        if v:
+            args.extend(["--v-var", v])
+        if w:
+            args.extend(["--w-var", w])
+        return args
+
+    def _guess_velocity_names(self) -> tuple[str, str, str]:
+        names = list(self.variables)
+
+        def pick(cands: list[str]) -> str:
+            for c in cands:
+                for n in names:
+                    if n.lower() == c.lower():
+                        return n
+            return ""
+
+        u = pick(["U", "Ux", "VX", "VelocityX", "x-velocity"])
+        v = pick(["V", "Uy", "VY", "VelocityY", "y-velocity"])
+        w = pick(["W", "Uz", "VZ", "VelocityZ", "z-velocity"])
+        return u, v, w
+
+    def _ask_vector_components(self) -> bool:
+        """Tecplot-like U/V/W (or Ux/Uy/Uz) picker when enabling Vector."""
+        gu, gv, gw = self._guess_velocity_names()
+        if not self.vector_u.get().strip():
+            self.vector_u.set(gu)
+        if not self.vector_v.get().strip():
+            self.vector_v.set(gv)
+        if not self.vector_w.get().strip():
+            self.vector_w.set(gw)
+        dlg = tk.Toplevel(self)
+        dlg.title("Vector variables")
+        dlg.geometry("340x200")
+        dlg.resizable(False, False)
+        stay_above(dlg, self, modal=True)
+        body = ttk.Frame(dlg, padding=12)
+        body.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(body, text="Choose velocity components (Tecplot-like):").pack(anchor="w")
+        vars_ = self.variables or [""]
+        rows = [("U / Ux", self.vector_u), ("V / Uy", self.vector_v), ("W / Uz", self.vector_w)]
+        for label, var in rows:
+            row = ttk.Frame(body)
+            row.pack(fill=tk.X, pady=4)
+            ttk.Label(row, text=label, width=10).pack(side=tk.LEFT)
+            cb = ttk.Combobox(row, textvariable=var, values=vars_, width=22)
+            cb.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        result = {"ok": False}
+
+        def ok() -> None:
+            if not self.vector_u.get().strip() or not self.vector_v.get().strip():
+                messagebox.showwarning("Vector", "U and V are required.", parent=dlg)
+                return
+            result["ok"] = True
+            dlg.destroy()
+
+        def cancel() -> None:
+            dlg.destroy()
+
+        btns = ttk.Frame(body)
+        btns.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(btns, text="Cancel", command=cancel).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(btns, text="OK", command=ok).pack(side=tk.RIGHT)
+        dlg.wait_window()
+        return bool(result["ok"])
+
+    def action_vector_layer(self) -> None:
+        if not self.layer_vector.get():
+            self._render_cache.clear()
+            self.action_redraw()
+            return
+        if not self._ask_vector_components():
+            self.layer_vector.set(False)
+            return
+        self._log(
+            f"Vector: U={self.vector_u.get()} V={self.vector_v.get()} W={self.vector_w.get() or '(none)'}"
+        )
+        self._render_cache.clear()
+        self.action_redraw()
+
+    def action_edge_layer(self) -> None:
+        self._log("Edge " + ("on" if self.layer_edge.get() else "off"))
+        self._render_cache.clear()
+        self.action_redraw()
+
+    def action_scatter_layer(self) -> None:
+        self._log("Scatter " + ("on" if self.layer_scatter.get() else "off"))
         self._render_cache.clear()
         self.action_redraw()
 
@@ -2113,18 +2277,22 @@ class FlowplotGui(tk.Tk):
         return args
 
     def action_isosurfaces(self) -> None:
-        """Iso-Surfaces derived object — first slice uses banded Contour levels."""
+        """Iso-Surfaces — 2D isolines of the active variable (real levels, not empty)."""
         if self.layer_isosurfaces.get():
-            self.layer_contour.set(True)
             self.contour_details.coloring = "Banded"
             if not self.var_name.get().strip() and self.variables:
                 self.var_name.set(first_scalar(self.variables))
             self._refresh_levels_label()
             self._render_cache.clear()
             self.action_redraw()
-            self._log("Iso-Surfaces on → banded Contour levels (volume isosurfaces later)")
+            self._log(
+                f"Iso-Surfaces on → isolines of {self.var_name.get()} "
+                f"({self.contour_details.nlevels} levels)"
+            )
         else:
             self._log("Iso-Surfaces off")
+            self._render_cache.clear()
+            self.action_redraw()
 
     def action_slices_focus(self) -> None:
         """Slices derived object — drives the Cut / Track plane controls."""
@@ -2368,11 +2536,11 @@ class FlowplotGui(tk.Tk):
 
     def show_about(self) -> None:
         messagebox.showinfo(
-            "About Flowplot",
-            "Flowplot — CFD post-processor\n"
+            "About Fieldplot",
+            "Fieldplot — CFD post-processor\n"
             "Tecplot-like menus + Plot panel (Mesh first).\n"
             "Analyze hosts field sanity, positivity, profiles, shock polar.\n"
-            "Preference (pending confirm): rename product to Fieldplot — not applied yet.\n"
+            "CLI binary remains `flowplot` for now.\n"
             f"CLI: {self.flowplot or '(not found)'}",
         )
 

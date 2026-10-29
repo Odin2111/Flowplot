@@ -1,4 +1,4 @@
-"""Keep secondary Flowplot windows above the primary Viewport (Tecplot-like)."""
+"""Keep secondary Fieldplot windows above the primary Viewport (Tecplot-like)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import tkinter as tk
 
 
 def stay_above(win: tk.Toplevel, master: tk.Misc, *, modal: bool = False) -> None:
-    """transient + lift (+ optional grab). Re-lift on FocusIn so dialogs stay on top."""
+    """transient + lift. Avoid sticky -topmost/grab unless modal — feels less clunky."""
     try:
         root = master.winfo_toplevel()
     except tk.TclError:
@@ -16,12 +16,14 @@ def stay_above(win: tk.Toplevel, master: tk.Misc, *, modal: bool = False) -> Non
     except tk.TclError:
         pass
     try:
-        win.attributes("-topmost", True)
-    except tk.TclError:
-        pass
-    try:
         win.lift()
         win.focus_force()
+    except tk.TclError:
+        pass
+    # Brief topmost pulse so the dialog wins stacking, then release (smoother than sticky).
+    try:
+        win.attributes("-topmost", True)
+        win.after(80, lambda: _clear_topmost(win))
     except tk.TclError:
         pass
     if modal:
@@ -38,6 +40,15 @@ def stay_above(win: tk.Toplevel, master: tk.Misc, *, modal: bool = False) -> Non
             pass
 
     win.bind("<FocusIn>", _re_lift)
+
+
+def _clear_topmost(win: tk.Toplevel) -> None:
+    try:
+        if win.winfo_exists():
+            win.attributes("-topmost", False)
+            win.lift()
+    except tk.TclError:
+        pass
 
 
 def release_grabs(root: tk.Misc) -> None:

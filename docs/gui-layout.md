@@ -21,7 +21,9 @@ Native **tkinter** shell under `gui/flowplot_gui.py`. The viewport previews PNGs
 - Annotation HUD uses native fontdue AA at 1:1 Viewport size (no stretch); integer baseline snap (no jitter); colorbar labels sized to fit
 - **F** / Frame → Fit to Viewport / View → Fit whole domain clears pan and recenters
 - Pathlines: after enable, click-drag draws a rake/seed line; pathlines emit from that segment (exclusive vs Probe)
-- Product rename to **Fieldplot** is a noted preference only — wait for explicit confirm before renaming
+- Product UI name is **Fieldplot** (window title / About / logo); CLI crate binary remains `flowplot`
+- Zone layers: Vector (U/V/W picker + arrows), Edge (boundary), Scatter (subsample), Iso-Surfaces (isolines)
+- Pathlines rake persists as canvas overlay + PNG traces after drag
 
 ## Run
 
