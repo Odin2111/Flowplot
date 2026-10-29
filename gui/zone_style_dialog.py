@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from tkinter import colorchooser, messagebox, ttk
 from typing import Callable
 
+from windowing import stay_above
+
 
 # Match Flowplot GUI palette (restrained scientific slate).
 PANEL = "#e2e5e8"
@@ -138,7 +140,6 @@ class ZoneStyleDialog(tk.Toplevel):
         self.configure(bg=BG)
         self.geometry("920x420")
         self.minsize(720, 320)
-        self.transient(master.winfo_toplevel())
 
         self._on_apply = on_apply
         self.styles: list[ZoneStyleState] = copy.deepcopy(styles) or [
@@ -150,14 +151,8 @@ class ZoneStyleDialog(tk.Toplevel):
 
         self._build()
         self.protocol("WM_DELETE_WINDOW", self.destroy)
-        self.after(30, self._focus)
-
-    def _focus(self) -> None:
-        try:
-            self.lift()
-            self.focus_force()
-        except tk.TclError:
-            pass
+        stay_above(self, master, modal=False)
+        self.after(30, lambda: stay_above(self, master, modal=False))
 
     def _build(self) -> None:
         tip = ttk.Label(

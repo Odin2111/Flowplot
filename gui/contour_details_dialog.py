@@ -12,6 +12,8 @@ from dataclasses import dataclass, replace
 from tkinter import ttk
 from typing import Callable
 
+from windowing import stay_above
+
 
 PANEL = "#e2e5e8"
 BG = "#eceef0"
@@ -37,7 +39,7 @@ class ContourDetailsState:
     legend_align: str = "Right"  # Right | Left
     legend_font_px: float = 0.0  # 0 = auto
     show_lines: bool = False  # stub
-    show_labels: bool = False  # toolbar Contour Abc Label
+    show_labels: bool = False  # toolbar Contour labels
     label_skip: int = 1  # stub
     band_min: float | None = None  # stub
     band_max: float | None = None  # stub
@@ -74,7 +76,6 @@ class ContourDetailsDialog(tk.Toplevel):
         self.resizable(True, True)
         self.geometry("520x420")
         self.minsize(440, 360)
-        self.transient(master)
         self.state = replace(state)
         self._on_apply = on_apply
 
@@ -90,10 +91,7 @@ class ContourDetailsDialog(tk.Toplevel):
 
         self._build()
         self.protocol("WM_DELETE_WINDOW", self.destroy)
-        try:
-            self.grab_set()
-        except tk.TclError:
-            pass
+        stay_above(self, master, modal=True)
 
     def _build(self) -> None:
         hdr = tk.Frame(self, bg=HEADER_BG)

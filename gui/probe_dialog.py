@@ -10,6 +10,8 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Any, Callable
 
+from windowing import stay_above
+
 
 BG = "#eceef0"
 PANEL = "#e2e5e8"
@@ -38,17 +40,7 @@ class ProbeDialog(tk.Toplevel):
         self._on_clear = on_clear
         self._on_close = on_close
         self._last: dict[str, Any] = {}
-        # Stay above the main Viewport while probing (Tecplot-like).
-        try:
-            self.transient(master)
-        except tk.TclError:
-            pass
-        try:
-            self.attributes("-topmost", True)
-        except tk.TclError:
-            pass
-        self.lift()
-        self.bind("<FocusIn>", lambda _e: self.lift())
+        stay_above(self, master, modal=False)
 
         hdr = tk.Frame(self, bg=HEADER_BG)
         hdr.pack(side=tk.TOP, fill=tk.X)

@@ -17,6 +17,7 @@ from tkinter import messagebox, ttk
 from typing import Any, Callable
 
 from shock_polar import plot_polar_on_axes, plot_polar_png
+from windowing import stay_above
 
 BG = "#eceef0"
 PANEL = "#e2e5e8"
@@ -123,6 +124,7 @@ class AgentsPanel(tk.Toplevel):
         self._build()
         self._load_menu()
         self.protocol("WM_DELETE_WINDOW", self.destroy)
+        stay_above(self, master, modal=False)
 
     def _style(self) -> None:
         style = ttk.Style(self)

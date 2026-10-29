@@ -26,6 +26,7 @@ from agents_panel import AgentsPanel
 from contour_details_dialog import ContourDetailsDialog, ContourDetailsState
 from legend_options_dialog import LegendOptionsDialog, LegendOptionsState
 from probe_dialog import ProbeDialog
+from windowing import release_grabs, stay_above
 from zone_style_dialog import (
     DEFAULT_MESH_COLOR,
     ZoneStyleDialog,
@@ -167,8 +168,7 @@ class FlowplotGui(tk.Tk):
 
         self._style()
         self._build_menu()  # single native menubar only (no duplicate button row)
-        self._build_contour_toolbar()
-        self._build_chrome()
+        self._build_toolbar()  # one compact row: Open + Contour tools
         self._build_body()
         self._build_status()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -199,6 +199,15 @@ class FlowplotGui(tk.Tk):
             font=("Helvetica", 9),
         )
         style.map("Tool.TButton", background=[("active", BTN_ACTIVE)])
+        # Compact Contour toolbar — one short row, smaller hit targets.
+        style.configure(
+            "ToolCompact.TButton",
+            background=BTN_BG,
+            foreground=FG,
+            padding=(5, 1),
+            font=("Helvetica", 8),
+        )
+        style.map("ToolCompact.TButton", background=[("active", BTN_ACTIVE)])
         style.configure("Scale.TEntry", fieldbackground="#ffffff", foreground=FG)
         style.configure("TLabelframe", background=PANEL, foreground=FG)
         style.configure("TLabelframe.Label", background=PANEL, foreground=ACCENT, font=("Helvetica", 9, "bold"))
@@ -264,9 +273,9 @@ class FlowplotGui(tk.Tk):
         menu.add_command(label="Probe tool", command=self.action_toggle_probe)
         menu.add_command(label="Pathlines rake", command=self.action_pathlines_tool)
         menu.add_separator()
-        menu.add_command(label="Contour ＋ Level", command=self.action_contour_add_level)
-        menu.add_command(label="Contour － Level", command=self.action_contour_remove_level)
-        menu.add_command(label="Contour Abc Label", command=self.action_toggle_contour_labels)
+        menu.add_command(label="More levels", command=self.action_contour_add_level)
+        menu.add_command(label="Fewer levels", command=self.action_contour_remove_level)
+        menu.add_command(label="Contour labels", command=self.action_toggle_contour_labels)
 
     def _analyze_menu_items(self, menu: tk.Menu) -> None:
         menu.add_command(label="Field sanity…", command=lambda: self.open_analyze_panel("field-sanity"))
@@ -305,39 +314,45 @@ class FlowplotGui(tk.Tk):
         self.bind_all("<KeyPress-f>", self._on_fit_key)
         self.bind_all("<KeyPress-F>", self._on_fit_key)
 
-    def _build_contour_toolbar(self) -> None:
-        """Always-visible Contour ± / Label / Probe / Details strip under the menu."""
-        bar = tk.Frame(self, bg="#cfd5db", highlightthickness=0)
+    def _build_toolbar(self) -> None:
+        """Single compact chrome row: wordmark + Open/Redraw + Contour tools."""
+        bar = tk.Frame(self, bg=MENU_BG, highlightthickness=0)
         bar.pack(side=tk.TOP, fill=tk.X)
-        tk.Label(
-            bar,
-            text="Contour tools",
-            bg="#cfd5db",
-            fg=ACCENT,
-            font=("Helvetica", 9, "bold"),
-        ).pack(side=tk.LEFT, padx=(10, 8), pady=5)
+
+        logo = tk.Canvas(bar, width=118, height=24, bg=MENU_BG, highlightthickness=0, bd=0)
+        logo.pack(side=tk.LEFT, padx=(8, 4), pady=2)
+        logo.create_line(4, 18, 10, 8, 16, 8, 22, 18, smooth=True, fill=ACCENT, width=2)
+        logo.create_oval(22, 10, 26, 14, fill=ACCENT, outline=ACCENT)
+        logo.create_text(30, 12, text="Flowplot", anchor="w", fill=FG, font=("Helvetica", 11, "bold"))
+        self._logo_canvas = logo
+        self._wordmark_path = WORDMARK
 
         def tool_btn(text: str, cmd) -> ttk.Button:
-            b = ttk.Button(bar, text=text, style="Tool.TButton", command=cmd)
-            b.pack(side=tk.LEFT, padx=2, pady=4)
+            b = ttk.Button(bar, text=text, style="ToolCompact.TButton", command=cmd)
+            b.pack(side=tk.LEFT, padx=1, pady=2)
             return b
 
-        tool_btn("＋ Level", self.action_contour_add_level)
-        tool_btn("－ Level", self.action_contour_remove_level)
-        tool_btn("Abc Label", self.action_toggle_contour_labels)
-        self._probe_btn = tool_btn("✎ Probe", self.action_toggle_probe)
-        tool_btn("⇢ Pathlines", self.action_pathlines_tool)
-        ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=6)
+        tool_btn("Open", self.action_load)
+        tool_btn("Redraw", self.action_redraw)
+        tool_btn("Export", self.action_export_png)
+        ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=4)
+        # Clear names — not "Level Level Abc".
+        tool_btn("Fewer levels", self.action_contour_remove_level)
+        tool_btn("More levels", self.action_contour_add_level)
+        tool_btn("Contour labels", self.action_toggle_contour_labels)
+        self._probe_btn = tool_btn("Probe", self.action_toggle_probe)
+        tool_btn("Pathlines", self.action_pathlines_tool)
+        ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=4)
         tool_btn("Details…", self.action_contour_details)
         tool_btn("Legend…", self.action_legend_options)
         self.levels_label = tk.Label(
             bar,
             text=self._levels_status_text(),
-            bg="#cfd5db",
-            fg=FG,
-            font=("Helvetica", 9),
+            bg=MENU_BG,
+            fg=MUTED,
+            font=("Helvetica", 8),
         )
-        self.levels_label.pack(side=tk.LEFT, padx=10)
+        self.levels_label.pack(side=tk.LEFT, padx=(6, 8))
         tk.Frame(self, bg="#9aa3ab", height=1).pack(side=tk.TOP, fill=tk.X)
 
     def _levels_status_text(self) -> str:
@@ -352,34 +367,6 @@ class FlowplotGui(tk.Tk):
     def _refresh_levels_label(self) -> None:
         if hasattr(self, "levels_label"):
             self.levels_label.configure(text=self._levels_status_text())
-
-    def _build_chrome(self) -> None:
-        chrome = ttk.Frame(self, style="MenuBar.TFrame")
-        chrome.pack(side=tk.TOP, fill=tk.X)
-
-        logo_frame = ttk.Frame(chrome, style="MenuBar.TFrame")
-        logo_frame.pack(side=tk.LEFT, padx=10, pady=6)
-        logo = tk.Canvas(
-            logo_frame, width=200, height=32, bg=MENU_BG, highlightthickness=0, bd=0
-        )
-        logo.pack()
-        logo.create_line(6, 24, 14, 10, 22, 10, 30, 24, smooth=True, fill=ACCENT, width=2)
-        logo.create_line(10, 26, 18, 14, 26, 14, 34, 26, smooth=True, fill=ACCENT, width=1)
-        logo.create_oval(32, 15, 36, 19, fill=ACCENT, outline=ACCENT)
-        logo.create_text(44, 16, text="Flowplot", anchor="w", fill=FG, font=("Helvetica", 14, "bold"))
-        self._logo_canvas = logo
-        self._wordmark_path = WORDMARK
-
-        tools = ttk.Frame(chrome, style="MenuBar.TFrame")
-        tools.pack(side=tk.LEFT, padx=8, pady=4)
-        for label, cmd in (
-            ("Open", self.action_load),
-            ("Redraw", self.action_redraw),
-            ("Export PNG", self.action_export_png),
-        ):
-            ttk.Button(tools, text=label, style="Tool.TButton", command=cmd).pack(
-                side=tk.LEFT, padx=3
-            )
 
     def _build_body(self) -> None:
         body = ttk.Frame(self)
@@ -1377,25 +1364,51 @@ class FlowplotGui(tk.Tk):
     # --- Actions ---
 
     def action_load(self) -> None:
+        # Modal Contour/Legend grabs block the file dialog Open button on Linux.
+        release_grabs(self)
+        # Tuple patterns (not space-joined) — Linux Tk otherwise treats
+        # "*.plt *.dat …" as one literal pattern and Open returns empty.
         path = filedialog.askopenfilename(
+            parent=self,
             title="Open CFD dataset",
             filetypes=[
                 (
                     "CFD datasets",
-                    "*.plt *.dat *.tp *.cgns *.cgz *.vtk *.vtu *.vtp *.vti *.vts *.vtr *.cas",
+                    (
+                        "*.plt",
+                        "*.dat",
+                        "*.tp",
+                        "*.cgns",
+                        "*.cgz",
+                        "*.vtk",
+                        "*.vtu",
+                        "*.vtp",
+                        "*.vti",
+                        "*.vts",
+                        "*.vtr",
+                        "*.cas",
+                    ),
                 ),
-                ("Tecplot", "*.plt *.dat *.tp"),
-                ("CGNS", "*.cgns *.cgz"),
-                ("VTK", "*.vtk *.vtu *.vtp *.vti *.vts *.vtr"),
-                ("Fluent", "*.cas *.dat"),
+                ("Tecplot", ("*.plt", "*.dat", "*.tp")),
+                ("CGNS", ("*.cgns", "*.cgz")),
+                ("VTK", ("*.vtk", "*.vtu", "*.vtp", "*.vti", "*.vts", "*.vtr")),
+                ("Fluent", ("*.cas", "*.dat")),
                 ("All files", "*.*"),
             ],
         )
         if not path:
+            self._log("Open cancelled (no file returned)")
+            self._set_status("Open cancelled")
             return
-        self.dataset_path = Path(path)
+        chosen = Path(path)
+        if not chosen.is_file():
+            messagebox.showerror("Open failed", f"File not found:\n{chosen}", parent=self)
+            return
+        self.dataset_path = chosen
         self._log(f"Loaded path: {self.dataset_path}")
         self._set_status(str(self.dataset_path))
+        self.lift()
+        self.focus_force()
 
         # Reset layers to Tecplot defaults: Mesh on, Contour off.
         self.layer_mesh.set(True)
@@ -1743,8 +1756,7 @@ class FlowplotGui(tk.Tk):
         self.action_enable_contour()
         existing = self._contour_details_dialog
         if existing is not None and existing.winfo_exists():
-            existing.lift()
-            existing.focus_force()
+            stay_above(existing, self, modal=True)
             return
         dlg = ContourDetailsDialog(
             self,
@@ -1806,8 +1818,7 @@ class FlowplotGui(tk.Tk):
         )
         existing = self._legend_options_dialog
         if existing is not None and existing.winfo_exists():
-            existing.lift()
-            existing.focus_force()
+            stay_above(existing, self, modal=True)
             return
 
         def on_apply(st: LegendOptionsState) -> None:
@@ -1869,12 +1880,7 @@ class FlowplotGui(tk.Tk):
     def action_open_probe_window(self) -> None:
         existing = self._probe_dialog
         if existing is not None and existing.winfo_exists():
-            try:
-                existing.attributes("-topmost", True)
-            except tk.TclError:
-                pass
-            existing.lift()
-            existing.focus_force()
+            stay_above(existing, self, modal=False)
             return
         self._probe_dialog = ProbeDialog(
             self,
@@ -2168,8 +2174,7 @@ class FlowplotGui(tk.Tk):
         existing = self._zone_style_dialog
         if existing is not None and existing.winfo_exists():
             existing.styles = copy.deepcopy(self.zone_styles)
-            existing.lift()
-            existing.focus_force()
+            stay_above(existing, self, modal=False)
             return
         dlg = ZoneStyleDialog(
             self,
@@ -2280,7 +2285,9 @@ class FlowplotGui(tk.Tk):
         ds = self._require_dataset()
         if not ds:
             return
+        release_grabs(self)
         dest = filedialog.asksaveasfilename(
+            parent=self,
             title="Export PNG",
             defaultextension=".png",
             filetypes=[("PNG", "*.png")],
@@ -2325,8 +2332,7 @@ class FlowplotGui(tk.Tk):
                 values=self.variables,
                 state="readonly" if self.variables else "disabled",
             )
-            existing.lift()
-            existing.focus_force()
+            stay_above(existing, self, modal=False)
             self._select_analyze_item(existing, select_id)
             return
         panel = AgentsPanel(

@@ -7,6 +7,8 @@ from dataclasses import dataclass, replace
 from tkinter import ttk
 from typing import Callable
 
+from windowing import stay_above
+
 
 BG = "#eceef0"
 PANEL = "#e2e5e8"
@@ -43,7 +45,6 @@ class LegendOptionsDialog(tk.Toplevel):
         self.configure(bg=BG)
         self.geometry("400x320")
         self.minsize(340, 280)
-        self.transient(master)
         self.state = replace(state)
         self._on_apply = on_apply
 
@@ -54,10 +55,7 @@ class LegendOptionsDialog(tk.Toplevel):
 
         self._build()
         self.protocol("WM_DELETE_WINDOW", self.destroy)
-        try:
-            self.grab_set()
-        except tk.TclError:
-            pass
+        stay_above(self, master, modal=True)
 
     def _build(self) -> None:
         hdr = tk.Frame(self, bg=HEADER_BG)

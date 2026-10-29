@@ -6,7 +6,7 @@ Native **tkinter** shell under `gui/flowplot_gui.py`. The viewport previews PNGs
 
 | Region | Contents |
 |--------|----------|
-| Top | Menus **File / Plot / Style / Agents / Help**, always-visible Contour toolbar **＋ Level / － Level / Abc Label / ✎ Probe / Details…**, wordmark + **Open · Redraw · Export PNG** |
+| Top | Menus + **one compact toolbar**: Open / Redraw / Export · **Fewer levels** / **More levels** / **Contour labels** / Probe / Pathlines / Details / Legend |
 | Left | **Plot** panel (scrollable): layers, variable, cut/view, Zone Style / Contour Details, collapsible **Nondim scales ▸**, Log |
 | Center | **Viewport full width** (no right column). CLI raster sized 1:1 to canvas; mesh `--fill`. **Left-drag = pan**, mid/right = orbit, **F = fit** whole domain; **✎ Probe** click; Pathlines = rake drag |
 | Right | *(removed — Nondim moved under Plot)* |
