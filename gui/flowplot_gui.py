@@ -116,6 +116,11 @@ class FlowplotGui(tk.Tk):
         self._preview_offset: tuple[int, int] = (0, 0)
         self._preview_size: tuple[int, int] = (0, 0)
         self._preview_native: tuple[int, int] = (0, 0)
+        # Screen-space domain pan (pixels); Key-F / Fit resets to 0.
+        self.view_pan_x = 0.0
+        self.view_pan_y = 0.0
+        self._pan_last: tuple[int, int] | None = None
+        self._panning = False
 
         # Tecplot Show Zone Layers — Mesh ON, Contour OFF by default.
         self.layer_mesh = tk.BooleanVar(value=True)
@@ -217,6 +222,7 @@ class FlowplotGui(tk.Tk):
                 command=lambda v=label.lower(): self._set_axis_view(v),
             )
         menu.add_separator()
+        menu.add_command(label="Fit whole domain", command=self.action_fit_view, accelerator="F")
         menu.add_command(label="Reset view", command=self._reset_view)
         menu.add_separator()
         menu.add_radiobutton(label="Style · Default", variable=self.plot_style, value="default")
@@ -228,7 +234,7 @@ class FlowplotGui(tk.Tk):
         menu.add_separator()
         menu.add_command(label="Contour Details…", command=self.action_contour_details)
         menu.add_command(label="Legend Options…", command=self.action_legend_options)
-        menu.add_command(label="Pathlines (insert)…", command=self.action_pathlines_tool)
+        menu.add_command(label="Pathlines (rake)…", command=self.action_pathlines_tool)
         menu.add_command(label="Iso-Surfaces…", command=self.action_isosurfaces)
         menu.add_command(label="Slices…", command=self.action_slices_focus)
         menu.add_separator()
@@ -244,7 +250,7 @@ class FlowplotGui(tk.Tk):
         menu.add_command(label="Apply nondim scales", command=self.action_nondim)
 
     def _frame_menu_items(self, menu: tk.Menu) -> None:
-        menu.add_command(label="Fit to Viewport", command=self.action_redraw)
+        menu.add_command(label="Fit to Viewport", command=self.action_fit_view, accelerator="F")
 
     def _options_menu_items(self, menu: tk.Menu) -> None:
         menu.add_command(label="Legend Options…", command=self.action_legend_options)
@@ -254,9 +260,9 @@ class FlowplotGui(tk.Tk):
         menu.add_radiobutton(label="Plot style · JFM", variable=self.plot_style, value="jfm")
 
     def _tools_menu_items(self, menu: tk.Menu) -> None:
-        menu.add_command(label="Orbit (drag)", command=lambda: self._set_tool_mode("orbit"))
+        menu.add_command(label="Orbit / Pan", command=lambda: self._set_tool_mode("orbit"))
         menu.add_command(label="Probe tool", command=self.action_toggle_probe)
-        menu.add_command(label="Pathlines insert", command=self.action_pathlines_tool)
+        menu.add_command(label="Pathlines rake", command=self.action_pathlines_tool)
         menu.add_separator()
         menu.add_command(label="Contour ＋ Level", command=self.action_contour_add_level)
         menu.add_command(label="Contour － Level", command=self.action_contour_remove_level)
@@ -295,6 +301,9 @@ class FlowplotGui(tk.Tk):
             menubar.add_cascade(label=label, menu=m)
         self.config(menu=menubar)
         self.bind("<Control-o>", lambda _e: self.action_load())
+        # Tecplot-like Fit (whole domain). Bind both cases; ignore when typing in entries.
+        self.bind_all("<KeyPress-f>", self._on_fit_key)
+        self.bind_all("<KeyPress-F>", self._on_fit_key)
 
     def _build_contour_toolbar(self) -> None:
         """Always-visible Contour ± / Label / Probe / Details strip under the menu."""
@@ -422,7 +431,7 @@ class FlowplotGui(tk.Tk):
         self.viewport.bind("<ButtonRelease-3>", self._on_orbit_release)
         tip = ttk.Label(
             view_wrap,
-            text="Orbit: left-drag (Orbit tool) or mid/right-drag · XYZ snaps · Contour ± · Probe exclusive",
+            text="Pan: left-drag · Orbit: mid/right-drag · F=fit · Pathlines: rake drag · Probe exclusive",
             font=("Helvetica", 8),
             foreground=MUTED,
         )
@@ -485,7 +494,7 @@ class FlowplotGui(tk.Tk):
             derived,
             text="Pathlines",
             variable=self.layer_pathlines,
-            command=self.action_redraw,
+            command=self._on_pathlines_layer,
         ).pack(anchor="w")
         ttk.Button(
             derived, text="Redraw", style="Tool.TButton", command=self.action_redraw
@@ -575,7 +584,7 @@ class FlowplotGui(tk.Tk):
         self.view_label.pack(anchor="w", pady=(4, 0))
         ttk.Label(
             view_box,
-            text="Mid/right-drag = orbit always. Planar data keeps a tilt.",
+            text="Left-drag = pan · mid/right = orbit · F = fit. Planar data keeps a tilt.",
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(2, 0))
 
@@ -670,7 +679,39 @@ class FlowplotGui(tk.Tk):
             side=tk.LEFT, padx=10, pady=4
         )
 
+    def _on_fit_key(self, event: tk.Event) -> str | None:
+        """Key F = Fit whole domain (Tecplot-like). Skip when focus is an Entry/Text."""
+        w = event.widget
+        try:
+            cls = w.winfo_class()
+        except tk.TclError:
+            cls = ""
+        if cls in ("Entry", "TEntry", "Text", "TCombobox", "Spinbox", "TSpinbox"):
+            return None
+        self.action_fit_view()
+        return "break"
+
+    def action_fit_view(self) -> None:
+        """Fit whole domain into the Viewport and clear pan offset."""
+        self.view_pan_x = 0.0
+        self.view_pan_y = 0.0
+        self._pan_last = None
+        self._panning = False
+        if self.tool_mode.get() not in ("orbit",):
+            # Keep Probe/Pathlines mode; only recenter the frame.
+            pass
+        self.view_mode.set("auto")
+        self.azimuth_deg = 0.0
+        self.elevation_deg = 90.0
+        self._update_view_label()
+        self._render_cache.clear()
+        self._log("Fit — whole domain (F)")
+        self._schedule_settle(delay_ms=20)
+
     def _on_viewport_configure(self, _event: tk.Event | None = None) -> None:
+        if self._panning:
+            self._pan_preview_live()
+            return
         if self._dragging and self._settle_image is not None:
             self._warp_last_frame()
             return
@@ -911,6 +952,10 @@ class FlowplotGui(tk.Tk):
         self.view_mode.set("auto")
         self.azimuth_deg = 0.0
         self.elevation_deg = 90.0
+        self.view_pan_x = 0.0
+        self.view_pan_y = 0.0
+        self._pan_last = None
+        self._panning = False
         self._update_view_label()
         self._render_cache.clear()
         self._schedule_settle(delay_ms=20)
@@ -1007,7 +1052,8 @@ class FlowplotGui(tk.Tk):
             self._pl_drag_start = (event.x, event.y)
             self.viewport.delete("pathline_drag")
             return
-        self._on_orbit_press(event)
+        # Orbit tool: left-drag pans the domain (active start→end); mid/right orbit.
+        self._on_pan_press(event)
 
     def _on_view_drag(self, event: tk.Event) -> None:
         mode = self.tool_mode.get()
@@ -1017,13 +1063,10 @@ class FlowplotGui(tk.Tk):
             if self._pl_drag_start is None:
                 return
             x0, y0 = self._pl_drag_start
-            self.viewport.delete("pathline_drag")
-            self.viewport.create_line(
-                x0, y0, event.x, event.y, fill="#c00000", width=2, tags="pathline_drag"
-            )
-            self.viewport.create_oval(
-                x0 - 4, y0 - 4, x0 + 4, y0 + 4, outline="#c00000", width=1, tags="pathline_drag"
-            )
+            self._draw_pathline_rake_preview(x0, y0, event.x, event.y)
+            return
+        if self._panning:
+            self._on_pan_drag(event)
             return
         self._on_orbit_drag(event)
 
@@ -1034,7 +1077,84 @@ class FlowplotGui(tk.Tk):
         if mode == "pathlines":
             self._finish_pathline_drag(event.x, event.y)
             return
+        if self._panning:
+            self._on_pan_release(event)
+            return
         self._on_orbit_release(event)
+
+    def _on_pan_press(self, event: tk.Event) -> None:
+        """Begin domain pan — live from press through release."""
+        self._pan_last = (event.x, event.y)
+        self._panning = True
+        self._dragging = False
+        self._set_status(
+            f"Panning… pan=({self.view_pan_x:.0f},{self.view_pan_y:.0f}) · F=fit"
+        )
+
+    def _on_pan_drag(self, event: tk.Event) -> None:
+        if self._pan_last is None:
+            return
+        dx = event.x - self._pan_last[0]
+        dy = event.y - self._pan_last[1]
+        self._pan_last = (event.x, event.y)
+        self.view_pan_x += float(dx)
+        self.view_pan_y += float(dy)
+        self._pan_preview_live()
+        self._set_status(
+            f"Panning… pan=({self.view_pan_x:.0f},{self.view_pan_y:.0f}) · F=fit"
+        )
+
+    def _on_pan_release(self, _event: tk.Event) -> None:
+        self._pan_last = None
+        self._panning = False
+        self._set_status(
+            f"Pan ({self.view_pan_x:.0f},{self.view_pan_y:.0f}) · F=fit whole domain"
+        )
+
+    def _pan_preview_live(self) -> None:
+        """Reposition the preview PhotoImage for active pan (no CLI)."""
+        if self._preview_photo is None:
+            return
+        cw = max(self.viewport.winfo_width(), 2)
+        ch = max(self.viewport.winfo_height(), 2)
+        ox = cw // 2 + int(round(self.view_pan_x))
+        oy = ch // 2 + int(round(self.view_pan_y))
+        items = self.viewport.find_withtag("preview")
+        if items:
+            self.viewport.coords(items[0], ox, oy)
+        else:
+            self.viewport.create_image(ox, oy, image=self._preview_photo, tags="preview")
+        pw, ph = self._preview_size
+        if pw < 1 or ph < 1:
+            try:
+                pw = int(self._preview_photo.width())
+                ph = int(self._preview_photo.height())
+            except Exception:
+                return
+            self._preview_size = (pw, ph)
+        self._preview_offset = (ox - pw // 2, oy - ph // 2)
+        self._draw_probe_overlays()
+
+    def _preview_center(self) -> tuple[int, int]:
+        cw = max(self.viewport.winfo_width(), 2)
+        ch = max(self.viewport.winfo_height(), 2)
+        return cw // 2 + int(round(self.view_pan_x)), ch // 2 + int(round(self.view_pan_y))
+
+    def _draw_pathline_rake_preview(self, x0: int, y0: int, x1: int, y1: int) -> None:
+        """Draw the rake/seed line while dragging in Pathlines mode."""
+        self.viewport.delete("pathline_drag")
+        self.viewport.create_line(
+            x0, y0, x1, y1, fill="#c00000", width=2, tags="pathline_drag"
+        )
+        dist = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
+        n = 1 if dist < 8 else max(2, min(16, int(dist / 18) + 1))
+        for i in range(n):
+            t = 0.0 if n == 1 else i / (n - 1)
+            sx = int(round(x0 + t * (x1 - x0)))
+            sy = int(round(y0 + t * (y1 - y0)))
+            self.viewport.create_oval(
+                sx - 3, sy - 3, sx + 3, sy + 3, outline="#c00000", fill="#ffd0d0", width=1, tags="pathline_drag"
+            )
 
     def _on_orbit_press(self, event: tk.Event) -> None:
         """Begin orbit drag (left in Orbit mode, or always via Button-2/3)."""
@@ -1134,7 +1254,10 @@ class FlowplotGui(tk.Tk):
         self.viewport.delete("preview")
         self._warp_photo = ImageTk.PhotoImage(show)
         self._preview_photo = self._warp_photo
-        self.viewport.create_image(cw // 2, ch // 2, image=self._warp_photo, tags="preview")
+        ox, oy = self._preview_center()
+        self.viewport.create_image(ox, oy, image=self._warp_photo, tags="preview")
+        self._preview_offset = (ox - show.width // 2, oy - show.height // 2)
+        self._preview_size = (show.width, show.height)
         self._set_status(f"Warping az={self.azimuth_deg:.0f}° el={self.elevation_deg:.0f}°")
 
     def _show_png_preview(self, path: Path) -> None:
@@ -1194,8 +1317,7 @@ class FlowplotGui(tk.Tk):
                 "check plane/coords (thin domain)."
             )
         self._preview_photo = ImageTk.PhotoImage(show)
-        ox = cw // 2
-        oy = ch // 2
+        ox, oy = self._preview_center()
         self.viewport.create_image(ox, oy, image=self._preview_photo, tags="preview")
         self._preview_offset = (ox - show.width // 2, oy - show.height // 2)
         self._preview_size = (show.width, show.height)
@@ -1348,6 +1470,10 @@ class FlowplotGui(tk.Tk):
         self.view_mode.set("auto")
         self.azimuth_deg = 0.0
         self.elevation_deg = 90.0
+        self.view_pan_x = 0.0
+        self.view_pan_y = 0.0
+        self._pan_last = None
+        self._panning = False
         self._settle_image = None
         self._settle_az = 0.0
         self._settle_el = 90.0
@@ -1708,13 +1834,27 @@ class FlowplotGui(tk.Tk):
         elif mode == "pathlines":
             self.viewport.configure(cursor="pencil")
             self.layer_pathlines.set(True)
-            self._set_status("Pathlines — click-drag to place seeds (Probe disabled)")
+            self._set_status("Pathlines — click-drag a rake/seed line (Probe disabled)")
         else:
             self.viewport.configure(cursor="fleur")
-            self._set_status("Orbit")
+            self._set_status("Pan (left-drag) · Orbit (mid/right) · F=fit")
         if prev != mode:
             self._log(f"Tool mode: {prev} → {mode}")
         self._refresh_levels_label()
+
+    def _on_pathlines_layer(self) -> None:
+        """Derived Pathlines checkbox — enable rake tool; do not fight Probe."""
+        if self.layer_pathlines.get():
+            self._set_tool_mode("pathlines")
+            self._log("Pathlines on — click-drag a rake/seed line in the Viewport")
+            if self.pathline_seeds:
+                self._render_cache.clear()
+                self.action_redraw()
+            return
+        if self.tool_mode.get() == "pathlines":
+            self._set_tool_mode("orbit")
+        self._render_cache.clear()
+        self.action_redraw()
 
     def action_toggle_probe(self) -> None:
         if self.tool_mode.get() == "probe":
@@ -1723,7 +1863,7 @@ class FlowplotGui(tk.Tk):
             self._set_tool_mode("probe")
 
     def action_pathlines_tool(self) -> None:
-        """Enter Pathlines insert mode (Tecplot-style click-drag seeds)."""
+        """Enter Pathlines rake mode (Tecplot-style click-drag seed line)."""
         self._set_tool_mode("pathlines")
 
     def action_open_probe_window(self) -> None:
@@ -1919,33 +2059,44 @@ class FlowplotGui(tk.Tk):
             return None
 
     def _finish_pathline_drag(self, cx: int, cy: int) -> None:
-        self.viewport.delete("pathline_drag")
+        """Emit pathlines from a rake/seed line segment (click-drag)."""
         start = self._pl_drag_start
         self._pl_drag_start = None
         if start is None:
+            self.viewport.delete("pathline_drag")
             return
         x0, y0 = start
-        # Seed at press; if dragged meaningfully, also seed along the segment.
-        points = [(x0, y0)]
         dist = ((cx - x0) ** 2 + (cy - y0) ** 2) ** 0.5
-        if dist > 12:
-            for t in (0.35, 0.7, 1.0):
-                points.append((int(x0 + t * (cx - x0)), int(y0 + t * (cy - y0))))
+        # Keep rake preview until redraw; dense seeds along the segment.
+        self._draw_pathline_rake_preview(x0, y0, cx, cy)
+        if dist < 8:
+            points = [(x0, y0)]
+        else:
+            n = max(2, min(16, int(dist / 18) + 1))
+            points = [
+                (
+                    int(round(x0 + (i / (n - 1)) * (cx - x0))),
+                    int(round(y0 + (i / (n - 1)) * (cy - y0))),
+                )
+                for i in range(n)
+            ]
         added = 0
         for px, py in points:
             world = self._world_at_canvas(px, py)
             if world is None:
                 continue
-            if world in self.pathline_seeds:
+            # Dedup near-duplicates in world space.
+            if any(abs(world[0] - sx) < 1e-9 and abs(world[1] - sy) < 1e-9 for sx, sy in self.pathline_seeds):
                 continue
             self.pathline_seeds.append(world)
             added += 1
         if added == 0:
-            self._log("Pathlines: click outside plot or probe failed — no seed")
+            self.viewport.delete("pathline_drag")
+            self._log("Pathlines: rake outside plot or probe failed — no seeds")
             return
         self.layer_pathlines.set(True)
         self._refresh_levels_label()
-        self._log(f"Pathlines: +{added} seed(s) → {len(self.pathline_seeds)} total")
+        self._log(f"Pathlines rake: +{added} seed(s) on segment → {len(self.pathline_seeds)} total")
         self._render_cache.clear()
         self.action_redraw()
 
@@ -2215,6 +2366,7 @@ class FlowplotGui(tk.Tk):
             "Flowplot — CFD post-processor\n"
             "Tecplot-like menus + Plot panel (Mesh first).\n"
             "Analyze hosts field sanity, positivity, profiles, shock polar.\n"
+            "Preference (pending confirm): rename product to Fieldplot — not applied yet.\n"
             f"CLI: {self.flowplot or '(not found)'}",
         )
 

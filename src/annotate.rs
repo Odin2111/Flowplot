@@ -173,12 +173,13 @@ pub fn draw_annotations(img: &mut ContourImage, info: &AnnotationInfo) {
     let panel_w = max_w + 2 * pad;
     fill_rect(img, pad - 4, pad - 4, panel_w, total_h, PANEL);
 
-    let mut y = pad as f32;
+    // Integer line tops — avoids cumulative float drift / baseline jitter in the HUD.
+    let mut y = pad;
     for (i, line) in lines.iter().enumerate() {
         let (px, _w, h) = sizes[i];
         let color = if i == 0 { FG } else { FG_SOFT };
-        draw_text_aa(img, pad as f32, y, line, px, color);
-        y += h as f32 + line_gap as f32;
+        draw_text_aa(img, pad as f32, y as f32, line, px, color);
+        y += h + line_gap;
     }
 
     if info.colorbar {
@@ -449,26 +450,33 @@ fn blend_pixel(img: &mut ContourImage, x: i32, y: i32, rgba: [u8; 4]) {
 
 fn measure_text(text: &str, px: f32) -> (i32, i32) {
     let font = annotation_font();
+    // Match draw_text_aa: integer px so measure and paint share one baseline grid.
+    let px = px.round().clamp(8.0, 48.0);
     let (ascent, descent) = line_metrics(px);
     let mut w = 0.0f32;
     for ch in text.chars() {
         let (metrics, _) = font.rasterize(ch, px);
         w += metrics.advance_width;
     }
-    let h = (ascent + descent).ceil() as i32 + 2;
+    let h = (ascent.round() + descent.round()).ceil() as i32 + 2;
     ((w.ceil() as i32).max(1), h.max(1))
 }
 
 /// Anti-aliased TrueType text at exact destination size (coverage blend).
+///
+/// `y` is the top of the line box. Baseline is snapped to an integer once so
+/// glyphs share one alignment line (avoids Viewport "jittery" annotations).
 fn draw_text_aa(img: &mut ContourImage, x: f32, y: f32, text: &str, px: f32, rgba: [u8; 4]) {
     let font = annotation_font();
+    let px = px.round().clamp(8.0, 48.0);
     let (ascent, _descent) = line_metrics(px);
-    let baseline = y + ascent;
-    let mut pen_x = x;
+    let baseline = (y.round() + ascent.round()).round();
+    let mut pen_x = x.round();
     for ch in text.chars() {
         let (metrics, bitmap) = font.rasterize(ch, px);
-        let glyph_x = (pen_x + metrics.xmin as f32).round() as i32;
-        let glyph_y = (baseline + metrics.ymin as f32).round() as i32;
+        // Floor glyph origins onto the shared integer baseline.
+        let glyph_x = (pen_x + metrics.xmin as f32).floor() as i32;
+        let glyph_y = (baseline + metrics.ymin as f32).floor() as i32;
         for row in 0..metrics.height {
             for col in 0..metrics.width {
                 let cover = bitmap[row * metrics.width + col];

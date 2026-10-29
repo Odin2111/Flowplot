@@ -8,7 +8,7 @@ Native **tkinter** shell under `gui/flowplot_gui.py`. The viewport previews PNGs
 |--------|----------|
 | Top | Menus **File / Plot / Style / Agents / Help**, always-visible Contour toolbar **＋ Level / － Level / Abc Label / ✎ Probe / Details…**, wordmark + **Open · Redraw · Export PNG** |
 | Left | **Plot** panel (scrollable): layers, variable, cut/view, Zone Style / Contour Details, collapsible **Nondim scales ▸**, Log |
-| Center | **Viewport full width** (no right column). CLI raster sized 1:1 to canvas; mesh `--fill`. **✎ Probe** click prints values; drag = orbit |
+| Center | **Viewport full width** (no right column). CLI raster sized 1:1 to canvas; mesh `--fill`. **Left-drag = pan**, mid/right = orbit, **F = fit** whole domain; **✎ Probe** click; Pathlines = rake drag |
 | Right | *(removed — Nondim moved under Plot)* |
 
 ## Defaults (match Tecplot)
@@ -18,7 +18,10 @@ Native **tkinter** shell under `gui/flowplot_gui.py`. The viewport previews PNGs
 - Plot menu: Axis…, Assign XY…, **Zone Style…** (Mesh + Contour working; other tabs stub), Pathlines…, **Contour…** (Contour Details), Vector…, Scatter…, Blanking…, Label Points… (stubs where not yet implemented; Pathlines = Tecplot “Streamtraces”)
 - Zone Style Apply → per-zone Show Zone / Show Mesh / Contour + mesh color → CLI `--zone` / `--mesh-color`
 - Contour Details (Levels and Color / Bands / Lines / Labels / Legend): working slice = levels, colormap, banded vs continuous, legend; other tabs stub
-- Annotation HUD uses native fontdue AA at 1:1 Viewport size (no stretch); colorbar labels sized to fit
+- Annotation HUD uses native fontdue AA at 1:1 Viewport size (no stretch); integer baseline snap (no jitter); colorbar labels sized to fit
+- **F** / Frame → Fit to Viewport / View → Fit whole domain clears pan and recenters
+- Pathlines: after enable, click-drag draws a rake/seed line; pathlines emit from that segment (exclusive vs Probe)
+- Product rename to **Fieldplot** is a noted preference only — wait for explicit confirm before renaming
 
 ## Run
 
