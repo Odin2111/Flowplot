@@ -355,30 +355,30 @@ class FlowplotGui(tk.Tk):
         body.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=4, pady=4)
 
         # Pack side columns first so the Viewport fills the remaining center.
-        left_wrap = ttk.Frame(body, style="Panel.TFrame", width=148)
+        left_wrap = ttk.Frame(body, style="Panel.TFrame", width=252)
         left_wrap.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 4))
         left_wrap.pack_propagate(False)
-        self._build_left_minimal(left_wrap)
 
-        right_wrap = ttk.Frame(body, style="Panel.TFrame", width=252)
+        left_canvas = tk.Canvas(left_wrap, bg=PANEL, highlightthickness=0, width=236)
+        left_scroll = ttk.Scrollbar(left_wrap, orient=tk.VERTICAL, command=left_canvas.yview)
+        left_canvas.configure(yscrollcommand=left_scroll.set)
+        left_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        left_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        left = ttk.Frame(left_canvas, style="Panel.TFrame")
+        left_win = left_canvas.create_window((0, 0), window=left, anchor="nw")
+
+        def _sync_left(_event: tk.Event | None = None) -> None:
+            left_canvas.configure(scrollregion=left_canvas.bbox("all"))
+            left_canvas.itemconfigure(left_win, width=max(left_canvas.winfo_width(), 220))
+
+        left.bind("<Configure>", _sync_left)
+        left_canvas.bind("<Configure>", _sync_left)
+        self._build_left_plot_panel(left)
+
+        right_wrap = ttk.Frame(body, style="Panel.TFrame", width=200)
         right_wrap.pack(side=tk.RIGHT, fill=tk.Y, padx=(4, 0))
         right_wrap.pack_propagate(False)
-
-        right_canvas = tk.Canvas(right_wrap, bg=PANEL, highlightthickness=0, width=236)
-        right_scroll = ttk.Scrollbar(right_wrap, orient=tk.VERTICAL, command=right_canvas.yview)
-        right_canvas.configure(yscrollcommand=right_scroll.set)
-        right_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        right_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        right = ttk.Frame(right_canvas, style="Panel.TFrame")
-        right_win = right_canvas.create_window((0, 0), window=right, anchor="nw")
-
-        def _sync_right(_event: tk.Event | None = None) -> None:
-            right_canvas.configure(scrollregion=right_canvas.bbox("all"))
-            right_canvas.itemconfigure(right_win, width=max(right_canvas.winfo_width(), 220))
-
-        right.bind("<Configure>", _sync_right)
-        right_canvas.bind("<Configure>", _sync_right)
-        self._build_plot_panel(right)
+        self._build_right_view_panel(right_wrap)
 
         view_wrap = ttk.Frame(body)
         view_wrap.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -409,28 +409,28 @@ class FlowplotGui(tk.Tk):
             foreground=MUTED,
         )
         tip.pack(anchor="w", pady=(2, 0))
-        self._log("Open a dataset — Plot panel on the right; Viewport between left and controls.")
+        self._log("Open a dataset — Plot layers left · Viewport center · View XYZ right.")
 
-    def _build_left_minimal(self, parent: ttk.Frame) -> None:
-        """Narrow left column: dataset + zone list (Plot controls are on the right)."""
+    def _build_left_plot_panel(self, parent: ttk.Frame) -> None:
+        """Left: dataset/zones + plot type, layers, derived objects, cut/track."""
         ttk.Label(parent, text="Dataset", style="Panel.TLabel", font=("Helvetica", 10, "bold")).pack(
-            anchor="w", padx=8, pady=(10, 4)
+            anchor="w", padx=12, pady=(10, 2)
         )
         self.dataset_label = ttk.Label(
             parent,
             text="(none)",
             style="Muted.TLabel",
-            wraplength=128,
+            wraplength=200,
             justify=tk.LEFT,
         )
-        self.dataset_label.pack(anchor="w", padx=8, pady=(0, 8))
+        self.dataset_label.pack(anchor="w", padx=12, pady=(0, 4))
         ttk.Button(parent, text="Open…", style="Tool.TButton", command=self.action_load).pack(
-            anchor="w", padx=8, pady=(0, 10)
+            anchor="w", padx=12, pady=(0, 6)
         )
-        ttk.Label(parent, text="Zones", style="Muted.TLabel").pack(anchor="w", padx=8)
+        ttk.Label(parent, text="Zones", style="Muted.TLabel").pack(anchor="w", padx=12)
         self.zone_list = tk.Listbox(
             parent,
-            height=12,
+            height=5,
             exportselection=False,
             bg="#fafbfc",
             fg=FG,
@@ -439,17 +439,11 @@ class FlowplotGui(tk.Tk):
             relief=tk.FLAT,
             font=("Helvetica", 9),
         )
-        self.zone_list.pack(fill=tk.BOTH, expand=True, padx=8, pady=(2, 8))
+        self.zone_list.pack(fill=tk.X, padx=10, pady=(2, 8))
         self.zone_list.bind("<<ListboxSelect>>", self._on_zone_list_select)
-        ttk.Label(
-            parent,
-            text="Plot controls →",
-            style="Muted.TLabel",
-        ).pack(anchor="w", padx=8, pady=(0, 10))
 
-    def _build_plot_panel(self, parent: ttk.Frame) -> None:
         ttk.Label(parent, text="Plot", style="Panel.TLabel", font=("Helvetica", 11, "bold")).pack(
-            anchor="w", padx=12, pady=(12, 6)
+            anchor="w", padx=12, pady=(4, 6)
         )
 
         ttk.Label(parent, text="Plot type", style="Muted.TLabel").pack(anchor="w", padx=12)
@@ -515,7 +509,6 @@ class FlowplotGui(tk.Tk):
         self.var_combo.pack(anchor="w", padx=12, pady=(2, 8))
         self.var_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_var_changed())
 
-        # Cut / track plane (I/J/K index).
         plane_box = ttk.LabelFrame(parent, text="Cut / Track plane", padding=(8, 6))
         plane_box.pack(fill=tk.X, padx=10, pady=(0, 8))
         axis_row = ttk.Frame(plane_box, style="Panel.TFrame")
@@ -554,44 +547,6 @@ class FlowplotGui(tk.Tk):
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(4, 0))
 
-        # Tecplot-like XYZ orientation + rotate (mid/right-drag always orbits).
-        view_box = ttk.LabelFrame(parent, text="View (XYZ)", padding=(8, 6))
-        view_box.pack(fill=tk.X, padx=10, pady=(0, 8))
-        btn_row = ttk.Frame(view_box, style="Panel.TFrame")
-        btn_row.pack(fill=tk.X)
-        for label in ("+X", "-X", "+Y", "-Y", "+Z", "-Z"):
-            ttk.Button(
-                btn_row,
-                text=label,
-                style="Tool.TButton",
-                width=3,
-                command=lambda v=label.lower(): self._set_axis_view(v),
-            ).pack(side=tk.LEFT, padx=1, pady=1)
-        rot_row = ttk.Frame(view_box, style="Panel.TFrame")
-        rot_row.pack(fill=tk.X, pady=(6, 0))
-        ttk.Button(rot_row, text="↺", style="Tool.TButton", width=3, command=lambda: self._nudge_view(-15, 0)).pack(
-            side=tk.LEFT, padx=1
-        )
-        ttk.Button(rot_row, text="↻", style="Tool.TButton", width=3, command=lambda: self._nudge_view(+15, 0)).pack(
-            side=tk.LEFT, padx=1
-        )
-        ttk.Button(rot_row, text="↑", style="Tool.TButton", width=3, command=lambda: self._nudge_view(0, +10)).pack(
-            side=tk.LEFT, padx=1
-        )
-        ttk.Button(rot_row, text="↓", style="Tool.TButton", width=3, command=lambda: self._nudge_view(0, -10)).pack(
-            side=tk.LEFT, padx=1
-        )
-        ttk.Button(rot_row, text="Reset", style="Tool.TButton", command=self._reset_view).pack(
-            side=tk.LEFT, padx=(6, 0)
-        )
-        self.view_label = ttk.Label(view_box, text="view: auto", style="Muted.TLabel")
-        self.view_label.pack(anchor="w", pady=(4, 0))
-        ttk.Label(
-            view_box,
-            text="Left-drag = pan · mid/right = orbit · settle redraw · F = fit.",
-            style="Muted.TLabel",
-        ).pack(anchor="w", pady=(2, 0))
-
         ttk.Button(parent, text="Zone Style…", style="Tool.TButton", command=self.action_zone_style).pack(
             padx=12, pady=(2, 4), anchor="w"
         )
@@ -602,7 +557,6 @@ class FlowplotGui(tk.Tk):
             padx=12, pady=(4, 8), anchor="w"
         )
 
-        # Discoverable Nondim under Plot (expanded by default).
         self.nondim_expanded = tk.BooleanVar(value=True)
         self._nondim_hdr = ttk.Frame(parent, style="Panel.TFrame")
         self._nondim_hdr.pack(fill=tk.X, padx=10, pady=(4, 0))
@@ -643,13 +597,54 @@ class FlowplotGui(tk.Tk):
         )
         self.log.pack(fill=tk.BOTH, expand=True, padx=10, pady=(2, 10))
 
+    def _build_right_view_panel(self, parent: ttk.Frame) -> None:
+        """Right: View XYZ, rotate/zoom nudges, fit."""
+        ttk.Label(parent, text="View", style="Panel.TLabel", font=("Helvetica", 11, "bold")).pack(
+            anchor="w", padx=10, pady=(12, 6)
+        )
+        view_box = ttk.LabelFrame(parent, text="View (XYZ)", padding=(8, 6))
+        view_box.pack(fill=tk.X, padx=8, pady=(0, 8))
+        btn_row = ttk.Frame(view_box, style="Panel.TFrame")
+        btn_row.pack(fill=tk.X)
+        for label in ("+X", "-X", "+Y", "-Y", "+Z", "-Z"):
+            ttk.Button(
+                btn_row,
+                text=label,
+                style="Tool.TButton",
+                width=3,
+                command=lambda v=label.lower(): self._set_axis_view(v),
+            ).pack(side=tk.LEFT, padx=1, pady=1)
+
+        rot_box = ttk.LabelFrame(parent, text="Rotate / Zoom", padding=(8, 6))
+        rot_box.pack(fill=tk.X, padx=8, pady=(0, 8))
+        rot_row = ttk.Frame(rot_box, style="Panel.TFrame")
+        rot_row.pack(fill=tk.X)
+        ttk.Button(rot_row, text="↺", style="Tool.TButton", width=3, command=lambda: self._nudge_view(-15, 0)).pack(
+            side=tk.LEFT, padx=1
+        )
+        ttk.Button(rot_row, text="↻", style="Tool.TButton", width=3, command=lambda: self._nudge_view(+15, 0)).pack(
+            side=tk.LEFT, padx=1
+        )
+        ttk.Button(rot_row, text="↑", style="Tool.TButton", width=3, command=lambda: self._nudge_view(0, +10)).pack(
+            side=tk.LEFT, padx=1
+        )
+        ttk.Button(rot_row, text="↓", style="Tool.TButton", width=3, command=lambda: self._nudge_view(0, -10)).pack(
+            side=tk.LEFT, padx=1
+        )
+        ttk.Button(rot_box, text="Reset view", style="Tool.TButton", command=self._reset_view).pack(
+            anchor="w", pady=(6, 0)
+        )
+        ttk.Button(rot_box, text="Fit whole domain (F)", style="Tool.TButton", command=self.action_fit_view).pack(
+            anchor="w", pady=(4, 0)
+        )
+        self.view_label = ttk.Label(rot_box, text="view: auto", style="Muted.TLabel")
+        self.view_label.pack(anchor="w", pady=(6, 0))
         ttk.Label(
             parent,
-            text="Mesh first. Contour toolbar = ± / Label / Probe / Details.\n"
-            "Viewport sits between Zones (left) and this Plot panel.",
+            text="Left-drag = pan\nMid/right = orbit\nSettle redraw · F = fit",
             style="Muted.TLabel",
             justify=tk.LEFT,
-        ).pack(anchor="w", padx=12, pady=(0, 12))
+        ).pack(anchor="w", padx=10, pady=(4, 10))
 
     def _toggle_nondim_panel(self) -> None:
         for child in self._nondim_hdr.winfo_children():
@@ -1609,18 +1604,26 @@ class FlowplotGui(tk.Tk):
         interactive: bool = False,
     ) -> subprocess.CompletedProcess[str] | None:
         del interactive  # always full-size raster; overlays stay on every settle.
-        if want_contour or want_pathlines or want_vector or want_edge or want_scatter or want_iso:
-            if not var:
-                var = first_scalar(self.variables) or ""
-                if var:
-                    self.var_name.set(var)
-            if not var:
-                messagebox.showwarning(
-                    "Fieldplot",
-                    "Select a contour / iso variable (e.g. Pressure).",
-                    parent=self,
+        needs_scalar = (
+            want_contour or want_pathlines or want_vector or want_edge or want_scatter or want_iso
+        )
+        if needs_scalar:
+            var = (var or "").strip() or first_scalar(self.variables) or ""
+            if var:
+                self.var_name.set(var)
+            else:
+                # Never block the UI with a modal — quietly drop scalar layers.
+                skipped = self._quietly_disable_scalar_layers()
+                self._log(
+                    "No scalar variable available — skipped "
+                    + (", ".join(skipped) if skipped else "Contour/Iso")
+                    + "; drawing Mesh only."
                 )
-                return None
+                self._set_status("No scalar var — Mesh only")
+                needs_scalar = False
+                want_contour = want_pathlines = want_vector = False
+                want_edge = want_scatter = want_iso = False
+        if needs_scalar:
             args = [
                 "contour",
                 str(ds),
@@ -1676,6 +1679,35 @@ class FlowplotGui(tk.Tk):
         ]
         return self._run_cli(args)
 
+    def _quietly_disable_scalar_layers(self) -> list[str]:
+        """Turn off Contour/Iso/… without a modal when no scalar variable exists."""
+        skipped: list[str] = []
+        for label, var in (
+            ("Contour", self.layer_contour),
+            ("Shade", self.layer_shade),
+            ("Vector", self.layer_vector),
+            ("Edge", self.layer_edge),
+            ("Scatter", self.layer_scatter),
+            ("Iso-Surfaces", self.layer_isosurfaces),
+            ("Pathlines", self.layer_pathlines),
+        ):
+            if var.get():
+                var.set(False)
+                skipped.append(label)
+        if not self.layer_mesh.get():
+            self.layer_mesh.set(True)
+        return skipped
+
+    def _ensure_contour_var(self) -> str:
+        """Auto-pick first scalar; empty string if none (caller must not modal)."""
+        var = self.var_name.get().strip()
+        if var:
+            return var
+        var = first_scalar(self.variables) or ""
+        if var:
+            self.var_name.set(var)
+        return var
+
     def _pan_cli_args(self) -> list[str]:
         """Pass domain pan into the CLI so settle redraw moves the field, not the PNG.
 
@@ -1715,9 +1747,12 @@ class FlowplotGui(tk.Tk):
         return args
 
     def action_enable_contour(self) -> None:
+        if not self._ensure_contour_var():
+            self.layer_contour.set(False)
+            self._log("Contour skipped — no scalar variable in dataset")
+            self._set_status("Contour unavailable (no scalar)")
+            return
         self.layer_contour.set(True)
-        if not self.var_name.get().strip() and self.variables:
-            self.var_name.set(first_scalar(self.variables))
         # Keep Zone Style Contour Show in sync for the active zone.
         zs = self._style_for_zone(self.active_zone)
         if zs is not None:
@@ -2320,9 +2355,12 @@ class FlowplotGui(tk.Tk):
     def action_isosurfaces(self) -> None:
         """Iso-Surfaces — 2D isolines of the active variable (real levels, not empty)."""
         if self.layer_isosurfaces.get():
+            if not self._ensure_contour_var():
+                self.layer_isosurfaces.set(False)
+                self._log("Iso-Surfaces skipped — no scalar variable in dataset")
+                self._set_status("Iso unavailable (no scalar)")
+                return
             self.contour_details.coloring = "Banded"
-            if not self.var_name.get().strip() and self.variables:
-                self.var_name.set(first_scalar(self.variables))
             self._refresh_levels_label()
             self._render_cache.clear()
             self.action_redraw()
