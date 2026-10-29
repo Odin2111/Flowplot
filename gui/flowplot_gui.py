@@ -413,9 +413,16 @@ class FlowplotGui(tk.Tk):
         self.viewport.bind("<ButtonPress-1>", self._on_view_press)
         self.viewport.bind("<B1-Motion>", self._on_view_drag)
         self.viewport.bind("<ButtonRelease-1>", self._on_view_release)
+        # Middle / right button always orbit (Probe / Pathlines never steal these).
+        self.viewport.bind("<ButtonPress-2>", self._on_orbit_press)
+        self.viewport.bind("<B2-Motion>", self._on_orbit_drag)
+        self.viewport.bind("<ButtonRelease-2>", self._on_orbit_release)
+        self.viewport.bind("<ButtonPress-3>", self._on_orbit_press)
+        self.viewport.bind("<B3-Motion>", self._on_orbit_drag)
+        self.viewport.bind("<ButtonRelease-3>", self._on_orbit_release)
         tip = ttk.Label(
             view_wrap,
-            text="Single menubar · Probe / Pathlines exclusive · Contour ± levels · Drag=orbit",
+            text="Orbit: left-drag (Orbit tool) or mid/right-drag · XYZ snaps · Contour ± · Probe exclusive",
             font=("Helvetica", 8),
             foreground=MUTED,
         )
@@ -534,7 +541,7 @@ class FlowplotGui(tk.Tk):
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(4, 0))
 
-        # Tecplot-like XYZ orientation + rotate.
+        # Tecplot-like XYZ orientation + rotate (mid/right-drag always orbits).
         view_box = ttk.LabelFrame(parent, text="View (XYZ)", padding=(8, 6))
         view_box.pack(fill=tk.X, padx=10, pady=(0, 8))
         btn_row = ttk.Frame(view_box, style="Panel.TFrame")
@@ -566,6 +573,11 @@ class FlowplotGui(tk.Tk):
         )
         self.view_label = ttk.Label(view_box, text="view: auto", style="Muted.TLabel")
         self.view_label.pack(anchor="w", pady=(4, 0))
+        ttk.Label(
+            view_box,
+            text="Mid/right-drag = orbit always. Planar data keeps a tilt.",
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(2, 0))
 
         ttk.Button(parent, text="Zone Style…", style="Tool.TButton", command=self.action_zone_style).pack(
             padx=12, pady=(2, 4), anchor="w"
@@ -827,23 +839,42 @@ class FlowplotGui(tk.Tk):
         mode = self.view_mode.get().strip().lower()
         if mode in ("", "auto"):
             return []
-        if mode == "free":
-            return ["--view", f"az={self.azimuth_deg:.2f},el={self.elevation_deg:.2f}"]
+        # Prefer free az/el whenever we have been rotating — matches drag handoff.
+        if mode == "free" or self.plot_type.get() == "3D Cartesian":
+            el = self._clamp_elevation(self.elevation_deg)
+            return ["--view", f"az={self.azimuth_deg:.2f},el={el:.2f}"]
         return ["--view", mode]
+
+    def _clamp_elevation(self, el: float) -> float:
+        """Keep planar (effectively 2D) surfaces readable — never true edge-on."""
+        el = max(-90.0, min(90.0, el))
+        if not self.effectively_2d:
+            return el
+        # IJ / unit-thickness data has no Z thickness; el≈0 collapses the plot to a line.
+        min_el = 18.0
+        if abs(el) < min_el:
+            return min_el if el >= 0.0 else -min_el
+        return el
 
     def _update_view_label(self) -> None:
         mode = self.view_mode.get()
-        if mode == "free":
-            text = f"view: az={self.azimuth_deg:.0f}° el={self.elevation_deg:.0f}°"
+        el = self._clamp_elevation(self.elevation_deg)
+        if mode == "free" or self.plot_type.get() == "3D Cartesian":
+            text = f"view: az={self.azimuth_deg:.0f}° el={el:.0f}°"
+            if self.effectively_2d and abs(self.elevation_deg) < 18.0:
+                text += " (tilted)"
         else:
             text = f"view: {mode}"
         if hasattr(self, "view_label"):
             self.view_label.configure(text=text)
 
     def _set_axis_view(self, tag: str) -> None:
-        self.view_mode.set(tag)
-        # Match Rust ViewSpec::to_free_angles for drag handoff.
-        angles = {
+        tag = tag.strip().lower()
+        # Leave Probe/Pathlines so left-drag can orbit after an XYZ snap.
+        if self.tool_mode.get() != "orbit":
+            self._set_tool_mode("orbit")
+        # True orthographic faces (volume) vs tilted free views (planar surface).
+        ortho = {
             "+x": (0.0, 0.0),
             "-x": (180.0, 0.0),
             "+y": (90.0, 0.0),
@@ -851,25 +882,49 @@ class FlowplotGui(tk.Tk):
             "+z": (0.0, 90.0),
             "-z": (180.0, -90.0),
         }
-        self.azimuth_deg, self.elevation_deg = angles.get(tag, (0.0, 90.0))
+        # Planar IJ data: ±X/±Y edge-on is unreadable — use a mild 3D tilt instead.
+        planar_tilt = {
+            "+x": (0.0, 28.0),
+            "-x": (180.0, 28.0),
+            "+y": (90.0, 28.0),
+            "-y": (-90.0, 28.0),
+            "+z": (0.0, 90.0),
+            "-z": (180.0, -90.0),
+        }
+        if self.effectively_2d:
+            self.view_mode.set("free")
+            self.azimuth_deg, self.elevation_deg = planar_tilt.get(tag, (0.0, 90.0))
+            self.elevation_deg = self._clamp_elevation(self.elevation_deg)
+            self._log(f"View {tag} → free az={self.azimuth_deg:.0f} el={self.elevation_deg:.0f} (planar tilt)")
+        else:
+            self.view_mode.set(tag)
+            self.azimuth_deg, self.elevation_deg = ortho.get(tag, (0.0, 90.0))
+            self._log(f"View {tag}")
         self._update_view_label()
-        # Axis snaps need a real redraw (warp alone cannot invent a new orthographic face).
+        # Axis snaps need a real redraw (warp alone cannot invent a new face).
+        self._render_cache.clear()
         self._schedule_settle(delay_ms=20)
 
     def _reset_view(self) -> None:
+        if self.tool_mode.get() != "orbit":
+            self._set_tool_mode("orbit")
         self.view_mode.set("auto")
         self.azimuth_deg = 0.0
         self.elevation_deg = 90.0
         self._update_view_label()
+        self._render_cache.clear()
         self._schedule_settle(delay_ms=20)
 
     def _nudge_view(self, daz: float, del_: float) -> None:
+        if self.tool_mode.get() != "orbit":
+            self._set_tool_mode("orbit")
         self.view_mode.set("free")
         self.azimuth_deg = (self.azimuth_deg + daz) % 360.0
-        self.elevation_deg = max(-90.0, min(90.0, self.elevation_deg + del_))
+        self.elevation_deg = self._clamp_elevation(self.elevation_deg + del_)
         self._update_view_label()
         # Tecplot feel: warp last frame immediately, CLI only after settle.
         self._warp_last_frame()
+        self._render_cache.clear()
         self._schedule_settle(delay_ms=120)
 
     def _track_plane(self, step: int) -> None:
@@ -952,12 +1007,7 @@ class FlowplotGui(tk.Tk):
             self._pl_drag_start = (event.x, event.y)
             self.viewport.delete("pathline_drag")
             return
-        self._drag_last = (event.x, event.y)
-        self._dragging = True
-        # Cancel any settle / CLI — drag uses display-list warp only.
-        self._cancel_redraw_timers()
-        self._kill_cli()
-        self._render_gen += 1
+        self._on_orbit_press(event)
 
     def _on_view_drag(self, event: tk.Event) -> None:
         mode = self.tool_mode.get()
@@ -975,18 +1025,7 @@ class FlowplotGui(tk.Tk):
                 x0 - 4, y0 - 4, x0 + 4, y0 + 4, outline="#c00000", width=1, tags="pathline_drag"
             )
             return
-        if self._drag_last is None:
-            return
-        dx = event.x - self._drag_last[0]
-        dy = event.y - self._drag_last[1]
-        self._drag_last = (event.x, event.y)
-        if self.view_mode.get() != "free":
-            self.view_mode.set("free")
-        self.azimuth_deg = (self.azimuth_deg + dx * 0.4) % 360.0
-        self.elevation_deg = max(-90.0, min(90.0, self.elevation_deg - dy * 0.4))
-        self._update_view_label()
-        # Tecplot / GPU display-list style: transform last frame — no CLI.
-        self._warp_last_frame()
+        self._on_orbit_drag(event)
 
     def _on_view_release(self, event: tk.Event) -> None:
         mode = self.tool_mode.get()
@@ -995,8 +1034,33 @@ class FlowplotGui(tk.Tk):
         if mode == "pathlines":
             self._finish_pathline_drag(event.x, event.y)
             return
+        self._on_orbit_release(event)
+
+    def _on_orbit_press(self, event: tk.Event) -> None:
+        """Begin orbit drag (left in Orbit mode, or always via Button-2/3)."""
+        self._drag_last = (event.x, event.y)
+        self._dragging = True
+        self._cancel_redraw_timers()
+        self._kill_cli()
+        self._render_gen += 1
+
+    def _on_orbit_drag(self, event: tk.Event) -> None:
+        if self._drag_last is None:
+            return
+        dx = event.x - self._drag_last[0]
+        dy = event.y - self._drag_last[1]
+        self._drag_last = (event.x, event.y)
+        self.view_mode.set("free")
+        self.azimuth_deg = (self.azimuth_deg + dx * 0.4) % 360.0
+        self.elevation_deg = self._clamp_elevation(self.elevation_deg - dy * 0.4)
+        self._update_view_label()
+        # Tecplot / GPU display-list style: transform last frame — no CLI.
+        self._warp_last_frame()
+
+    def _on_orbit_release(self, _event: tk.Event) -> None:
         self._drag_last = None
         self._dragging = False
+        self._render_cache.clear()
         self._schedule_settle(delay_ms=50)
 
     def _plane_key(self) -> tuple[str, int]:
@@ -1170,16 +1234,18 @@ class FlowplotGui(tk.Tk):
             self.plot_type.set("2D Cartesian")
             return
         if pt == "3D Cartesian" and self.effectively_2d:
+            # Allow 3D Cartesian as a surface-in-3D view (planar IJ still orbits).
             self._log(
-                "Plot type 3D Cartesian selected on effectively 2D data — "
-                "falling back to 2D Cartesian view (mesh/contour plane)."
+                "3D Cartesian on planar/unit-thickness data — "
+                "orbiting the surface (elevation stays off edge-on)."
             )
-            self.plot_type.set("2D Cartesian")
-            messagebox.showinfo(
-                "3D Cartesian",
-                "This dataset is effectively 2D (unit-thickness or planar).\n"
-                "Flowplot will use 2D Cartesian for mesh/contour.",
-            )
+            self.view_mode.set("free")
+            self.azimuth_deg = 35.0
+            self.elevation_deg = self._clamp_elevation(28.0)
+            self._update_view_label()
+            if self.tool_mode.get() != "orbit":
+                self._set_tool_mode("orbit")
+        self._render_cache.clear()
         self.action_redraw()
 
     def _on_var_changed(self) -> None:
@@ -1261,10 +1327,9 @@ class FlowplotGui(tk.Tk):
                         )
                 if self.plot_type.get() == "3D Cartesian" and self.effectively_2d:
                     self._log(
-                        "Dataset is effectively 2D — using 2D Cartesian "
-                        "(3D Cartesian would not add a volume view here)."
+                        "Dataset is planar/unit-thickness — 3D Cartesian orbits the surface "
+                        "(elevation stays off edge-on)."
                     )
-                    self.plot_type.set("2D Cartesian")
             except json.JSONDecodeError:
                 self._log("warning: could not parse info JSON; variable list empty")
                 self._set_variables([])
@@ -1300,12 +1365,12 @@ class FlowplotGui(tk.Tk):
         if self._dragging:
             self._warp_last_frame()
             return
-        if self.plot_type.get() == "3D Cartesian" and self.effectively_2d:
-            self._log("3D Cartesian on 2D data → 2D Cartesian fallback")
-            self.plot_type.set("2D Cartesian")
         if self.plot_type.get() not in ("2D Cartesian", "3D Cartesian"):
             self._log(f"plot type {self.plot_type.get()} not drawable yet")
             return
+        # Keep free az/el clamped whenever 3D Cartesian or free view is active.
+        if self.view_mode.get() == "free" or self.plot_type.get() == "3D Cartesian":
+            self.elevation_deg = self._clamp_elevation(self.elevation_deg)
 
         want_mesh = self.layer_mesh.get()
         want_shade = self.layer_shade.get()
@@ -2181,8 +2246,6 @@ def main() -> int:
                             if isinstance(vars_, list):
                                 app._set_variables([str(v) for v in vars_])
                             app.effectively_2d = bool(payload.get("effectively_2d", True))
-                            if app.plot_type.get() == "3D Cartesian" and app.effectively_2d:
-                                app.plot_type.set("2D Cartesian")
                         except json.JSONDecodeError:
                             pass
                     if app.layer_contour.get() and not app.var_name.get():
