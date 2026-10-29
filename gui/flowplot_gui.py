@@ -19,12 +19,14 @@ import sys
 import tempfile
 import time
 import tkinter as tk
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from agents_panel import AgentsPanel
 from contour_details_dialog import ContourDetailsDialog, ContourDetailsState
 from legend_options_dialog import LegendOptionsDialog, LegendOptionsState
+from open_dataset_dialog import ask_open_dataset
 from probe_dialog import ProbeDialog
 from windowing import release_grabs, stay_above
 from zone_style_dialog import (
@@ -1354,38 +1356,13 @@ class FlowplotGui(tk.Tk):
     # --- Actions ---
 
     def action_load(self) -> None:
-        # Modal Contour/Legend grabs block the file dialog Open button on Linux.
+        # Modal Contour/Legend grabs block dialogs on Linux.
         release_grabs(self)
-        # Tuple patterns (not space-joined) — Linux Tk otherwise treats
-        # "*.plt *.dat …" as one literal pattern and Open returns empty.
-        path = filedialog.askopenfilename(
-            parent=self,
-            title="Open CFD dataset",
-            filetypes=[
-                (
-                    "CFD datasets",
-                    (
-                        "*.plt",
-                        "*.dat",
-                        "*.tp",
-                        "*.cgns",
-                        "*.cgz",
-                        "*.vtk",
-                        "*.vtu",
-                        "*.vtp",
-                        "*.vti",
-                        "*.vts",
-                        "*.vtr",
-                        "*.cas",
-                    ),
-                ),
-                ("Tecplot", ("*.plt", "*.dat", "*.tp")),
-                ("CGNS", ("*.cgns", "*.cgz")),
-                ("VTK", ("*.vtk", "*.vtu", "*.vtp", "*.vti", "*.vts", "*.vtr")),
-                ("Fluent", ("*.cas", "*.dat")),
-                ("All files", "*.*"),
-            ],
-        )
+        # Details list (Name | Size | Modified) — native Linux filedialogs hide mtime.
+        initial = None
+        if self.dataset_path is not None:
+            initial = self.dataset_path.parent
+        path = ask_open_dataset(self, initialdir=initial)
         if not path:
             self._log("Open cancelled (no file returned)")
             self._set_status("Open cancelled")
@@ -1395,7 +1372,18 @@ class FlowplotGui(tk.Tk):
             messagebox.showerror("Open failed", f"File not found:\n{chosen}", parent=self)
             return
         self.dataset_path = chosen
-        self._log(f"Loaded path: {self.dataset_path}")
+        try:
+            os.environ["FIELDPLOT_LAST_DIR"] = str(chosen.parent)
+        except Exception:
+            pass
+        try:
+            st = chosen.stat()
+            self._log(
+                f"Loaded path: {self.dataset_path}  "
+                f"({st.st_size} bytes, mtime {datetime.fromtimestamp(st.st_mtime):%Y-%m-%d %H:%M:%S})"
+            )
+        except OSError:
+            self._log(f"Loaded path: {self.dataset_path}")
         self._set_status(str(self.dataset_path))
         self.lift()
         self.focus_force()
