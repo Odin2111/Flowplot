@@ -1407,6 +1407,7 @@ fn run_contour(
         info.legend_font_px = legend_font_px;
         info.legend_align = legend_align;
         info.view = Some(view.label());
+        info.view_orient = view;
         info.plane = Some(match plane {
             PlaneSpec::Auto => "auto".into(),
             PlaneSpec::Index { axis, index } => format!("{axis}={index}"),
@@ -1753,6 +1754,7 @@ fn run_pathlines_cmd(
         info.vmax = Some(img.vmax);
         info.style = style;
         info.view = Some(view.label());
+        info.view_orient = view;
         draw_annotations(&mut img, &info);
         img
     } else {

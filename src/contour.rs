@@ -331,6 +331,7 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
         info.legend_font_px = opts.legend_font_px;
         info.legend_align = opts.legend_align;
         info.view = Some(opts.view.label());
+        info.view_orient = opts.view;
         info.plane = Some(match opts.plane {
             PlaneSpec::Auto => "auto".into(),
             PlaneSpec::Index { axis, index } => format!("{axis}={index}"),

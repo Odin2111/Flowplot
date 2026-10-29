@@ -243,6 +243,7 @@ pub fn render_mesh(ds: &Dataset, opts: &MeshOptions) -> Result<ContourImage> {
             AnnotationInfo::from_dataset(ds, opts.zone, None, opts.path_hint.as_deref());
         info.colorbar = false;
         info.view = Some(opts.view.label());
+        info.view_orient = opts.view;
         info.plane = Some(match opts.plane {
             PlaneSpec::Auto => "auto".into(),
             PlaneSpec::Index { axis, index } => format!("{axis}={index}"),

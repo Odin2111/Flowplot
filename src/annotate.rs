@@ -9,6 +9,7 @@ use fontdue::Font;
 
 use crate::contour::{draw_line, put_pixel, ContourImage, PlotStyle};
 use crate::dataset::Dataset;
+use crate::view::ViewSpec;
 
 /// What to stamp onto a rendered mesh/contour PNG.
 #[derive(Debug, Clone)]
@@ -37,6 +38,10 @@ pub struct AnnotationInfo {
     pub legend_font_px: f32,
     /// `right` (default) or `left` colorbar alignment.
     pub legend_align: LegendAlign,
+    /// Camera orientation for the XYZ triad (origin visible).
+    pub view_orient: ViewSpec,
+    /// Draw Cartesian XYZ axes triad in the plot (default on).
+    pub show_triad: bool,
 }
 
 /// Colorbar side (Tecplot Contour Details → Legend).
@@ -68,6 +73,8 @@ impl Default for AnnotationInfo {
             show_labels: false,
             legend_font_px: 0.0,
             legend_align: LegendAlign::Right,
+            view_orient: ViewSpec::Auto,
+            show_triad: true,
         }
     }
 }
@@ -180,6 +187,10 @@ pub fn draw_annotations(img: &mut ContourImage, info: &AnnotationInfo) {
         let color = if i == 0 { FG } else { FG_SOFT };
         draw_text_aa(img, pad as f32, y as f32, line, px, color);
         y += h + line_gap;
+    }
+
+    if info.show_triad {
+        draw_axes_triad(img, info.view_orient);
     }
 
     if info.colorbar {
@@ -407,6 +418,57 @@ fn draw_level_labels(img: &mut ContourImage, vmin: f64, vmax: f64, nlevels: u32)
         let ty = py - th - 2;
         fill_rect(img, tx - 2, ty - 1, tw + 4, th + 2, PANEL);
         draw_text_aa(img, tx as f32, ty as f32, &text, font_px, FG);
+    }
+}
+
+/// Cartesian XYZ triad with visible origin (Tecplot-like corner widget).
+pub fn draw_axes_triad(img: &mut ContourImage, view: ViewSpec) {
+    if img.width < 80 || img.height < 80 {
+        return;
+    }
+    let ox = 36i32;
+    let oy = img.height as i32 - 36;
+    let axis_len = 28.0_f64;
+    // Screen vectors for unit world axes.
+    let axes = [
+        ((1.0, 0.0, 0.0), [200u8, 40, 40, 255], "X"),
+        ((0.0, 1.0, 0.0), [40u8, 160, 60, 255], "Y"),
+        ((0.0, 0.0, 1.0), [40u8, 80, 200, 255], "Z"),
+    ];
+    // Soft plate behind triad so it stays readable on dark floods.
+    fill_rect(img, ox - 18, oy - 34, 56, 52, PANEL);
+    // Origin marker.
+    for dy in -2..=2 {
+        for dx in -2..=2 {
+            if dx * dx + dy * dy <= 4 {
+                put_pixel(img, ox + dx, oy + dy, FG);
+            }
+        }
+    }
+    for &((wx, wy, wz), rgba, label) in &axes {
+        let (su, sv) = view.project(wx, wy, wz);
+        let norm = (su * su + sv * sv).sqrt();
+        if norm < 1e-6 {
+            // Axis into/out of camera — mark near origin with label only.
+            draw_text_aa(img, (ox + 6) as f32, (oy - 14) as f32, label, 11.0, rgba);
+            continue;
+        }
+        let sx = (su / norm * axis_len).round() as i32;
+        let sy = (-sv / norm * axis_len).round() as i32; // image y down
+        let x1 = ox + sx;
+        let y1 = oy + sy;
+        draw_line(img, ox, oy, x1, y1, rgba);
+        // Arrow tip
+        draw_line(img, x1, y1, x1 - sx / 5 + sy / 8, y1 - sy / 5 - sx / 8, rgba);
+        draw_line(img, x1, y1, x1 - sx / 5 - sy / 8, y1 - sy / 5 + sx / 8, rgba);
+        draw_text_aa(
+            img,
+            (x1 + sx.signum() * 2) as f32,
+            (y1 - 10) as f32,
+            label,
+            11.0,
+            rgba,
+        );
     }
 }
 

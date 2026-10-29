@@ -25,6 +25,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from agents_panel import AgentsPanel
 from contour_details_dialog import ContourDetailsDialog, ContourDetailsState
+from icon_toolbar import build_fieldplot_icon_toolbar
 from legend_options_dialog import LegendOptionsDialog, LegendOptionsState
 from open_dataset_dialog import ask_open_dataset
 from probe_dialog import ProbeDialog
@@ -322,44 +323,12 @@ class FlowplotGui(tk.Tk):
         self.bind_all("<KeyPress-F>", self._on_fit_key)
 
     def _build_toolbar(self) -> None:
-        """Single compact chrome row: wordmark + Open/Redraw + Contour tools."""
-        bar = tk.Frame(self, bg=MENU_BG, highlightthickness=0)
-        bar.pack(side=tk.TOP, fill=tk.X)
-
-        logo = tk.Canvas(bar, width=118, height=24, bg=MENU_BG, highlightthickness=0, bd=0)
-        logo.pack(side=tk.LEFT, padx=(8, 4), pady=2)
-        logo.create_line(4, 18, 10, 8, 16, 8, 22, 18, smooth=True, fill=ACCENT, width=2)
-        logo.create_oval(22, 10, 26, 14, fill=ACCENT, outline=ACCENT)
-        logo.create_text(30, 12, text="Fieldplot", anchor="w", fill=FG, font=("Helvetica", 11, "bold"))
-        self._logo_canvas = logo
-        self._wordmark_path = WORDMARK
-
-        def tool_btn(text: str, cmd) -> ttk.Button:
-            b = ttk.Button(bar, text=text, style="ToolCompact.TButton", command=cmd)
-            b.pack(side=tk.LEFT, padx=1, pady=2)
-            return b
-
-        tool_btn("Open", self.action_load)
-        tool_btn("Redraw", self.action_redraw)
-        tool_btn("Export", self.action_export_png)
-        ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=4)
-        # Clear names — not "Level Level Abc".
-        tool_btn("Fewer levels", self.action_contour_remove_level)
-        tool_btn("More levels", self.action_contour_add_level)
-        tool_btn("Contour labels", self.action_toggle_contour_labels)
-        self._probe_btn = tool_btn("Probe", self.action_toggle_probe)
-        tool_btn("Pathlines", self.action_pathlines_tool)
-        ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=4)
-        tool_btn("Details…", self.action_contour_details)
-        tool_btn("Legend…", self.action_legend_options)
-        self.levels_label = tk.Label(
-            bar,
-            text=self._levels_status_text(),
-            bg=MENU_BG,
-            fg=MUTED,
-            font=("Helvetica", 8),
-        )
-        self.levels_label.pack(side=tk.LEFT, padx=(6, 8))
+        """Tecplot-like icon strip under the menubar."""
+        self._icon_toolbar = build_fieldplot_icon_toolbar(self, self)
+        self._icon_toolbar.pack(side=tk.TOP, fill=tk.X)
+        # Levels status shares the icon strip's status area when idle.
+        self.levels_label = self._icon_toolbar.status
+        self._refresh_levels_label()
         tk.Frame(self, bg="#9aa3ab", height=1).pack(side=tk.TOP, fill=tk.X)
 
     def _levels_status_text(self) -> str:
@@ -373,7 +342,13 @@ class FlowplotGui(tk.Tk):
 
     def _refresh_levels_label(self) -> None:
         if hasattr(self, "levels_label"):
-            self.levels_label.configure(text=self._levels_status_text())
+            # Don't overwrite live icon hover tip.
+            tip = ""
+            if hasattr(self, "_icon_toolbar") and self._icon_toolbar.status.cget("text"):
+                # Only set levels text when tip empty or already a levels string.
+                tip = str(self._icon_toolbar.status.cget("text") or "")
+            if not tip or "levels" in tip or "·" in tip:
+                self.levels_label.configure(text=self._levels_status_text())
 
     def _build_body(self) -> None:
         body = ttk.Frame(self)
@@ -477,7 +452,7 @@ class FlowplotGui(tk.Tk):
             derived,
             text="Slices",
             variable=self.layer_slices,
-            command=self.action_slices_focus,
+            command=self._on_slices_checkbox,
         ).pack(anchor="w")
         ttk.Checkbutton(
             derived,
@@ -883,6 +858,7 @@ class FlowplotGui(tk.Tk):
             text = f"view: {mode}"
         if hasattr(self, "view_label"):
             self.view_label.configure(text=text)
+        self._draw_axes_triad()
 
     def _set_axis_view(self, tag: str) -> None:
         tag = tag.strip().lower()
@@ -1109,6 +1085,7 @@ class FlowplotGui(tk.Tk):
             self._preview_size = (pw, ph)
         self._preview_offset = (ox - pw // 2, oy - ph // 2)
         self._draw_probe_overlays()
+        self._draw_axes_triad()
 
     def _preview_center(self) -> tuple[int, int]:
         cw = max(self.viewport.winfo_width(), 2)
@@ -1233,6 +1210,7 @@ class FlowplotGui(tk.Tk):
         self.viewport.create_image(ox, oy, image=self._warp_photo, tags="preview")
         self._preview_offset = (ox - show.width // 2, oy - show.height // 2)
         self._preview_size = (show.width, show.height)
+        self._draw_axes_triad()
         self._set_status(f"Warping az={self.azimuth_deg:.0f}° el={self.elevation_deg:.0f}°")
 
     def _show_png_preview(self, path: Path) -> None:
@@ -1302,6 +1280,7 @@ class FlowplotGui(tk.Tk):
         self._preview_native = native
         self._draw_probe_overlays()
         self._draw_persistent_rake()
+        self._draw_axes_triad()
         # Keep a full-res settle copy for drag-time warping (before thumbnail).
         try:
             settle_src = Image.open(preview_path).convert("RGBA")
@@ -2162,6 +2141,103 @@ class FlowplotGui(tk.Tk):
                 outline="#c00000", fill="#ffd0d0", width=1, tags="pathline_rake",
             )
 
+    def _project_axis(self, vx: float, vy: float, vz: float) -> tuple[float, float]:
+        """Project a world unit axis into screen (u right, v up) for the triad.
+
+        Matches `ViewSpec::project` / `project_orbit` in src/view.rs.
+        """
+        mode = self.view_mode.get().strip().lower()
+        if mode in ("+x", "-x", "+y", "-y", "+z", "-z"):
+            pos = not mode.startswith("-")
+            ax = mode[-1]
+            if ax == "z":
+                return (vx, vy) if pos else (-vx, vy)
+            if ax == "y":
+                return (vx, vz) if pos else (-vx, vz)
+            return (-vy, vz) if pos else (vy, vz)
+        # Free / 3D Cartesian — use current az/el (Auto falls through to +Z-like).
+        az = math.radians(self.azimuth_deg)
+        el = math.radians(self._clamp_elevation(self.elevation_deg))
+        cos_el = math.cos(el)
+        ex = cos_el * math.cos(az)
+        ey = cos_el * math.sin(az)
+        ez = math.sin(el)
+        fx, fy, fz = -ex, -ey, -ez
+        fl = math.sqrt(fx * fx + fy * fy + fz * fz) or 1.0
+        fx, fy, fz = fx / fl, fy / fl, fz / fl
+        if abs(fz) > 0.999:
+            ux, uy, uz = 0.0, 1.0, 0.0
+        else:
+            ux, uy, uz = 0.0, 0.0, 1.0
+        # right = cross(forward, world_up)
+        rx = fy * uz - fz * uy
+        ry = fz * ux - fx * uz
+        rz = fx * uy - fy * ux
+        rl = math.sqrt(rx * rx + ry * ry + rz * rz)
+        if rl < 1e-30:
+            rx, ry, rz = 0.0, 1.0, 0.0
+        else:
+            rx, ry, rz = rx / rl, ry / rl, rz / rl
+        # up = cross(right, forward)
+        px = ry * fz - rz * fy
+        py = rz * fx - rx * fz
+        pz = rx * fy - ry * fx
+        u = vx * rx + vy * ry + vz * rz
+        v = vx * px + vy * py + vz * pz
+        return u, v
+
+    def _draw_axes_triad(self) -> None:
+        """Cartesian XYZ triad with visible origin (lower-left of Viewport)."""
+        if not hasattr(self, "viewport"):
+            return
+        self.viewport.delete("axes_triad")
+        cw = max(self.viewport.winfo_width(), 2)
+        ch = max(self.viewport.winfo_height(), 2)
+        if cw < 80 or ch < 80:
+            return
+        ox, oy = 36, ch - 36
+        axis_len = 28.0
+        # Soft plate
+        self.viewport.create_rectangle(
+            ox - 18,
+            oy - 34,
+            ox + 38,
+            oy + 18,
+            fill="#fafbfc",
+            outline="#9aa3ab",
+            tags="axes_triad",
+        )
+        self.viewport.create_oval(
+            ox - 3, oy - 3, ox + 3, oy + 3, fill="#1f2a33", outline="#1f2a33", tags="axes_triad"
+        )
+        for (vx, vy, vz), color, label in (
+            ((1.0, 0.0, 0.0), "#c82828", "X"),
+            ((0.0, 1.0, 0.0), "#28a03c", "Y"),
+            ((0.0, 0.0, 1.0), "#2850c8", "Z"),
+        ):
+            su, sv = self._project_axis(vx, vy, vz)
+            norm = math.hypot(su, sv)
+            if norm < 1e-6:
+                self.viewport.create_text(
+                    ox + 8, oy - 12, text=label, fill=color, font=("Helvetica", 9, "bold"), tags="axes_triad"
+                )
+                continue
+            sx = su / norm * axis_len
+            sy = -sv / norm * axis_len  # canvas y down
+            x1 = ox + sx
+            y1 = oy + sy
+            self.viewport.create_line(
+                ox, oy, x1, y1, fill=color, width=2, arrow=tk.LAST, tags="axes_triad"
+            )
+            self.viewport.create_text(
+                x1 + (4 if sx >= 0 else -4),
+                y1 - 8,
+                text=label,
+                fill=color,
+                font=("Helvetica", 9, "bold"),
+                tags="axes_triad",
+            )
+
     def _vector_cli_vars(self) -> list[str]:
         args: list[str] = []
         u = self.vector_u.get().strip()
@@ -2283,22 +2359,19 @@ class FlowplotGui(tk.Tk):
             self.action_redraw()
 
     def action_slices_focus(self) -> None:
-        """Slices derived object — drives the Cut / Track plane controls."""
-        if not self.layer_slices.get():
-            # Checkbox toggled off from derived list.
-            self._log("Slices off")
-            return
+        """Toolbar / menu Slice — enable cut plane and focus Plot controls."""
         self.layer_slices.set(True)
         if self.plane_axis.get() == "auto":
             self.plane_axis.set("k")
         self._schedule_settle(delay_ms=60)
         self._log("Slices on — use Cut / Track plane Index ±")
-        messagebox.showinfo(
-            "Slices",
-            "Slices use the Cut / Track plane controls in the Plot panel.\n"
-            "Pick Axis (i/j/k) and step Index with − / +.",
-            parent=self,
-        )
+        self._set_status("Slices — Cut / Track plane Index ±")
+
+    def _on_slices_checkbox(self) -> None:
+        if not self.layer_slices.get():
+            self._log("Slices off")
+            return
+        self.action_slices_focus()
 
     def action_dataset_info(self) -> None:
         ds = self._require_dataset()
