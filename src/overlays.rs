@@ -220,6 +220,8 @@ mod tests {
             vmin: 0.0,
             vmax: 4.0,
             grid: g.clone(),
+            pan_x: 0.0,
+            pan_y: 0.0,
         };
         overlay_isolines(&mut img, 4, None);
         overlay_boundary_edges(&mut img, &g, None);

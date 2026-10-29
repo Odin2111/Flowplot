@@ -7,10 +7,9 @@ Native **tkinter** shell under `gui/flowplot_gui.py`. The viewport previews PNGs
 | Region | Contents |
 |--------|----------|
 | Top | Menus + **Tecplot-like icon toolbar**: Open / Save(Redraw) / Export PNG · Rotate · ±X/Y/Z · Probe · Slice · ± levels / Abc / Pathlines |
-| Viewport | PNG preview + **XYZ triad** (origin visible, lower-left; follows az/el) |
-| Left | **Plot** panel (scrollable): layers, variable, cut/view, Zone Style / Contour Details, collapsible **Nondim scales ▸**, Log |
-| Center | **Viewport full width** (no right column). CLI raster sized 1:1 to canvas; mesh `--fill`. **Left-drag = pan**, mid/right = orbit, **F = fit** whole domain; **✎ Probe** click; Pathlines = rake drag |
-| Right | *(removed — Nondim moved under Plot)* |
+| Left | **Minimal**: dataset name, Open…, zone list |
+| Center | **Viewport**. CLI raster sized 1:1 to canvas; mesh `--fill`. **Left-drag = pan**, mid/right = orbit — both update view then **settle redraw** (domain pan via `--pan-x/--pan-y`, not bitmap slide/warp); **F = fit**; Probe click; Pathlines rake drag; XYZ triad |
+| Right | **Plot** panel (scrollable): layers, variable, Cut/Track, View XYZ, Zone Style / Contour Details, collapsible **Nondim scales ▸**, Log |
 
 ## Defaults (match Tecplot)
 

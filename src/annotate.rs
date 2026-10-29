@@ -617,6 +617,8 @@ mod tests {
                 y: vec![0.0, 0.0, 1.0, 1.0],
                 values: vec![0.0, 0.5, 0.5, 1.0],
             },
+            pan_x: 0.0,
+            pan_y: 0.0,
         };
         let ds = Dataset {
             title: Some("demo".into()),
@@ -667,6 +669,8 @@ mod tests {
                 y: vec![0.0, 0.0, 1.0, 1.0],
                 values: vec![0.0, 1.0, 1.0, 2.0],
             },
+            pan_x: 0.0,
+            pan_y: 0.0,
         };
         draw_probe_label(&mut img, 40, 40, "P=1.23");
         assert!(img.rgba.iter().any(|&v| v < 50));

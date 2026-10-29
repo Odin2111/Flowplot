@@ -31,6 +31,9 @@ pub struct MeshOptions {
     pub margin: u32,
     /// When true, stretch to fill the raster (no letterbox). GUI viewport uses this.
     pub fill: bool,
+    /// Screen-space domain pan (pixels); positive moves domain right/down.
+    pub pan_x: f64,
+    pub pan_y: f64,
     /// VisIt-like title / time / zone overlay (default on).
     pub annotate: bool,
     pub path_hint: Option<String>,
@@ -52,6 +55,8 @@ impl Default for MeshOptions {
             bg_rgba: [255, 255, 255, 255],
             margin: 8,
             fill: false,
+            pan_x: 0.0,
+            pan_y: 0.0,
             annotate: true,
             path_hint: None,
         }
@@ -73,6 +78,9 @@ pub struct AspectMap {
     pub scale: f64,
     /// Optional independent Y scale for thin-domain fill. `0` ⇒ use `scale`.
     pub y_scale: f64,
+    /// Screen-space pan (pixels); positive moves domain right/down.
+    pub pan_x: f64,
+    pub pan_y: f64,
 }
 
 impl AspectMap {
@@ -114,6 +122,8 @@ impl AspectMap {
             origin_y,
             scale,
             y_scale: 0.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
         }
     }
 
@@ -143,6 +153,8 @@ impl AspectMap {
             origin_y: m,
             scale: avail_w / dx,
             y_scale: avail_h / dy,
+            pan_x: 0.0,
+            pan_y: 0.0,
         }
     }
 
@@ -153,9 +165,9 @@ impl AspectMap {
         } else {
             self.scale
         };
-        let px = self.origin_x + (x - self.xmin) * sx;
+        let px = self.origin_x + (x - self.xmin) * sx + self.pan_x;
         // Image y grows downward; world y grows upward.
-        let py = self.origin_y + (self.ymax - y) * sy;
+        let py = self.origin_y + (self.ymax - y) * sy + self.pan_y;
         (px.round() as i32, py.round() as i32)
     }
 }
@@ -197,7 +209,7 @@ pub fn render_mesh(ds: &Dataset, opts: &MeshOptions) -> Result<ContourImage> {
         return Err(Error::plot("mesh grid is empty"));
     }
     let (xmin, xmax, ymin, ymax) = grid.bounds();
-    let map = if opts.fill {
+    let mut map = if opts.fill {
         AspectMap::fit_fill(
             opts.width,
             opts.height,
@@ -218,6 +230,8 @@ pub fn render_mesh(ds: &Dataset, opts: &MeshOptions) -> Result<ContourImage> {
             opts.margin,
         )
     };
+    map.pan_x = opts.pan_x;
+    map.pan_y = opts.pan_y;
 
     let mut rgba = vec![0u8; (opts.width as usize) * (opts.height as usize) * 4];
     for px in rgba.chunks_exact_mut(4) {
@@ -231,6 +245,8 @@ pub fn render_mesh(ds: &Dataset, opts: &MeshOptions) -> Result<ContourImage> {
         vmin: 0.0,
         vmax: 1.0,
         grid: grid.clone(),
+        pan_x: opts.pan_x,
+        pan_y: opts.pan_y,
     };
 
     draw_mesh_lines(&mut img, &grid, map, opts.line_rgba);
@@ -264,10 +280,12 @@ pub fn overlay_mesh(
 ) {
     let (xmin, xmax, ymin, ymax) = grid.bounds();
     if equal_aspect {
-        let map = AspectMap::fit(img.width, img.height, xmin, xmax, ymin, ymax, margin);
+        let mut map = AspectMap::fit(img.width, img.height, xmin, xmax, ymin, ymax, margin);
+        map.pan_x = img.pan_x;
+        map.pan_y = img.pan_y;
         draw_mesh_lines(img, grid, map, line_rgba);
     } else {
-        // Stretch to fill (legacy contour mapping).
+        // Stretch to fill (legacy contour mapping) — honor ContourImage pan.
         for j in 0..grid.nj {
             for i in 0..grid.ni.saturating_sub(1) {
                 let (x0, y0) = grid.xy(i, j);
@@ -300,8 +318,8 @@ fn stretch_to_pixel(
 ) -> (i32, i32) {
     let u = (x - xmin) / (xmax - xmin).max(1e-30);
     let v = (y - ymin) / (ymax - ymin).max(1e-30);
-    let px = (u * img.width as f64) as i32;
-    let py = ((1.0 - v) * img.height as f64) as i32;
+    let px = (u * img.width as f64 + img.pan_x).round() as i32;
+    let py = ((1.0 - v) * img.height as f64 + img.pan_y).round() as i32;
     (px, py)
 }
 

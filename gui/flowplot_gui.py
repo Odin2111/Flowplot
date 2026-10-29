@@ -354,28 +354,32 @@ class FlowplotGui(tk.Tk):
         body = ttk.Frame(self)
         body.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=4, pady=4)
 
-        # Left Plot sidebar (scrollable). Nondim lives here; no right column.
-        left_wrap = ttk.Frame(body, style="Panel.TFrame", width=252)
+        # Pack side columns first so the Viewport fills the remaining center.
+        left_wrap = ttk.Frame(body, style="Panel.TFrame", width=148)
         left_wrap.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 4))
         left_wrap.pack_propagate(False)
+        self._build_left_minimal(left_wrap)
 
-        left_canvas = tk.Canvas(left_wrap, bg=PANEL, highlightthickness=0, width=236)
-        left_scroll = ttk.Scrollbar(left_wrap, orient=tk.VERTICAL, command=left_canvas.yview)
-        left_canvas.configure(yscrollcommand=left_scroll.set)
-        left_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        left_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        left = ttk.Frame(left_canvas, style="Panel.TFrame")
-        left_win = left_canvas.create_window((0, 0), window=left, anchor="nw")
+        right_wrap = ttk.Frame(body, style="Panel.TFrame", width=252)
+        right_wrap.pack(side=tk.RIGHT, fill=tk.Y, padx=(4, 0))
+        right_wrap.pack_propagate(False)
 
-        def _sync_left(_event: tk.Event | None = None) -> None:
-            left_canvas.configure(scrollregion=left_canvas.bbox("all"))
-            left_canvas.itemconfigure(left_win, width=max(left_canvas.winfo_width(), 220))
+        right_canvas = tk.Canvas(right_wrap, bg=PANEL, highlightthickness=0, width=236)
+        right_scroll = ttk.Scrollbar(right_wrap, orient=tk.VERTICAL, command=right_canvas.yview)
+        right_canvas.configure(yscrollcommand=right_scroll.set)
+        right_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        right_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        right = ttk.Frame(right_canvas, style="Panel.TFrame")
+        right_win = right_canvas.create_window((0, 0), window=right, anchor="nw")
 
-        left.bind("<Configure>", _sync_left)
-        left_canvas.bind("<Configure>", _sync_left)
-        self._build_plot_panel(left)
+        def _sync_right(_event: tk.Event | None = None) -> None:
+            right_canvas.configure(scrollregion=right_canvas.bbox("all"))
+            right_canvas.itemconfigure(right_win, width=max(right_canvas.winfo_width(), 220))
 
-        # Viewport takes the full remaining width.
+        right.bind("<Configure>", _sync_right)
+        right_canvas.bind("<Configure>", _sync_right)
+        self._build_plot_panel(right)
+
         view_wrap = ttk.Frame(body)
         view_wrap.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
@@ -400,12 +404,48 @@ class FlowplotGui(tk.Tk):
         self.viewport.bind("<ButtonRelease-3>", self._on_orbit_release)
         tip = ttk.Label(
             view_wrap,
-            text="Pan: left-drag · Orbit: mid/right-drag · F=fit · Pathlines: rake drag · Probe exclusive",
+            text="Pan: left-drag · Orbit: mid/right-drag · F=fit · settle redraw (no bitmap slide)",
             font=("Helvetica", 8),
             foreground=MUTED,
         )
         tip.pack(anchor="w", pady=(2, 0))
-        self._log("Open a dataset — Contour toolbar always visible; Viewport uses full width.")
+        self._log("Open a dataset — Plot panel on the right; Viewport between left and controls.")
+
+    def _build_left_minimal(self, parent: ttk.Frame) -> None:
+        """Narrow left column: dataset + zone list (Plot controls are on the right)."""
+        ttk.Label(parent, text="Dataset", style="Panel.TLabel", font=("Helvetica", 10, "bold")).pack(
+            anchor="w", padx=8, pady=(10, 4)
+        )
+        self.dataset_label = ttk.Label(
+            parent,
+            text="(none)",
+            style="Muted.TLabel",
+            wraplength=128,
+            justify=tk.LEFT,
+        )
+        self.dataset_label.pack(anchor="w", padx=8, pady=(0, 8))
+        ttk.Button(parent, text="Open…", style="Tool.TButton", command=self.action_load).pack(
+            anchor="w", padx=8, pady=(0, 10)
+        )
+        ttk.Label(parent, text="Zones", style="Muted.TLabel").pack(anchor="w", padx=8)
+        self.zone_list = tk.Listbox(
+            parent,
+            height=12,
+            exportselection=False,
+            bg="#fafbfc",
+            fg=FG,
+            highlightthickness=1,
+            highlightbackground="#b8c0c8",
+            relief=tk.FLAT,
+            font=("Helvetica", 9),
+        )
+        self.zone_list.pack(fill=tk.BOTH, expand=True, padx=8, pady=(2, 8))
+        self.zone_list.bind("<<ListboxSelect>>", self._on_zone_list_select)
+        ttk.Label(
+            parent,
+            text="Plot controls →",
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=8, pady=(0, 10))
 
     def _build_plot_panel(self, parent: ttk.Frame) -> None:
         ttk.Label(parent, text="Plot", style="Panel.TLabel", font=("Helvetica", 11, "bold")).pack(
@@ -548,7 +588,7 @@ class FlowplotGui(tk.Tk):
         self.view_label.pack(anchor="w", pady=(4, 0))
         ttk.Label(
             view_box,
-            text="Left-drag = pan · mid/right = orbit · F = fit. Planar data keeps a tilt.",
+            text="Left-drag = pan · mid/right = orbit · settle redraw · F = fit.",
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(2, 0))
 
@@ -606,7 +646,7 @@ class FlowplotGui(tk.Tk):
         ttk.Label(
             parent,
             text="Mesh first. Contour toolbar = ± / Label / Probe / Details.\n"
-            "Nondim is optional above. Viewport uses full width.",
+            "Viewport sits between Zones (left) and this Plot panel.",
             style="Muted.TLabel",
             justify=tk.LEFT,
         ).pack(anchor="w", padx=12, pady=(0, 12))
@@ -659,11 +699,8 @@ class FlowplotGui(tk.Tk):
         self._schedule_settle(delay_ms=20)
 
     def _on_viewport_configure(self, _event: tk.Event | None = None) -> None:
-        if self._panning:
-            self._pan_preview_live()
-            return
-        if self._dragging and self._settle_image is not None:
-            self._warp_last_frame()
+        # During pan/orbit keep the last PNG; settle redraw applies the new view.
+        if self._panning or self._dragging:
             return
         if self.last_png and self.last_png.is_file():
             self._show_png_preview(self.last_png)
@@ -918,8 +955,6 @@ class FlowplotGui(tk.Tk):
         self.azimuth_deg = (self.azimuth_deg + daz) % 360.0
         self.elevation_deg = self._clamp_elevation(self.elevation_deg + del_)
         self._update_view_label()
-        # Tecplot feel: warp last frame immediately, CLI only after settle.
-        self._warp_last_frame()
         self._render_cache.clear()
         self._schedule_settle(delay_ms=120)
 
@@ -976,12 +1011,12 @@ class FlowplotGui(tk.Tk):
     def _do_settle(self) -> None:
         """Progressive refine: cheap preview first, then full contour fill."""
         self._settle_after = None
-        if self._dragging or self._settle_running:
+        if self._dragging or self._panning or self._settle_running:
             return
         self._settle_running = True
         try:
             self.action_redraw(interactive=True)
-            if self._dragging:
+            if self._dragging or self._panning:
                 return
             # Second tier — full fill (cancelable if user starts dragging again).
             self._fullres_after = self.after(30, self._do_settle_full)
@@ -990,7 +1025,7 @@ class FlowplotGui(tk.Tk):
 
     def _do_settle_full(self) -> None:
         self._fullres_after = None
-        if self._dragging or self._in_redraw:
+        if self._dragging or self._panning or self._in_redraw:
             return
         self.action_redraw(interactive=False)
 
@@ -1034,12 +1069,15 @@ class FlowplotGui(tk.Tk):
         self._on_orbit_release(event)
 
     def _on_pan_press(self, event: tk.Event) -> None:
-        """Begin domain pan — live from press through release."""
+        """Begin domain pan — view offset updates; settle redraw on release."""
         self._pan_last = (event.x, event.y)
         self._panning = True
         self._dragging = False
+        self._cancel_redraw_timers()
+        self._kill_cli()
+        self._render_gen += 1
         self._set_status(
-            f"Panning… pan=({self.view_pan_x:.0f},{self.view_pan_y:.0f}) · F=fit"
+            f"Panning… pan=({self.view_pan_x:.0f},{self.view_pan_y:.0f}) · settle on release"
         )
 
     def _on_pan_drag(self, event: tk.Event) -> None:
@@ -1050,47 +1088,25 @@ class FlowplotGui(tk.Tk):
         self._pan_last = (event.x, event.y)
         self.view_pan_x += float(dx)
         self.view_pan_y += float(dy)
-        self._pan_preview_live()
+        # Keep last PNG in place; domain pan is applied by CLI settle redraw.
         self._set_status(
-            f"Panning… pan=({self.view_pan_x:.0f},{self.view_pan_y:.0f}) · F=fit"
+            f"Panning… pan=({self.view_pan_x:.0f},{self.view_pan_y:.0f}) · settle on release"
         )
 
     def _on_pan_release(self, _event: tk.Event) -> None:
         self._pan_last = None
         self._panning = False
         self._set_status(
-            f"Pan ({self.view_pan_x:.0f},{self.view_pan_y:.0f}) · F=fit whole domain"
+            f"Pan ({self.view_pan_x:.0f},{self.view_pan_y:.0f}) · settling…"
         )
-
-    def _pan_preview_live(self) -> None:
-        """Reposition the preview PhotoImage for active pan (no CLI)."""
-        if self._preview_photo is None:
-            return
-        cw = max(self.viewport.winfo_width(), 2)
-        ch = max(self.viewport.winfo_height(), 2)
-        ox = cw // 2 + int(round(self.view_pan_x))
-        oy = ch // 2 + int(round(self.view_pan_y))
-        items = self.viewport.find_withtag("preview")
-        if items:
-            self.viewport.coords(items[0], ox, oy)
-        else:
-            self.viewport.create_image(ox, oy, image=self._preview_photo, tags="preview")
-        pw, ph = self._preview_size
-        if pw < 1 or ph < 1:
-            try:
-                pw = int(self._preview_photo.width())
-                ph = int(self._preview_photo.height())
-            except Exception:
-                return
-            self._preview_size = (pw, ph)
-        self._preview_offset = (ox - pw // 2, oy - ph // 2)
-        self._draw_probe_overlays()
-        self._draw_axes_triad()
+        self._render_cache.clear()
+        self._schedule_settle(delay_ms=50)
 
     def _preview_center(self) -> tuple[int, int]:
+        """Centered preview — pan is baked into the PNG via --pan-x/--pan-y."""
         cw = max(self.viewport.winfo_width(), 2)
         ch = max(self.viewport.winfo_height(), 2)
-        return cw // 2 + int(round(self.view_pan_x)), ch // 2 + int(round(self.view_pan_y))
+        return cw // 2, ch // 2
 
     def _draw_pathline_rake_preview(self, x0: int, y0: int, x1: int, y1: int) -> None:
         """Draw the rake/seed line while dragging in Pathlines mode."""
@@ -1126,8 +1142,10 @@ class FlowplotGui(tk.Tk):
         self.azimuth_deg = (self.azimuth_deg + dx * 0.4) % 360.0
         self.elevation_deg = self._clamp_elevation(self.elevation_deg - dy * 0.4)
         self._update_view_label()
-        # Tecplot / GPU display-list style: transform last frame — no CLI.
-        self._warp_last_frame()
+        # Keep last PNG; orbit is applied by CLI settle redraw (no bitmap warp).
+        self._set_status(
+            f"Orbiting… az={self.azimuth_deg:.0f}° el={self.elevation_deg:.0f}° · settle on release"
+        )
 
     def _on_orbit_release(self, _event: tk.Event) -> None:
         self._drag_last = None
@@ -1152,66 +1170,6 @@ class FlowplotGui(tk.Tk):
         self._settle_az = float(self.azimuth_deg)
         self._settle_el = float(self.elevation_deg)
         self._settle_plane = self._plane_key()
-
-    def _warp_last_frame(self) -> None:
-        """Cheap screen-space transform of the last settled PNG (no CLI)."""
-        if self._settle_image is None:
-            self._set_status("Rotating… (no settle frame yet)")
-            return
-        try:
-            from PIL import Image, ImageTk
-        except ImportError:
-            return
-
-        daz = self.azimuth_deg - self._settle_az
-        # Shortest-path wrap so a 350° jump does not spin the bitmap the long way.
-        if daz > 180.0:
-            daz -= 360.0
-        elif daz < -180.0:
-            daz += 360.0
-        del_ = self.elevation_deg - self._settle_el
-
-        base = self._settle_image
-        fill = (0xF7, 0xF8, 0xF9, 255)
-        # Rotate in screen space (view azimuth) — display-list feel.
-        warped = base.rotate(-daz, resample=Image.Resampling.BILINEAR, expand=False, fillcolor=fill)
-        # Elevation: foreshorten + light vertical shear (billboard approximation).
-        w, h = warped.size
-        scale_y = max(0.35, abs(math.cos(math.radians(del_ * 0.55))))
-        new_h = max(8, int(round(h * scale_y)))
-        if new_h != h:
-            warped = warped.resize((w, new_h), Image.Resampling.BILINEAR)
-            canvas = Image.new("RGBA", (w, h), fill)
-            canvas.paste(warped, (0, (h - new_h) // 2), warped)
-            warped = canvas
-        shear = math.tan(math.radians(max(-25.0, min(25.0, del_ * 0.35))))
-        if abs(shear) > 1e-3:
-            # AFFINE: x' = x + shear*(y - cy), y' = y
-            cy = h * 0.5
-            warped = warped.transform(
-                (w, h),
-                Image.Transform.AFFINE,
-                (1, shear, -shear * cy, 0, 1, 0),
-                resample=Image.Resampling.BILINEAR,
-                fillcolor=fill,
-            )
-
-        cw = max(self.viewport.winfo_width(), 2)
-        ch = max(self.viewport.winfo_height(), 2)
-        max_w = max(cw - 16, 16)
-        max_h = max(ch - 16, 16)
-        show = warped.copy()
-        show.thumbnail((max_w, max_h), Image.Resampling.BILINEAR)
-        self.viewport.delete("placeholder")
-        self.viewport.delete("preview")
-        self._warp_photo = ImageTk.PhotoImage(show)
-        self._preview_photo = self._warp_photo
-        ox, oy = self._preview_center()
-        self.viewport.create_image(ox, oy, image=self._warp_photo, tags="preview")
-        self._preview_offset = (ox - show.width // 2, oy - show.height // 2)
-        self._preview_size = (show.width, show.height)
-        self._draw_axes_triad()
-        self._set_status(f"Warping az={self.azimuth_deg:.0f}° el={self.elevation_deg:.0f}°")
 
     def _show_png_preview(self, path: Path) -> None:
         """Best-effort PNG preview in the viewport (Pillow optional)."""
@@ -1363,9 +1321,11 @@ class FlowplotGui(tk.Tk):
             )
         except OSError:
             self._log(f"Loaded path: {self.dataset_path}")
-        self._set_status(str(self.dataset_path))
+        self._set_status(f"Opening {chosen.name}…")
+        self._update_dataset_label()
         self.lift()
         self.focus_force()
+        self.update_idletasks()
 
         # Reset layers to Tecplot defaults: Mesh on, Contour off.
         self.layer_mesh.set(True)
@@ -1383,6 +1343,7 @@ class FlowplotGui(tk.Tk):
         self.active_zone = 0
         self.mesh_color = DEFAULT_MESH_COLOR
         self.zone_styles = []
+        self._refresh_zone_list()
         self._cancel_redraw_timers()
         self._kill_cli()
         self._render_cache.clear()
@@ -1434,7 +1395,10 @@ class FlowplotGui(tk.Tk):
             self.zone_ordered = None
             self.zone_styles = []
 
-        self.action_redraw()
+        self._refresh_zone_list()
+        self._set_status(str(self.dataset_path))
+        # Defer first mesh redraw so the Open dialog can fully dismiss first.
+        self.after(1, lambda: self._schedule_settle(delay_ms=10))
 
     def _reset_view_state(self) -> None:
         self.view_mode.set("auto")
@@ -1457,9 +1421,8 @@ class FlowplotGui(tk.Tk):
         ds = self._require_dataset()
         if not ds:
             return
-        # While rotating/cutting, never spawn CLI — warp last frame instead.
-        if self._dragging:
-            self._warp_last_frame()
+        # While orbiting/panning, never spawn CLI — settle redraw runs on release.
+        if self._dragging or self._panning:
             return
         if self.plot_type.get() not in ("2D Cartesian", "3D Cartesian"):
             self._log(f"plot type {self.plot_type.get()} not drawable yet")
@@ -1526,6 +1489,7 @@ class FlowplotGui(tk.Tk):
         contour_args = self._contour_cli_args()
 
         seed_key = ";".join(f"{x:.6g},{y:.6g}" for x, y in self.pathline_seeds[-24:])
+        pan_args = self._pan_cli_args()
         cache_key = "|".join(
             [
                 str(ds),
@@ -1541,6 +1505,7 @@ class FlowplotGui(tk.Tk):
                 f"z={zone_idx}",
                 f"mc={','.join(mesh_color_args)}",
                 f"cd={','.join(contour_args)}",
+                f"pan={','.join(pan_args)}",
                 var,
                 style,
                 *plane,
@@ -1669,6 +1634,7 @@ class FlowplotGui(tk.Tk):
                 *size,
                 *plane,
                 *view,
+                *self._pan_cli_args(),
                 *nondim,
                 *self._contour_cli_args(),
             ]
@@ -1705,9 +1671,20 @@ class FlowplotGui(tk.Tk):
             *size,
             *plane,
             *view,
+            *self._pan_cli_args(),
             *nondim,
         ]
         return self._run_cli(args)
+
+    def _pan_cli_args(self) -> list[str]:
+        """Pass domain pan into the CLI so settle redraw moves the field, not the PNG.
+
+        Use ``--pan-y=-12`` form so negative values are not parsed as flags.
+        """
+        return [
+            f"--pan-x={float(self.view_pan_x):.3f}",
+            f"--pan-y={float(self.view_pan_y):.3f}",
+        ]
 
     def _contour_cli_args(self) -> list[str]:
         cd = self.contour_details
@@ -2441,7 +2418,56 @@ class FlowplotGui(tk.Tk):
         )
         # Sync cut-plane ordered dims for the active zone when available.
         self._sync_ordered_for_zone(active.index)
+        self._refresh_zone_list()
         self.action_redraw()
+
+    def _update_dataset_label(self) -> None:
+        if not hasattr(self, "dataset_label"):
+            return
+        if self.dataset_path is None:
+            self.dataset_label.configure(text="(none)")
+        else:
+            self.dataset_label.configure(text=self.dataset_path.name)
+
+    def _refresh_zone_list(self) -> None:
+        if not hasattr(self, "zone_list"):
+            return
+        self.zone_list.delete(0, tk.END)
+        if not self.zone_styles:
+            if self.dataset_path is not None:
+                self.zone_list.insert(tk.END, "0:(loading…)")
+            return
+        active = self._active_zone_index()
+        sel = 0
+        for i, z in enumerate(self.zone_styles):
+            mark = "● " if z.show_zone else "○ "
+            self.zone_list.insert(tk.END, f"{mark}{z.index}:{z.name}")
+            if z.index == active:
+                sel = i
+        self.zone_list.selection_clear(0, tk.END)
+        if self.zone_styles:
+            self.zone_list.selection_set(sel)
+            self.zone_list.see(sel)
+
+    def _on_zone_list_select(self, _event: tk.Event | None = None) -> None:
+        if not hasattr(self, "zone_list") or not self.zone_styles:
+            return
+        sel = self.zone_list.curselection()
+        if not sel:
+            return
+        idx = int(sel[0])
+        if idx < 0 or idx >= len(self.zone_styles):
+            return
+        z = self.zone_styles[idx]
+        if self.active_zone == z.index:
+            return
+        self.active_zone = z.index
+        for style in self.zone_styles:
+            style.show_zone = style.index == z.index
+        self._sync_ordered_for_zone(z.index)
+        self._refresh_zone_list()
+        self._log(f"Active zone → {z.index}:{z.name}")
+        self._schedule_settle(delay_ms=40)
 
     def _active_zone_index(self) -> int:
         if self.zone_styles:

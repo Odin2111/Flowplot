@@ -97,7 +97,7 @@ class OpenDatasetDialog(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self._cancel)
         self.bind("<Escape>", lambda _e: self._cancel())
         self.bind("<Return>", lambda _e: self._ok())
-        self.after(10, self._refresh)
+        self.after(1, self._refresh)
 
     def _build(self) -> None:
         hdr = tk.Frame(self, bg=HEADER_BG)

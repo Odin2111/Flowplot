@@ -199,6 +199,9 @@ pub struct ContourOptions {
     pub legend_align: crate::annotate::LegendAlign,
     /// Pixel margin around the filled plot (tight → no letterbox waste).
     pub margin: u32,
+    /// Screen-space domain pan (pixels): positive moves domain right/down.
+    pub pan_x: f64,
+    pub pan_y: f64,
 }
 
 impl Default for ContourOptions {
@@ -223,6 +226,8 @@ impl Default for ContourOptions {
             legend_font_px: 0.0,
             legend_align: crate::annotate::LegendAlign::Right,
             margin: 2,
+            pan_x: 0.0,
+            pan_y: 0.0,
         }
     }
 }
@@ -237,6 +242,9 @@ pub struct ContourImage {
     pub vmin: f64,
     pub vmax: f64,
     pub grid: Grid2D,
+    /// Domain pan in pixels (must match render options).
+    pub pan_x: f64,
+    pub pan_y: f64,
 }
 
 /// Thin API: build a contour image for `opts.variable`.
@@ -286,6 +294,8 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
         opts.height,
         plot_w,
         opts.margin,
+        opts.pan_x,
+        opts.pan_y,
         xmin,
         xmax,
         ymin,
@@ -306,6 +316,8 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
         vmin,
         vmax,
         grid,
+        pan_x: opts.pan_x,
+        pan_y: opts.pan_y,
     };
     if opts.style.draw_frame() {
         draw_frame(&mut img, opts.style.frame_rgba(), opts.style.frame_thickness());
@@ -398,6 +410,8 @@ fn rasterize_cells(
     height: u32,
     plot_w: u32,
     margin: u32,
+    pan_x: f64,
+    pan_y: f64,
     xmin: f64,
     xmax: f64,
     ymin: f64,
@@ -422,8 +436,8 @@ fn rasterize_cells(
     let sx = avail_w / dx;
     let sy = avail_h / dy;
     let to_px = |x: f64, y: f64| -> (f64, f64) {
-        let px = m + (x - xmin) * sx;
-        let py = m + (ymax - y) * sy;
+        let px = m + (x - xmin) * sx + pan_x;
+        let py = m + (ymax - y) * sy + pan_y;
         (px, py)
     };
     let span = (vmax - vmin).abs().max(1e-30);
@@ -635,8 +649,8 @@ pub fn world_to_pixel_plot(
     let m = margin as f64;
     let avail_w = (plot_w as f64 - 2.0 * m).max(1.0);
     let avail_h = (img.height as f64 - 2.0 * m).max(1.0);
-    let px = m + (x - xmin) / dx * avail_w;
-    let py = m + (ymax - y) / dy * avail_h;
+    let px = m + (x - xmin) / dx * avail_w + img.pan_x;
+    let py = m + (ymax - y) / dy * avail_h + img.pan_y;
     (px.round() as i32, py.round() as i32)
 }
 
@@ -654,8 +668,8 @@ pub fn pixel_to_world(
     let m = margin as f64;
     let avail_w = (plot_w as f64 - 2.0 * m).max(1.0);
     let avail_h = (img.height as f64 - 2.0 * m).max(1.0);
-    let x = xmin + (px as f64 - m) / avail_w * dx;
-    let y = ymax - (py as f64 - m) / avail_h * dy;
+    let x = xmin + (px as f64 - m - img.pan_x) / avail_w * dx;
+    let y = ymax - (py as f64 - m - img.pan_y) / avail_h * dy;
     (x, y)
 }
 

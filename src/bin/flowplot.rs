@@ -89,6 +89,12 @@ enum Commands {
         /// Pixel margin around the fitted domain.
         #[arg(long, default_value_t = 8)]
         margin: u32,
+        /// Screen-space domain pan X (pixels; positive → domain right).
+        #[arg(long = "pan-x", default_value_t = 0.0)]
+        pan_x: f64,
+        /// Screen-space domain pan Y (pixels; positive → domain down).
+        #[arg(long = "pan-y", default_value_t = 0.0)]
+        pan_y: f64,
         #[command(flatten)]
         nondim: NondimArgs,
     },
@@ -166,6 +172,12 @@ enum Commands {
         /// Pixel margin around the filled plot area.
         #[arg(long, default_value_t = 4)]
         margin: u32,
+        /// Screen-space domain pan X (pixels; positive → domain right).
+        #[arg(long = "pan-x", default_value_t = 0.0)]
+        pan_x: f64,
+        /// Screen-space domain pan Y (pixels; positive → domain down).
+        #[arg(long = "pan-y", default_value_t = 0.0)]
+        pan_y: f64,
         /// Overlay velocity vectors (needs --u-var/--v-var or auto-guess).
         #[arg(long, default_value_t = false)]
         vectors: bool,
@@ -424,6 +436,8 @@ fn dispatch(
             mesh_color,
             fill,
             margin,
+            pan_x,
+            pan_y,
             nondim,
         }) => run_mesh(
             &path,
@@ -437,6 +451,8 @@ fn dispatch(
             mesh_color.as_deref(),
             fill,
             margin,
+            pan_x,
+            pan_y,
             &nondim,
             json,
         ),
@@ -467,6 +483,8 @@ fn dispatch(
             legend_font,
             legend_align,
             margin,
+            pan_x,
+            pan_y,
             vectors,
             edges,
             scatter,
@@ -498,6 +516,8 @@ fn dispatch(
             legend_font,
             parse_legend_align(&legend_align),
             margin,
+            pan_x,
+            pan_y,
             vectors,
             edges,
             scatter,
@@ -1185,6 +1205,8 @@ fn run_mesh(
     mesh_color: Option<&str>,
     fill: bool,
     margin: u32,
+    pan_x: f64,
+    pan_y: f64,
     nondim: &NondimArgs,
     json: bool,
 ) -> flowplot::Result<()> {
@@ -1218,6 +1240,8 @@ fn run_mesh(
             line_rgba,
             fill,
             margin,
+            pan_x,
+            pan_y,
             path_hint: Some(path.display().to_string()),
             ..Default::default()
         },
@@ -1289,6 +1313,8 @@ fn run_contour(
     legend_font_px: f32,
     legend_align: LegendAlign,
     margin: u32,
+    pan_x: f64,
+    pan_y: f64,
     do_vectors: bool,
     do_edges: bool,
     do_scatter: bool,
@@ -1328,6 +1354,8 @@ fn run_contour(
             legend_font_px,
             legend_align,
             margin,
+            pan_x,
+            pan_y,
         },
     )?;
 
@@ -1504,6 +1532,8 @@ fn run_probe(
             vmin: 0.0,
             vmax: 1.0,
             grid: map_grid.clone(),
+            pan_x: 0.0,
+            pan_y: 0.0,
         };
         let (wx, wy) = pixel_to_world(&img, px, py, plot_w, margin);
         (wx, wy, px, py)
@@ -1515,6 +1545,8 @@ fn run_probe(
             vmin: 0.0,
             vmax: 1.0,
             grid: map_grid.clone(),
+            pan_x: 0.0,
+            pan_y: 0.0,
         };
         let (px, py) = flowplot::world_to_pixel_plot(&img, wx, wy, plot_w, margin);
         (wx, wy, px, py)
