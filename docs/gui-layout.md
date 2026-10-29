@@ -1,6 +1,6 @@
 # Flowplot GUI layout (Tecplot-like Plot panel)
 
-Native **tkinter** shell under `gui/flowplot_gui.py`. The viewport previews PNGs from the `flowplot` CLI (Pillow optional). **File → Open** loads the dataset and draws the **Mesh** layer first (wireframe crate, equal aspect). Contour is an optional layer.
+Native **tkinter** shell under `gui/flowplot_gui.py`. The viewport previews PNGs from the `flowplot` CLI (Pillow optional). **File → Open** uses a details list (**Name | Size | Modified**, newest first) so competing `.plt` files are easy to pick, then draws the **Mesh** layer first. Contour is an optional layer.
 
 ## Layout
 
