@@ -65,16 +65,31 @@ PLOT_TYPES = (
 
 
 def find_flowplot_bin() -> str | None:
-    """Prefer PATH, then cargo debug/release next to this repo."""
+    """Locate the flowplot CLI.
+
+    Prefer ``FLOWPLOT_BIN`` / ``FIELDPLOT_BIN``, else the newest of PATH /
+    ``target/release`` / ``target/debug``. Picking stale ``debug`` first used to
+    reject new flags (e.g. ``--pan-x``) and dump clap's ``--help`` tip into Log.
+    """
+    for key in ("FLOWPLOT_BIN", "FIELDPLOT_BIN"):
+        env = os.environ.get(key, "").strip()
+        if env:
+            p = Path(env).expanduser()
+            if p.is_file() and os.access(p, os.X_OK):
+                return str(p.resolve())
+    candidates: list[Path] = []
     found = shutil.which("flowplot")
     if found:
-        return found
-    repo = ROOT.parent
-    for rel in ("target/debug/flowplot", "target/release/flowplot"):
+        candidates.append(Path(found))
+    repo = ROOT.parent  # gui/ → Flowplot/
+    for rel in ("target/release/flowplot", "target/debug/flowplot"):
         cand = repo / rel
         if cand.is_file() and os.access(cand, os.X_OK):
-            return str(cand)
-    return None
+            candidates.append(cand)
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda p: p.stat().st_mtime)
+    return str(best.resolve())
 
 
 def first_scalar(variables: list[str]) -> str:
@@ -375,10 +390,25 @@ class FlowplotGui(tk.Tk):
         left_canvas.bind("<Configure>", _sync_left)
         self._build_left_plot_panel(left)
 
-        right_wrap = ttk.Frame(body, style="Panel.TFrame", width=200)
+        right_wrap = ttk.Frame(body, style="Panel.TFrame", width=240)
         right_wrap.pack(side=tk.RIGHT, fill=tk.Y, padx=(4, 0))
         right_wrap.pack_propagate(False)
-        self._build_right_view_panel(right_wrap)
+
+        right_canvas = tk.Canvas(right_wrap, bg=PANEL, highlightthickness=0, width=224)
+        right_scroll = ttk.Scrollbar(right_wrap, orient=tk.VERTICAL, command=right_canvas.yview)
+        right_canvas.configure(yscrollcommand=right_scroll.set)
+        right_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        right_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        right = ttk.Frame(right_canvas, style="Panel.TFrame")
+        right_win = right_canvas.create_window((0, 0), window=right, anchor="nw")
+
+        def _sync_right(_event: tk.Event | None = None) -> None:
+            right_canvas.configure(scrollregion=right_canvas.bbox("all"))
+            right_canvas.itemconfigure(right_win, width=max(right_canvas.winfo_width(), 210))
+
+        right.bind("<Configure>", _sync_right)
+        right_canvas.bind("<Configure>", _sync_right)
+        self._build_right_view_panel(right)
 
         view_wrap = ttk.Frame(body)
         view_wrap.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -409,7 +439,9 @@ class FlowplotGui(tk.Tk):
             foreground=MUTED,
         )
         tip.pack(anchor="w", pady=(2, 0))
-        self._log("Open a dataset — Plot layers left · Viewport center · View XYZ right.")
+        bin_note = self.flowplot or "(missing — run cargo build)"
+        self._log(f"CLI: {bin_note}")
+        self._log("Open a dataset — Plot left · Viewport center · View/Nondim/Log right.")
 
     def _build_left_plot_panel(self, parent: ttk.Frame) -> None:
         """Left: dataset/zones + plot type, layers, derived objects, cut/track."""
@@ -557,48 +589,8 @@ class FlowplotGui(tk.Tk):
             padx=12, pady=(4, 8), anchor="w"
         )
 
-        self.nondim_expanded = tk.BooleanVar(value=True)
-        self._nondim_hdr = ttk.Frame(parent, style="Panel.TFrame")
-        self._nondim_hdr.pack(fill=tk.X, padx=10, pady=(4, 0))
-        ttk.Checkbutton(
-            self._nondim_hdr,
-            text="Nondim scales ▾",
-            variable=self.nondim_expanded,
-            command=self._toggle_nondim_panel,
-        ).pack(side=tk.LEFT)
-        self.nondim_body = ttk.LabelFrame(parent, text="U_ref / Lx / Ly / Lz / T_ref", padding=(8, 4))
-        form = ttk.Frame(self.nondim_body, style="Panel.TFrame")
-        form.pack(fill=tk.X)
-        for key, var in self.scale_vars.items():
-            row = ttk.Frame(form, style="Panel.TFrame")
-            row.pack(fill=tk.X, pady=2)
-            ttk.Label(row, text=key, width=7, style="Panel.TLabel").pack(side=tk.LEFT)
-            ttk.Entry(row, textvariable=var, width=12, style="Scale.TEntry").pack(
-                side=tk.LEFT, fill=tk.X, expand=True
-            )
-        ttk.Button(
-            self.nondim_body, text="Apply nondim", style="Tool.TButton", command=self.action_nondim
-        ).pack(pady=(4, 2), anchor="w")
-        self.nondim_body.pack(fill=tk.X, padx=10, pady=(2, 4), after=self._nondim_hdr)
-
-        self._log_label = ttk.Label(parent, text="Log", style="Muted.TLabel")
-        self._log_label.pack(anchor="w", padx=12, pady=(8, 0))
-        self.log = tk.Text(
-            parent,
-            height=8,
-            width=26,
-            bg="#fafbfc",
-            fg=FG,
-            relief=tk.FLAT,
-            highlightthickness=1,
-            highlightbackground="#b8c0c8",
-            font=("DejaVu Sans Mono", 8),
-            wrap=tk.WORD,
-        )
-        self.log.pack(fill=tk.BOTH, expand=True, padx=10, pady=(2, 10))
-
     def _build_right_view_panel(self, parent: ttk.Frame) -> None:
-        """Right: View XYZ, rotate/zoom nudges, fit."""
+        """Right: View XYZ, rotate/fit, Nondim scales, Log."""
         ttk.Label(parent, text="View", style="Panel.TLabel", font=("Helvetica", 11, "bold")).pack(
             anchor="w", padx=10, pady=(12, 6)
         )
@@ -644,7 +636,47 @@ class FlowplotGui(tk.Tk):
             text="Left-drag = pan\nMid/right = orbit\nSettle redraw · F = fit",
             style="Muted.TLabel",
             justify=tk.LEFT,
-        ).pack(anchor="w", padx=10, pady=(4, 10))
+        ).pack(anchor="w", padx=10, pady=(4, 8))
+
+        self.nondim_expanded = tk.BooleanVar(value=True)
+        self._nondim_hdr = ttk.Frame(parent, style="Panel.TFrame")
+        self._nondim_hdr.pack(fill=tk.X, padx=8, pady=(4, 0))
+        ttk.Checkbutton(
+            self._nondim_hdr,
+            text="Nondim scales ▾",
+            variable=self.nondim_expanded,
+            command=self._toggle_nondim_panel,
+        ).pack(side=tk.LEFT)
+        self.nondim_body = ttk.LabelFrame(parent, text="U_ref / Lx / Ly / Lz / T_ref", padding=(8, 4))
+        form = ttk.Frame(self.nondim_body, style="Panel.TFrame")
+        form.pack(fill=tk.X)
+        for key, var in self.scale_vars.items():
+            row = ttk.Frame(form, style="Panel.TFrame")
+            row.pack(fill=tk.X, pady=2)
+            ttk.Label(row, text=key, width=7, style="Panel.TLabel").pack(side=tk.LEFT)
+            ttk.Entry(row, textvariable=var, width=10, style="Scale.TEntry").pack(
+                side=tk.LEFT, fill=tk.X, expand=True
+            )
+        ttk.Button(
+            self.nondim_body, text="Apply nondim", style="Tool.TButton", command=self.action_nondim
+        ).pack(pady=(4, 2), anchor="w")
+        self.nondim_body.pack(fill=tk.X, padx=8, pady=(2, 4), after=self._nondim_hdr)
+
+        self._log_label = ttk.Label(parent, text="Log", style="Muted.TLabel")
+        self._log_label.pack(anchor="w", padx=10, pady=(8, 0))
+        self.log = tk.Text(
+            parent,
+            height=10,
+            width=24,
+            bg="#fafbfc",
+            fg=FG,
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground="#b8c0c8",
+            font=("DejaVu Sans Mono", 8),
+            wrap=tk.WORD,
+        )
+        self.log.pack(fill=tk.BOTH, expand=True, padx=8, pady=(2, 10))
 
     def _toggle_nondim_panel(self) -> None:
         for child in self._nondim_hdr.winfo_children():
@@ -653,7 +685,7 @@ class FlowplotGui(tk.Tk):
                     text=("Nondim scales ▾" if self.nondim_expanded.get() else "Nondim scales ▸")
                 )
         if self.nondim_expanded.get():
-            self.nondim_body.pack(fill=tk.X, padx=10, pady=(2, 4), after=self._nondim_hdr)
+            self.nondim_body.pack(fill=tk.X, padx=8, pady=(2, 4), after=self._nondim_hdr)
         else:
             self.nondim_body.pack_forget()
 

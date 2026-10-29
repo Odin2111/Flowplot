@@ -7,11 +7,13 @@ Native **tkinter** shell under `gui/flowplot_gui.py`. The viewport previews PNGs
 | Region | Contents |
 |--------|----------|
 | Top | Menus + **Tecplot-like icon toolbar**: Open / Save(Redraw) / Export PNG · Rotate · ±X/Y/Z · Probe · Slice · ± levels / Abc / Pathlines |
-| Left | **Plot** (scrollable): dataset/zones, plot type, zone layers, derived objects, contour var, Cut/Track, Zone Style / Contour Details, Nondim, Log |
+| Left | **Plot** (scrollable): dataset/zones, plot type, zone layers, derived objects, contour var, Cut/Track, Zone Style / Contour Details |
 | Center | **Viewport**. CLI raster sized 1:1; mesh `--fill`. **Left-drag = pan**, mid/right = orbit → **settle redraw** (`--pan-x/--pan-y`); **F = fit**; Probe; Pathlines rake; XYZ triad |
-| Right | **View**: XYZ snaps, rotate/zoom nudges, Fit whole domain |
+| Right | **View** (scrollable): XYZ snaps, rotate/zoom, Fit · **Nondim scales** · **Log** |
 
 Missing contour/iso variables never raise a blocking modal — Fieldplot auto-picks the first scalar or quietly disables Contour/Iso and falls back to Mesh.
+
+CLI discovery picks the newest of PATH / `target/release` / `target/debug` (override with `FLOWPLOT_BIN`). A stale debug binary that lacked `--pan-x` used to dump clap `--help` into Log and break Open redraw.
 
 ## Defaults (match Tecplot)
 
