@@ -10,7 +10,7 @@ use crate::contour::{
 use crate::dataset::Dataset;
 use crate::error::{Error, Result};
 use crate::field::{
-    extract_scalar_grid_view, find_var, guess_coord_vars, Grid2D, PlaneSpec,
+    extract_scalar_grid_view, find_var, guess_coord_vars, resolve_view, Grid2D, PlaneSpec,
 };
 use crate::view::ViewSpec;
 
@@ -255,11 +255,12 @@ pub fn render_mesh(ds: &Dataset, opts: &MeshOptions) -> Result<ContourImage> {
         draw_frame(&mut img, opts.style.frame_rgba(), opts.style.frame_thickness());
     }
     if opts.annotate {
+        let camera = resolve_view(ds, opts.zone, opts.plane, opts.view).unwrap_or(opts.view);
         let mut info =
             AnnotationInfo::from_dataset(ds, opts.zone, None, opts.path_hint.as_deref());
         info.colorbar = false;
-        info.view = Some(opts.view.label());
-        info.view_orient = opts.view;
+        info.view = Some(camera.label());
+        info.view_orient = camera;
         info.plane = Some(match opts.plane {
             PlaneSpec::Auto => "auto".into(),
             PlaneSpec::Index { axis, index } => format!("{axis}={index}"),

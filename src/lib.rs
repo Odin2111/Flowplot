@@ -57,14 +57,17 @@ pub use dataset::{
 };
 pub use error::{Error, Result};
 pub use field::{
-    dataset_is_effectively_2d, extract_scalar_grid_view, pick_plot_coord_indices, PlaneSpec,
+    dataset_is_effectively_2d, extract_scalar_grid_view, pick_plot_coord_indices, resolve_view,
+    suggest_default_view, PlaneSpec,
 };
 pub use menu::{format_item_text, format_menu_text, format_stub_run, PostprocessMenu};
 pub use mesh::{
     extract_mesh_grid, extract_mesh_grid_view, overlay_mesh, render_mesh, write_mesh_png,
     AspectMap, MeshOptions, DEFAULT_MESH_RGBA,
 };
-pub use view::{LookAxis, ViewSpec};
+pub use view::{
+    clamp_planar_elevation, principal_plane_from_angles, LookAxis, PrincipalPlane, ViewSpec,
+};
 pub use nondim::{
     apply_nondim, format_suggestions, suggest_scales, NondimScales, NondimSuggestion, ScaleKind,
 };

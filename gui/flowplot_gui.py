@@ -164,20 +164,22 @@ class FlowplotGui(tk.Tk):
         self.view_mode = tk.StringVar(value="auto")  # auto|+x|-x|+y|-y|+z|-z|free
         self.azimuth_deg = 0.0
         self.elevation_deg = 90.0
+        # Principal world plane for face-on camera / edge-on clamps (xy|xz|yz).
+        self.principal_plane = "xy"
         self._drag_last: tuple[int, int] | None = None
         self._dragging = False
         self._redraw_after: str | None = None
         self._fullres_after: str | None = None
         self._settle_after: str | None = None
+        self._orbit_preview_after: str | None = None
         self._cli_proc: subprocess.Popen[str] | None = None
         self._render_cache: dict[str, Path] = {}
         self._render_gen = 0
-        # Tecplot-like display-list: last settled frame + angles for cheap drag warp.
+        # Last settled frame metadata (geometry redraw on settle — no PNG warp).
         self._settle_image = None  # PIL.Image.Image | None
         self._settle_az = 0.0
         self._settle_el = 90.0
         self._settle_plane: tuple[str, int] | None = None
-        self._warp_photo = None
         self._in_redraw = False
         self._settle_running = False
 
@@ -434,7 +436,7 @@ class FlowplotGui(tk.Tk):
         self.viewport.bind("<ButtonRelease-3>", self._on_orbit_release)
         tip = ttk.Label(
             view_wrap,
-            text="Pan: left-drag · Orbit: mid/right-drag · F=fit · settle redraw (no bitmap slide)",
+            text="Pan: left-drag · Orbit: mid/right-drag (live mesh camera) · F=fit · settle redraw",
             font=("Helvetica", 8),
             foreground=MUTED,
         )
@@ -717,9 +719,7 @@ class FlowplotGui(tk.Tk):
         if self.tool_mode.get() not in ("orbit",):
             # Keep Probe/Pathlines mode; only recenter the frame.
             pass
-        self.view_mode.set("auto")
-        self.azimuth_deg = 0.0
-        self.elevation_deg = 90.0
+        self._apply_default_camera()
         self._update_view_label()
         self._render_cache.clear()
         self._log("Fit — whole domain (F)")
@@ -891,35 +891,34 @@ class FlowplotGui(tk.Tk):
         return ["--plane", f"{axis}={idx}"]
 
     def _view_cli_arg(self) -> list[str]:
-        mode = self.view_mode.get().strip().lower()
-        if mode in ("", "auto"):
-            return []
-        # Prefer free az/el whenever we have been rotating — matches drag handoff.
-        if mode == "free" or self.plot_type.get() == "3D Cartesian":
-            el = self._clamp_elevation(self.elevation_deg)
-            return ["--view", f"az={self.azimuth_deg:.2f},el={el:.2f}"]
-        return ["--view", mode]
+        # Always emit a concrete camera so mesh geometry rotates with az/el.
+        # (Silent Auto was the jet_cyl meridian bug: Auto=XZ, Free default=+Z/XY.)
+        el = self._clamp_elevation(self.elevation_deg)
+        return ["--view", f"az={self.azimuth_deg:.2f},el={el:.2f}"]
 
     def _clamp_elevation(self, el: float) -> float:
-        """Keep planar (effectively 2D) surfaces readable — never true edge-on."""
+        """Keep planar surfaces readable — never true edge-on for the principal plane."""
         el = max(-90.0, min(90.0, el))
         if not self.effectively_2d:
             return el
-        # IJ / unit-thickness data has no Z thickness; el≈0 collapses the plot to a line.
-        min_el = 18.0
-        if abs(el) < min_el:
-            return min_el if el >= 0.0 else -min_el
+        min_tilt = 18.0
+        plane = (self.principal_plane or "xy").lower()
+        if plane == "xy":
+            # XY face-on is |el|≈90; el≈0 is edge-on.
+            if abs(el) < min_tilt:
+                return min_tilt if el >= 0.0 else -min_tilt
+            return el
+        # XZ / YZ (meridian): face-on is el≈0; poles are edge-on.
+        max_el = 90.0 - min_tilt
+        if el > max_el:
+            return max_el
+        if el < -max_el:
+            return -max_el
         return el
 
     def _update_view_label(self) -> None:
-        mode = self.view_mode.get()
         el = self._clamp_elevation(self.elevation_deg)
-        if mode == "free" or self.plot_type.get() == "3D Cartesian":
-            text = f"view: az={self.azimuth_deg:.0f}° el={el:.0f}°"
-            if self.effectively_2d and abs(self.elevation_deg) < 18.0:
-                text += " (tilted)"
-        else:
-            text = f"view: {mode}"
+        text = f"view: az={self.azimuth_deg:.0f}° el={el:.0f}° ({self.principal_plane})"
         if hasattr(self, "view_label"):
             self.view_label.configure(text=text)
         self._draw_axes_triad()
@@ -929,44 +928,63 @@ class FlowplotGui(tk.Tk):
         # Leave Probe/Pathlines so left-drag can orbit after an XYZ snap.
         if self.tool_mode.get() != "orbit":
             self._set_tool_mode("orbit")
-        # True orthographic faces (volume) vs tilted free views (planar surface).
+        # Free angles matched to Axis projections (see ViewSpec::to_free_angles).
         ortho = {
-            "+x": (0.0, 0.0),
-            "-x": (180.0, 0.0),
-            "+y": (90.0, 0.0),
-            "-y": (-90.0, 0.0),
+            "+x": (180.0, 0.0),
+            "-x": (0.0, 0.0),
+            "+y": (-90.0, 0.0),
+            "-y": (90.0, 0.0),
             "+z": (0.0, 90.0),
             "-z": (180.0, -90.0),
         }
-        # Planar IJ data: ±X/±Y edge-on is unreadable — use a mild 3D tilt instead.
-        planar_tilt = {
-            "+x": (0.0, 28.0),
-            "-x": (180.0, 28.0),
-            "+y": (90.0, 28.0),
-            "-y": (-90.0, 28.0),
-            "+z": (0.0, 90.0),
-            "-z": (180.0, -90.0),
-        }
+        plane = (self.principal_plane or "xy").lower()
+        # Planar: avoid true edge-on for the active principal plane.
+        if plane == "xy":
+            planar_tilt = {
+                "+x": (180.0, 28.0),
+                "-x": (0.0, 28.0),
+                "+y": (-90.0, 28.0),
+                "-y": (90.0, 28.0),
+                "+z": (0.0, 90.0),
+                "-z": (180.0, -90.0),
+            }
+        elif plane == "xz":
+            planar_tilt = {
+                "+x": (180.0, 28.0),
+                "-x": (0.0, 28.0),
+                "+y": (-90.0, 0.0),
+                "-y": (90.0, 0.0),
+                "+z": (-90.0, 28.0),
+                "-z": (-90.0, -28.0),
+            }
+        else:  # yz
+            planar_tilt = {
+                "+x": (180.0, 0.0),
+                "-x": (0.0, 0.0),
+                "+y": (-90.0, 28.0),
+                "-y": (90.0, 28.0),
+                "+z": (180.0, 28.0),
+                "-z": (180.0, -28.0),
+            }
+        self.view_mode.set("free")
         if self.effectively_2d:
-            self.view_mode.set("free")
-            self.azimuth_deg, self.elevation_deg = planar_tilt.get(tag, (0.0, 90.0))
+            self.azimuth_deg, self.elevation_deg = planar_tilt.get(tag, ortho.get(tag, (0.0, 90.0)))
             self.elevation_deg = self._clamp_elevation(self.elevation_deg)
-            self._log(f"View {tag} → free az={self.azimuth_deg:.0f} el={self.elevation_deg:.0f} (planar tilt)")
+            self._log(
+                f"View {tag} → az={self.azimuth_deg:.0f} el={self.elevation_deg:.0f} "
+                f"(plane {plane})"
+            )
         else:
-            self.view_mode.set(tag)
             self.azimuth_deg, self.elevation_deg = ortho.get(tag, (0.0, 90.0))
-            self._log(f"View {tag}")
+            self._log(f"View {tag} → az={self.azimuth_deg:.0f} el={self.elevation_deg:.0f}")
         self._update_view_label()
-        # Axis snaps need a real redraw (warp alone cannot invent a new face).
         self._render_cache.clear()
         self._schedule_settle(delay_ms=20)
 
     def _reset_view(self) -> None:
         if self.tool_mode.get() != "orbit":
             self._set_tool_mode("orbit")
-        self.view_mode.set("auto")
-        self.azimuth_deg = 0.0
-        self.elevation_deg = 90.0
+        self._apply_default_camera()
         self.view_pan_x = 0.0
         self.view_pan_y = 0.0
         self._pan_last = None
@@ -974,6 +992,34 @@ class FlowplotGui(tk.Tk):
         self._update_view_label()
         self._render_cache.clear()
         self._schedule_settle(delay_ms=20)
+
+    def _apply_default_camera(self, payload: dict | None = None) -> None:
+        """Face-on camera for the dataset principal plane (from info JSON when present)."""
+        dv = (payload or {}).get("default_view") if isinstance(payload, dict) else None
+        if isinstance(dv, dict):
+            try:
+                self.azimuth_deg = float(dv.get("az", self.azimuth_deg))
+                self.elevation_deg = float(dv.get("el", self.elevation_deg))
+            except (TypeError, ValueError):
+                pass
+            plane = str(dv.get("plane") or "").lower()
+            if plane in ("xy", "xz", "yz"):
+                self.principal_plane = plane
+            label = dv.get("label")
+            if label:
+                self._log(f"default camera {label} (plane {self.principal_plane})")
+        else:
+            # Fallback from principal_plane alone.
+            face = {
+                "xy": (0.0, 90.0),
+                "xz": (-90.0, 0.0),
+                "yz": (180.0, 0.0),
+            }
+            self.azimuth_deg, self.elevation_deg = face.get(
+                self.principal_plane, (0.0, 90.0)
+            )
+        self.view_mode.set("free")
+        self.elevation_deg = self._clamp_elevation(self.elevation_deg)
 
     def _nudge_view(self, daz: float, del_: float) -> None:
         if self.tool_mode.get() != "orbit":
@@ -1019,7 +1065,7 @@ class FlowplotGui(tk.Tk):
         return max(0, n - 1)
 
     def _cancel_redraw_timers(self) -> None:
-        for attr in ("_redraw_after", "_fullres_after", "_settle_after"):
+        for attr in ("_redraw_after", "_fullres_after", "_settle_after", "_orbit_preview_after"):
             handle = getattr(self, attr, None)
             if handle is not None:
                 try:
@@ -1169,16 +1215,38 @@ class FlowplotGui(tk.Tk):
         self.azimuth_deg = (self.azimuth_deg + dx * 0.4) % 360.0
         self.elevation_deg = self._clamp_elevation(self.elevation_deg - dy * 0.4)
         self._update_view_label()
-        # Keep last PNG; orbit is applied by CLI settle redraw (no bitmap warp).
+        # Live mesh geometry orbit (throttled CLI) — never slide/warp the last PNG.
         self._set_status(
-            f"Orbiting… az={self.azimuth_deg:.0f}° el={self.elevation_deg:.0f}° · settle on release"
+            f"Orbiting… az={self.azimuth_deg:.0f}° el={self.elevation_deg:.0f}° · mesh camera"
         )
+        self._schedule_orbit_preview()
+
+    def _schedule_orbit_preview(self) -> None:
+        """Throttle mesh-only camera redraws while the mouse is moving."""
+        if self._orbit_preview_after is not None:
+            return
+        self._orbit_preview_after = self.after(70, self._do_orbit_preview)
+
+    def _do_orbit_preview(self) -> None:
+        self._orbit_preview_after = None
+        if not self._dragging or self._panning:
+            return
+        # Mesh-only, allow during drag — shows domain rotating with az/el.
+        self.action_redraw(interactive=True, allow_during_drag=True, mesh_only=True)
+        if self._dragging and not self._panning:
+            self._orbit_preview_after = self.after(110, self._do_orbit_preview)
 
     def _on_orbit_release(self, _event: tk.Event) -> None:
         self._drag_last = None
         self._dragging = False
+        if self._orbit_preview_after is not None:
+            try:
+                self.after_cancel(self._orbit_preview_after)
+            except tk.TclError:
+                pass
+            self._orbit_preview_after = None
         self._render_cache.clear()
-        self._schedule_settle(delay_ms=50)
+        self._schedule_settle(delay_ms=40)
 
     def _plane_key(self) -> tuple[str, int]:
         axis = self.plane_axis.get().strip().lower() or "auto"
@@ -1384,6 +1452,8 @@ class FlowplotGui(tk.Tk):
                 if isinstance(vars_, list):
                     self._set_variables([str(v) for v in vars_])
                 self.effectively_2d = bool(payload.get("effectively_2d", True))
+                self._apply_default_camera(payload)
+                self._update_view_label()
                 self.zone_ordered = None
                 zones = payload.get("zones") or []
                 if isinstance(zones, list) and zones:
@@ -1428,7 +1498,8 @@ class FlowplotGui(tk.Tk):
         self.after(1, lambda: self._schedule_settle(delay_ms=10))
 
     def _reset_view_state(self) -> None:
-        self.view_mode.set("auto")
+        self.view_mode.set("free")
+        self.principal_plane = "xy"
         self.azimuth_deg = 0.0
         self.elevation_deg = 90.0
         self.view_pan_x = 0.0
@@ -1441,31 +1512,36 @@ class FlowplotGui(tk.Tk):
         self._settle_plane = None
         self._update_view_label()
 
-    def action_redraw(self, interactive: bool = False) -> None:
+    def action_redraw(
+        self,
+        interactive: bool = False,
+        allow_during_drag: bool = False,
+        mesh_only: bool = False,
+    ) -> None:
         # Re-entrancy guard: _run_cli pumps Tk events; avoid nested redraws.
         if self._in_redraw:
             return
         ds = self._require_dataset()
         if not ds:
             return
-        # While orbiting/panning, never spawn CLI — settle redraw runs on release.
-        if self._dragging or self._panning:
+        # While panning, wait for settle. Orbit may request live mesh previews.
+        if self._panning:
+            return
+        if self._dragging and not allow_during_drag:
             return
         if self.plot_type.get() not in ("2D Cartesian", "3D Cartesian"):
             self._log(f"plot type {self.plot_type.get()} not drawable yet")
             return
-        # Keep free az/el clamped whenever 3D Cartesian or free view is active.
-        if self.view_mode.get() == "free" or self.plot_type.get() == "3D Cartesian":
-            self.elevation_deg = self._clamp_elevation(self.elevation_deg)
+        self.elevation_deg = self._clamp_elevation(self.elevation_deg)
 
-        want_mesh = self.layer_mesh.get()
-        want_shade = self.layer_shade.get()
-        want_vector = self.layer_vector.get()
-        want_edge = self.layer_edge.get()
-        want_scatter = self.layer_scatter.get()
-        want_iso = self.layer_isosurfaces.get()
+        want_mesh = True if mesh_only else self.layer_mesh.get()
+        want_shade = False if mesh_only else self.layer_shade.get()
+        want_vector = False if mesh_only else self.layer_vector.get()
+        want_edge = False if mesh_only else self.layer_edge.get()
+        want_scatter = False if mesh_only else self.layer_scatter.get()
+        want_iso = False if mesh_only else self.layer_isosurfaces.get()
         # Shade/iso/vector/edge/scatter need a scalar raster base.
-        want_contour = (
+        want_contour = False if mesh_only else (
             self.layer_contour.get()
             or want_shade
             or want_iso
@@ -1473,7 +1549,9 @@ class FlowplotGui(tk.Tk):
             or want_edge
             or want_scatter
         )
-        want_pathlines = self.layer_pathlines.get() and bool(self.pathline_seeds)
+        want_pathlines = False if mesh_only else (
+            self.layer_pathlines.get() and bool(self.pathline_seeds)
+        )
         zone_idx = self._active_zone_index()
         zone_args = ["--zone", str(zone_idx)]
         mesh_color_args = self._mesh_color_cli_args()
@@ -1501,9 +1579,14 @@ class FlowplotGui(tk.Tk):
         # Exact Viewport raster → 1:1 display (annotation glyphs stay crisp).
         cw = max(self.viewport.winfo_width(), 64)
         ch = max(self.viewport.winfo_height(), 64)
-        # Always match canvas size (half-res interactive stretched glyphs → "broken").
-        width, height = min(max(cw, 64), 1920), min(max(ch, 64), 1440)
-        quality = "preview" if interactive else "full"
+        if mesh_only and interactive:
+            # Live orbit: cheaper mesh camera redraw while dragging.
+            width, height = min(max(cw // 2, 320), 960), min(max(ch // 2, 240), 720)
+            quality = "orbit"
+        else:
+            # Always match canvas size (half-res interactive stretched glyphs → "broken").
+            width, height = min(max(cw, 64), 1920), min(max(ch, 64), 1440)
+            quality = "preview" if interactive else "full"
 
         out = Path(tempfile.gettempdir()) / f"flowplot_gui_view_{quality}.png"
         style = self.plot_style.get()
@@ -2729,6 +2812,8 @@ def main() -> int:
                             if isinstance(vars_, list):
                                 app._set_variables([str(v) for v in vars_])
                             app.effectively_2d = bool(payload.get("effectively_2d", True))
+                            app._apply_default_camera(payload)
+                            app._update_view_label()
                         except json.JSONDecodeError:
                             pass
                     if app.layer_contour.get() and not app.var_name.get():

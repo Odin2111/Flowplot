@@ -986,8 +986,20 @@ fn dataset_load_json(path: &PathBuf, ds: &Dataset, suggestions: &[NondimSuggesti
         ));
     }
     let effectively_2d = flowplot::dataset_is_effectively_2d(ds);
+    let default_view = flowplot::suggest_default_view(ds, 0, flowplot::PlaneSpec::Auto)
+        .unwrap_or(flowplot::ViewSpec::Axis {
+            axis: flowplot::LookAxis::Z,
+            positive: true,
+        });
+    let (az, el) = default_view.to_free_angles();
+    let plane = default_view.principal_plane().as_str();
+    let default_view_json = format!(
+        "{{\"az\":{az:.6},\"el\":{el:.6},\"label\":{},\"plane\":{}}}",
+        json_string(&default_view.label()),
+        json_string(plane)
+    );
     format!(
-        "{{\"status\":\"ok\",\"command\":\"load\",\"path\":{},\"title\":{},\"variables\":{},\"zones\":[{}],\"effectively_2d\":{},\"nondim_suggestions\":{}}}",
+        "{{\"status\":\"ok\",\"command\":\"load\",\"path\":{},\"title\":{},\"variables\":{},\"zones\":[{}],\"effectively_2d\":{},\"default_view\":{},\"nondim_suggestions\":{}}}",
         json_string(&path.display().to_string()),
         ds.title
             .as_ref()
@@ -996,6 +1008,7 @@ fn dataset_load_json(path: &PathBuf, ds: &Dataset, suggestions: &[NondimSuggesti
         json_string_list(&ds.variables),
         zones.join(","),
         if effectively_2d { "true" } else { "false" },
+        default_view_json,
         suggestions_json(suggestions)
     )
 }
@@ -1216,7 +1229,8 @@ fn run_mesh(
     }
     let ds = maybe_nondim(load_path(path)?, &nondim_args, nondim_args.suggest)?;
     let plane = parse_plane(plane)?;
-    let view = parse_view(view)?;
+    let view_in = parse_view(view)?;
+    let view = flowplot::resolve_view(&ds, zone, plane, view_in)?;
     let (width, height) = if style == PlotStyle::Jfm && width == 800 && height == 600 {
         (PlotStyle::JFM_WIDTH, PlotStyle::JFM_HEIGHT)
     } else {
