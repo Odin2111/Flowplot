@@ -274,7 +274,7 @@ mod tests {
             "hypersonic-field-extrema",
             "shock-polar-field",
             "schlieren-primary",
-            "schlieren-chamarthi",
+            "schlieren-alt",
             "shadowgraph",
         ] {
             assert!(ids.contains(&need), "missing {need}");

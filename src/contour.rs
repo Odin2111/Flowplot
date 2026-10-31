@@ -66,7 +66,7 @@ pub enum ColorMapName {
     Jfm,
     Coolwarm,
     Grayscale,
-    /// Reversed grayscale (Chamarthi Schlieren: shocks dark on light).
+    /// Reversed grayscale (Schlieren alt: shocks dark on light).
     GrayscaleReverse,
     /// LEHAR Schlieren Crisp — white → pale lavender → deep navy (nonlinear).
     SchlierenCrisp,

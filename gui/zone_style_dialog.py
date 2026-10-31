@@ -1,6 +1,6 @@
 """Zone Style dialog for Flowplot.
 
-Tabs include: Wireframe, Flood, Glyphs, Sample points, Solid fill, Boundary, Points,
+Tabs include: Wireframe, Flood, Vectors, Sample points, Solid fill, Boundary, Points,
 Surfaces, Volume, Effects. Wireframe + Flood rows drive redraw; other tabs are
 labeled stubs for now.
 """
@@ -33,7 +33,7 @@ DEFAULT_MESH_COLOR = "#22A03C"
 ZONE_STYLE_TABS = (
     "Wireframe",
     "Flood",
-    "Glyphs",
+    "Vectors",
     "Sample points",
     "Solid fill",
     "Boundary",

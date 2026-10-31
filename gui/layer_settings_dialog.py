@@ -129,7 +129,7 @@ LAYER_GEAR_DRAWERS: dict[str, Callable[[tk.Canvas], None]] = {
     "Wireframe": draw_mesh_gear,
     "Flood": draw_contour_gear,
     "Solid fill": draw_shade_gear,
-    "Glyphs": draw_vector_gear,
+    "Vectors": draw_vector_gear,
     "Boundary": draw_edge_gear,
     "Sample points": draw_scatter_gear,
 }
@@ -354,7 +354,7 @@ class ShadeDetailsDialog(_LayerDetailsBase):
 
 
 class VectorDetailsDialog(_LayerDetailsBase):
-    title_text = "Glyphs Details"
+    title_text = "Vectors Details"
     subtitle = "U / V / W components"
 
     def __init__(

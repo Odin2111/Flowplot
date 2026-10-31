@@ -546,7 +546,7 @@ class AgentsPanel(tk.Toplevel):
 
         optical_ids = {
             "schlieren-primary",
-            "schlieren-chamarthi",
+            "schlieren-alt",
             "shadowgraph",
         }
         if item_id in optical_ids:
@@ -675,7 +675,7 @@ class AgentsPanel(tk.Toplevel):
         )
         optical = command == "optical" or item_id in (
             "schlieren-primary",
-            "schlieren-chamarthi",
+            "schlieren-alt",
             "shadowgraph",
         )
         if optical and var:
@@ -1022,7 +1022,7 @@ class AgentsPanel(tk.Toplevel):
 
         optical_kind_by_id = {
             "schlieren-primary": "schlieren",
-            "schlieren-chamarthi": "schlieren-chamarthi",
+            "schlieren-alt": "schlieren-alt",
             "shadowgraph": "shadowgraph",
         }
         if (

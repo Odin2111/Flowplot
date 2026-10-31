@@ -484,7 +484,7 @@ groups:
     title: Optical diagnostics
     summary: >
       Numerical density-gradient optics (any CFD density field) — primary
-      Schlieren (Crisp map), Chamarthi Schlieren, and Zhang-style shadowgraph.
+      Schlieren (Crisp map), Schlieren (alt), and Zhang-style shadowgraph.
     items:
       - id: schlieren-primary
         title: Schlieren (primary / Crisp)
@@ -500,18 +500,18 @@ groups:
           notes: "Guesses Density/rho by name; Schlieren Crisp palette."
         mcp: flowplot_contour
 
-      - id: schlieren-chamarthi
-        title: Schlieren (Chamarthi)
-        summary: Chamarthi log(1+|∇ρ|) with reversed grayscale, display range 0–5.
+      - id: schlieren-alt
+        title: Schlieren (alt)
+        summary: Alternate log(1+|∇ρ|) Schlieren with reversed grayscale, display range 0–5.
         status: ready
         lehar:
-          surface: research_figures / chamarthi
+          surface: research_figures / schlieren-alt
         flowplot:
           command: optical
-          template: "flowplot optical {path} --kind schlieren-chamarthi [--var Density] -o {out} --json"
+          template: "flowplot optical {path} --kind schlieren-alt [--var Density] -o {out} --json"
           required_args: [path, out]
           optional_flags: ["--var", "--zone", "--plane", "--vmin", "--vmax"]
-          notes: "Second Schlieren type (Chamarthi2 recipe); principle-based on Density."
+          notes: "Second Schlieren type (alt); principle-based on Density."
         mcp: flowplot_contour
 
       - id: shadowgraph
