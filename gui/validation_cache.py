@@ -82,10 +82,12 @@ def case_dir(root: Path, source: str, case_id: str) -> Path:
 
 
 def slugify(text: str) -> str:
-    s = "".join(ch if ch.isalnum() or ch in "._+-" else "_" for ch in text.strip())
-    while "__" in s:
-        s = s.replace("__", "_")
-    return s.strip("._") or "case"
+    """Match nasaagent slugify so cache dirs resolve after download."""
+    import re
+
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", text.strip())
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_.")
+    return cleaned[:160] or "case"
 
 
 def normalize_ercoftac_case(raw: str) -> str:
