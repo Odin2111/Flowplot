@@ -282,7 +282,10 @@ class FlowplotGui(tk.Tk):
         menu.add_command(label="Dataset info…", command=self.action_dataset_info)
         menu.add_command(label="Probe…", command=self.action_open_probe_window)
         menu.add_separator()
-        menu.add_command(label="Extract profile…", command=lambda: self.open_analyze_panel("extract-profile"))
+        menu.add_command(
+            label="Extract profile…",
+            command=lambda: self.open_agents_panel_select("extract-profile", "profiles"),
+        )
         menu.add_command(label="Apply nondim scales", command=self.action_nondim)
 
     def _frame_menu_items(self, menu: tk.Menu) -> None:
@@ -305,14 +308,103 @@ class FlowplotGui(tk.Tk):
         menu.add_command(label="Fewer levels", command=self.action_contour_remove_level)
         menu.add_command(label="Contour labels", command=self.action_toggle_contour_labels)
 
-    def _analyze_menu_items(self, menu: tk.Menu) -> None:
-        menu.add_command(label="Field sanity…", command=lambda: self.open_analyze_panel("field-sanity"))
-        menu.add_command(label="Positivity check…", command=lambda: self.open_analyze_panel("positivity-check"))
-        menu.add_command(label="Extract profile…", command=lambda: self.open_analyze_panel("extract-profile"))
+    def _agents_cascade(self, parent: tk.Menu, title: str, items: list[tuple[str, str, str]]) -> None:
+        """Add a categorized Agents submenu: (label, item_id, focus_group)."""
+        sub = tk.Menu(parent, tearoff=0)
+        for label, item_id, group in items:
+            sub.add_command(
+                label=label,
+                command=lambda i=item_id, g=group: self.open_agents_panel_select(i, g),
+            )
+        parent.add_cascade(label=title, menu=sub)
+
+    def _agents_menu_items(self, menu: tk.Menu) -> None:
+        """Tecplot Analyze analogue — named Agents, categorized by CFD applicability."""
+        self._agents_cascade(
+            menu,
+            "Positivity & sanity",
+            [
+                ("Field sanity…", "field-sanity", "positivity-sanity"),
+                ("Positivity check…", "positivity-check", "positivity-sanity"),
+                ("Positivity contour…", "positivity-field", "positivity-sanity"),
+            ],
+        )
+        self._agents_cascade(
+            menu,
+            "Profiles",
+            [
+                ("Extract profile…", "extract-profile", "profiles"),
+                ("Near-wall field contour…", "wall-physics-field", "profiles"),
+            ],
+        )
+        self._agents_cascade(
+            menu,
+            "Reference values",
+            [
+                ("Suggest / apply scales…", "nondim-suggest", "reference-values"),
+                ("Archival / ERCOFTAC scales…", "plot-agent-scales", "reference-values"),
+            ],
+        )
+        self._agents_cascade(
+            menu,
+            "Calculate variables",
+            [
+                ("Contour scalar…", "contour", "calculate-variables"),
+                ("Turbulence field…", "turbulence-field", "calculate-variables"),
+            ],
+        )
+        self._agents_cascade(
+            menu,
+            "Shocks",
+            [
+                ("Shock polar…", "shock-polar-field", "shocks"),
+                ("Shock-tracking field…", "shock-tracking-field", "shocks"),
+                ("Shock-sensor / pressure…", "shock-stability-field", "shocks"),
+            ],
+        )
+        self._agents_cascade(
+            menu,
+            "Hypersonic",
+            [
+                ("Field extrema…", "hypersonic-field-extrema", "hypersonic"),
+                ("Mach / p / ρ contour…", "hypersonic-mach-contour", "hypersonic"),
+                ("Bow-shock field…", "bow-shock-field", "hypersonic"),
+            ],
+        )
+        self._agents_cascade(
+            menu,
+            "Grid & mesh",
+            [
+                ("Mesh / zone inventory…", "mesh-inventory", "grid-mesh"),
+                ("Mesh wireframe…", "mesh-wireframe", "grid-mesh"),
+                ("Mesh–solution QoI…", "mesh-solution-field", "grid-mesh"),
+            ],
+        )
+        self._agents_cascade(
+            menu,
+            "Geometry & boundaries",
+            [
+                ("Zone / boundary inventory…", "zone-boundary-inventory", "geometry-boundaries"),
+                ("Wall / boundary field…", "wall-boundary-field", "geometry-boundaries"),
+            ],
+        )
+        self._agents_cascade(
+            menu,
+            "Integration",
+            [
+                ("Field mean / extrema…", "field-integrate-extrema", "integration"),
+            ],
+        )
+        self._agents_cascade(
+            menu,
+            "Pathlines",
+            [
+                ("Trace pathlines…", "pathlines", "pathlines"),
+                ("Contour + pathlines…", "contour-pathlines", "pathlines"),
+            ],
+        )
         menu.add_separator()
-        menu.add_command(label="Shock polar…", command=lambda: self.open_analyze_panel("shock-polar-field"))
-        menu.add_separator()
-        menu.add_command(label="All Analyze actions…", command=self.open_agents_panel)
+        menu.add_command(label="All Agents…", command=self.open_agents_panel)
 
     def _help_menu_items(self, menu: tk.Menu) -> None:
         menu.add_command(label="About Fieldplot", command=self.show_about)
@@ -329,7 +421,7 @@ class FlowplotGui(tk.Tk):
             ("Frame", self._frame_menu_items),
             ("Options", self._options_menu_items),
             ("Tools", self._tools_menu_items),
-            ("Analyze", self._analyze_menu_items),
+            ("Agents", self._agents_menu_items),
             ("Help", self._help_menu_items),
         )
         for label, fill in builders:
@@ -2758,9 +2850,11 @@ class FlowplotGui(tk.Tk):
         )
 
     def open_agents_panel(self) -> None:
-        self.open_analyze_panel(None)
+        self.open_agents_panel_select(None, "positivity-sanity")
 
-    def open_analyze_panel(self, select_id: str | None = None) -> None:
+    def open_agents_panel_select(
+        self, select_id: str | None = None, focus_group: str | None = None
+    ) -> None:
         bin_path = self._require_cli()
         if not bin_path:
             return
@@ -2770,6 +2864,8 @@ class FlowplotGui(tk.Tk):
             existing.variables = list(self.variables)
             existing.var_name.set(self.var_name.get() or first_scalar(self.variables))
             existing.nondim_args = self._nondim_args()
+            if focus_group:
+                existing.focus_group = focus_group
             existing.ds_label.configure(
                 text=str(self.dataset_path) if self.dataset_path else "(no file loaded)"
             )
@@ -2778,7 +2874,7 @@ class FlowplotGui(tk.Tk):
                 state="readonly" if self.variables else "disabled",
             )
             stay_above(existing, self, modal=False)
-            self._select_analyze_item(existing, select_id)
+            self._select_agents_item(existing, select_id)
             return
         panel = AgentsPanel(
             self,
@@ -2790,18 +2886,21 @@ class FlowplotGui(tk.Tk):
             plot_style=self.plot_style.get(),
             on_png=self._show_png_preview,
             repo_root=ROOT.parent,
-            title="Analyze",
-            focus_group="validation",
+            title="Agents",
+            focus_group=focus_group or "positivity-sanity",
         )
         self._agents_panel = panel
-        self._select_analyze_item(panel, select_id)
+        self._select_agents_item(panel, select_id)
 
-    def _select_analyze_item(self, panel: AgentsPanel, select_id: str | None) -> None:
+    # Back-compat alias used by older call sites / docs.
+    def open_analyze_panel(self, select_id: str | None = None) -> None:
+        self.open_agents_panel_select(select_id, None)
+
+    def _select_agents_item(self, panel: AgentsPanel, select_id: str | None) -> None:
         if not select_id:
             return
         iid = f"i:{select_id}"
         try:
-            # Expand parents then select.
             parent = panel.tree.parent(iid)
             if parent:
                 panel.tree.item(parent, open=True)
@@ -2816,7 +2915,8 @@ class FlowplotGui(tk.Tk):
             "About Fieldplot",
             "Fieldplot — CFD post-processor\n"
             "Tecplot-like menus + Plot panel (Mesh first).\n"
-            "Analyze hosts field sanity, positivity, profiles, shock polar.\n"
+            "Agents menu: positivity, profiles, shocks, hypersonic, grid, …\n"
+            "Checks apply to any loaded CFD dataset (physics/numerics).\n"
             "CLI binary remains `flowplot` for now.\n"
             f"CLI: {self.flowplot or '(not found)'}",
         )

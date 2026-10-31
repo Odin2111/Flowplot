@@ -158,7 +158,7 @@ pub fn format_menu_text(menu: &PostprocessMenu, group_id: Option<&str>) -> Strin
         }
         out.push('\n');
     }
-    out.push_str("legend: * ready (menu run dispatches)  - stub (requires lehar agent)\n");
+    out.push_str("legend: * ready (menu run dispatches)  - stub (planned / needs more inputs)\n");
     out.push_str("usage:  flowplot menu run <id> -- <flowplot-args…>\n");
     out
 }
@@ -210,11 +210,11 @@ pub fn format_stub_run(item: &MenuItem) -> String {
     let mut out = String::new();
     out.push_str(&format!("stub: {}\n", item.title));
     if let Some(agent) = &item.lehar.agent {
-        out.push_str(&format!("requires agent {agent}\n"));
+        out.push_str(&format!("inspired_by: {agent}\n"));
     } else if let Some(surface) = &item.lehar.surface {
-        out.push_str(&format!("requires lehar surface {surface}\n"));
+        out.push_str(&format!("inspired_by_surface: {surface}\n"));
     } else {
-        out.push_str("requires lehar agent (see docs/postprocess-menu.md)\n");
+        out.push_str("stub — planned flags (see docs/postprocess-menu.md)\n");
     }
     out.push_str(&format!("flowplot: {}\n", item.flowplot.template));
     if !item.flowplot.planned_flags.is_empty() {
@@ -239,7 +239,22 @@ mod tests {
     #[test]
     fn embedded_menu_parses_and_has_ready_items() {
         let menu = PostprocessMenu::from_yaml(EMBEDDED_MENU_YAML).expect("yaml");
-        assert_eq!(menu.groups.len(), 8);
+        // Categorized by CFD applicability (positivity, profiles, shocks, hypersonic, …).
+        assert!(menu.groups.len() >= 10, "expected Agents categories, got {}", menu.groups.len());
+        let group_ids: Vec<_> = menu.groups.iter().map(|g| g.id.as_str()).collect();
+        for need in [
+            "positivity-sanity",
+            "profiles",
+            "reference-values",
+            "calculate-variables",
+            "shocks",
+            "hypersonic",
+            "grid-mesh",
+            "geometry-boundaries",
+            "integration",
+        ] {
+            assert!(group_ids.contains(&need), "missing group {need}");
+        }
         let ids: Vec<_> = menu
             .groups
             .iter()
@@ -254,6 +269,9 @@ mod tests {
             "field-sanity",
             "positivity-check",
             "extract-profile",
+            "mesh-inventory",
+            "hypersonic-field-extrema",
+            "shock-polar-field",
         ] {
             assert!(ids.contains(&need), "missing {need}");
         }
@@ -262,7 +280,7 @@ mod tests {
         let (_, sanity) = menu.find_item("field-sanity").unwrap();
         assert_eq!(sanity.status, "ready");
         let (_, bow) = menu.find_item("bow-shock-field").unwrap();
-        assert_eq!(bow.status, "stub");
+        assert_eq!(bow.status, "ready");
         assert_eq!(bow.lehar.agent.as_deref(), Some("bow_shock_validation"));
     }
 }

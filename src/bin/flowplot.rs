@@ -855,22 +855,22 @@ fn dispatch_ready_item(item: &MenuItem, args: Vec<String>, json: bool) -> flowpl
     if forwarded.first().map(String::as_str) == Some("--") {
         forwarded.remove(0);
     }
-    // Shock polar chart lives in Analyze (matplotlib θ–β–M); CLI documents how.
+    // Shock polar chart lives under Agents (matplotlib θ–β–M); CLI documents how.
     if item.id == "shock-polar-field" || item.flowplot.command == "shock-polar" {
         if json {
             let payload = serde_json::json!({
                 "status": "ok",
                 "command": "shock-polar",
                 "id": item.id,
-                "note": "Open Analyze → Shock polar for the θ–β–M chart (gui/shock_polar.py). CFD-coupled polars remain in lehar shock_polar.",
+                "note": "Open Agents → Shocks → Shock polar for the θ–β–M chart (gui/shock_polar.py). Ideal-gas freestream via dialog; works on any CFD dataset.",
                 "how": "python3 -c \"from gui.shock_polar import plot_polar_png; plot_polar_png('/tmp/polar.png', mach=2.0, gamma=1.4)\"",
                 "template": item.flowplot.template,
             });
             println!("{payload}");
         } else {
             println!(
-                "shock polar: use Analyze → Shock polar (gui/shock_polar.py θ–β–M).\n\
-                 CFD-coupled polars: lehar agent shock_polar.\n\
+                "shock polar: use Agents → Shocks → Shock polar (gui/shock_polar.py θ–β–M).\n\
+                 Freestream M∞ / γ from dialog — solver-agnostic ideal-gas curve.\n\
                  template: {}",
                 item.flowplot.template
             );
