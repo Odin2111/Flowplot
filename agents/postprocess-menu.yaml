@@ -184,6 +184,24 @@ groups:
           notes: "Name-based suggestions; apply panel nondim scales when set."
         mcp: flowplot_nondim
 
+      - id: validation-data
+        title: Validation data
+        summary: >
+          Download ERCOFTAC / NASA / arXiv case data into a deletable local cache;
+          compare experiment (symbols) to the loaded field (lines) only on Plot compare.
+        status: ready
+        lehar:
+          agent: plot-agent / nasa-agent
+          surface: Validation data dialog (GUI)
+        flowplot:
+          command: gui
+          template: "Agents → Validation data… (cache ~/.fieldplot/validation_cache/)"
+          required_args: []
+          notes: >
+            Read-only agent default; --plots only when the user hits Plot compare.
+            No Tecplot branding in UI copy.
+        mcp: null
+
   - id: calculate-variables
     title: Derived fields
     summary: Field figures from named scalars (named scalar figures).
