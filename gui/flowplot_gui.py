@@ -280,7 +280,7 @@ class FlowplotGui(tk.Tk):
         for label in ("+X", "-X", "+Y", "-Y", "+Z", "-Z"):
             menu.add_command(
                 label=f"Align {label}",
-                command=lambda v=label.lower(): self._set_axis_view(v),
+                command=lambda v=label: self.action_align_axis(v),
             )
         menu.add_separator()
         menu.add_command(label="Fit whole domain", command=self.action_fit_view, accelerator="F")
@@ -305,11 +305,12 @@ class FlowplotGui(tk.Tk):
 
     def _data_menu_items(self, menu: tk.Menu) -> None:
         menu.add_command(label="Dataset info…", command=self.action_dataset_info)
-        menu.add_command(label="Sample…", command=self.action_open_probe_window)
+        # Sample… enables Sample tool mode (same as toolbar), not just an empty dialog.
+        menu.add_command(label="Sample…", command=self.action_sample_from_menu)
         menu.add_separator()
         menu.add_command(
             label="Extract profile…",
-            command=lambda: self.open_agents_panel_select("extract-profile", "profiles"),
+            command=self.action_extract_profile,
         )
         menu.add_command(label="Apply nondim scales", command=self.action_nondim)
 
@@ -757,7 +758,7 @@ class FlowplotGui(tk.Tk):
                 text=label,
                 style="Tool.TButton",
                 width=3,
-                command=lambda v=label.lower(): self._set_axis_view(v),
+                command=lambda v=label: self.action_align_axis(v),
             ).pack(side=tk.LEFT, padx=1, pady=1)
 
         rot_box = ttk.LabelFrame(parent, text="Orbit / Zoom", padding=(8, 6))
@@ -1072,9 +1073,28 @@ class FlowplotGui(tk.Tk):
             self.view_label.configure(text=text)
         self._draw_axes_triad()
 
+    @staticmethod
+    def _normalize_axis_tag(tag: str) -> str:
+        """Accept +X / -x / Align −Y (unicode minus) → +x|-x|…"""
+        t = (tag or "").strip().lower().replace("align", "").replace("look", "")
+        t = t.replace("−", "-").replace("–", "-").replace("—", "-")
+        t = "".join(ch for ch in t if ch in "+-xyz")
+        if t in ("+x", "-x", "+y", "-y", "+z", "-z"):
+            return t
+        return t
+
+    def action_align_axis(self, tag: str) -> None:
+        """View / toolbar Align ±X/Y/Z — named binding (survives glossary renames)."""
+        release_grabs(self)
+        self._set_axis_view(tag)
+
     def _set_axis_view(self, tag: str) -> None:
-        tag = tag.strip().lower()
-        # Leave Probe/Pathlines/Pan so left-drag orbits after an XYZ snap.
+        tag = self._normalize_axis_tag(tag)
+        if tag not in ("+x", "-x", "+y", "-y", "+z", "-z"):
+            self._log(f"Align ignored — unknown axis tag {tag!r}")
+            self._set_status(f"Align failed ({tag or '?'})")
+            return
+        # Leave Sample/Pathlines/Translate so left-drag orbits after an XYZ snap.
         if self.tool_mode.get() != "rotate":
             self._set_tool_mode("rotate")
         # Free angles matched to Axis projections (see ViewSpec::to_free_angles).
@@ -1128,6 +1148,7 @@ class FlowplotGui(tk.Tk):
             self._log(f"View {tag} → az={self.azimuth_deg:.0f} el={self.elevation_deg:.0f}")
         self._update_view_label()
         self._render_cache.clear()
+        self._set_status(f"Align {tag.upper()}")
         self._schedule_settle(delay_ms=20)
 
     def _reset_view(self) -> None:
@@ -2487,6 +2508,7 @@ class FlowplotGui(tk.Tk):
         )
 
     def action_open_probe_window(self) -> None:
+        release_grabs(self)
         existing = self._probe_dialog
         if existing is not None and existing.winfo_exists():
             stay_above(existing, self, modal=False)
@@ -2887,6 +2909,7 @@ class FlowplotGui(tk.Tk):
             self.vector_v.set(gv)
         if not self.vector_w.get().strip():
             self.vector_w.set(gw)
+        release_grabs(self)
         dlg = tk.Toplevel(self)
         dlg.title("Vectors variables")
         dlg.geometry("340x200")
@@ -2919,7 +2942,10 @@ class FlowplotGui(tk.Tk):
         btns.pack(fill=tk.X, pady=(10, 0))
         ttk.Button(btns, text="Cancel", command=cancel).pack(side=tk.RIGHT, padx=4)
         ttk.Button(btns, text="OK", command=ok).pack(side=tk.RIGHT)
-        dlg.wait_window()
+        try:
+            dlg.wait_window()
+        finally:
+            release_grabs(self)
         return bool(result["ok"])
 
     def action_mesh_settings(self) -> None:
@@ -3129,10 +3155,72 @@ class FlowplotGui(tk.Tk):
         self.action_slices_focus()
 
     def action_dataset_info(self) -> None:
+        """Data → Dataset info… — show a summary dialog (not log-only)."""
+        release_grabs(self)
         ds = self._require_dataset()
         if not ds:
             return
-        self._run_cli(["--json", "info", str(ds)])
+        proc = self._run_cli(["--json", "info", str(ds)])
+        if proc is None or proc.returncode != 0:
+            messagebox.showerror(
+                "Dataset info",
+                "flowplot info failed — see Log for details.",
+                parent=self,
+            )
+            return
+        payload: dict = {}
+        try:
+            lines = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()]
+            payload = json.loads(lines[-1]) if lines else {}
+        except (json.JSONDecodeError, IndexError, TypeError):
+            messagebox.showinfo(
+                "Dataset info",
+                (proc.stdout or "(no JSON)").strip()[:2000],
+                parent=self,
+            )
+            return
+        zones = payload.get("zones") or payload.get("zone_count") or "?"
+        if isinstance(zones, list):
+            zone_txt = f"{len(zones)} zone(s)"
+            names = [
+                str(z.get("name") or z.get("index") or i)
+                for i, z in enumerate(zones[:8])
+                if isinstance(z, dict)
+            ]
+            if names:
+                zone_txt += ": " + ", ".join(names)
+                if len(zones) > 8:
+                    zone_txt += ", …"
+        else:
+            zone_txt = str(zones)
+        vars_ = payload.get("variables") or payload.get("variable_names") or []
+        if isinstance(vars_, list):
+            var_txt = ", ".join(str(v) for v in vars_[:16])
+            if len(vars_) > 16:
+                var_txt += f", … (+{len(vars_) - 16})"
+        else:
+            var_txt = str(vars_)
+        path_txt = str(payload.get("path") or ds)
+        messagebox.showinfo(
+            "Dataset info",
+            f"{path_txt}\n\nZones: {zone_txt}\nVariables: {var_txt or '(none)'}",
+            parent=self,
+        )
+
+    def action_sample_from_menu(self) -> None:
+        """Data → Sample… — enable Sample tool (opens dialog + crosshair)."""
+        release_grabs(self)
+        if self.tool_mode.get() != "probe":
+            self._set_tool_mode("probe")
+        else:
+            self.action_open_probe_window()
+        self._log("Data → Sample — click Viewport to sample variables")
+
+    def action_extract_profile(self) -> None:
+        """Data → Extract profile… — Agents panel on extract-profile."""
+        release_grabs(self)
+        self.open_agents_panel_select("extract-profile", "profiles")
+        self._set_status("Extract profile — Agents panel")
 
     def action_zone_style(self) -> None:
         """Plot → Zone Style… (per-zone Mesh/Contour table)."""
@@ -3311,10 +3399,37 @@ class FlowplotGui(tk.Tk):
             return
 
     def action_nondim(self) -> None:
+        """Data / Plot → Apply nondim scales — CLI + visible summary."""
+        release_grabs(self)
         ds = self._require_dataset()
         if not ds:
             return
-        self._run_cli(["nondim", str(ds), *self._nondim_args()])
+        args = self._nondim_args()
+        if not args:
+            messagebox.showwarning(
+                "Apply nondim scales",
+                "Set at least one of U_ref / Lx / Ly / Lz / T_ref in Nondim scales,\n"
+                "then run Apply nondim scales again.",
+                parent=self,
+            )
+            self._set_status("Nondim — enter scales first")
+            return
+        proc = self._run_cli(["--json", "nondim", str(ds), *args])
+        if proc is None or proc.returncode != 0:
+            messagebox.showerror(
+                "Apply nondim scales",
+                "flowplot nondim failed — see Log for details.",
+                parent=self,
+            )
+            return
+        summary = (proc.stdout or "").strip()
+        if len(summary) > 1200:
+            summary = summary[:1200] + "…"
+        messagebox.showinfo(
+            "Apply nondim scales",
+            summary or "Nondim scales applied.",
+            parent=self,
+        )
 
     def action_export_png(self) -> None:
         ds = self._require_dataset()
@@ -3374,6 +3489,7 @@ class FlowplotGui(tk.Tk):
     def open_agents_panel_select(
         self, select_id: str | None = None, focus_group: str | None = None
     ) -> None:
+        release_grabs(self)
         bin_path = self._require_cli()
         if not bin_path:
             return
@@ -3393,7 +3509,7 @@ class FlowplotGui(tk.Tk):
                 state="readonly" if self.variables else "disabled",
             )
             stay_above(existing, self, modal=False, always_on_top=True)
-            self._select_agents_item(existing, select_id)
+            self.after(30, lambda: self._select_agents_item(existing, select_id))
             return
         panel = AgentsPanel(
             self,
@@ -3410,7 +3526,8 @@ class FlowplotGui(tk.Tk):
             focus_group=focus_group or "positivity-sanity",
         )
         self._agents_panel = panel
-        self._select_agents_item(panel, select_id)
+        # Menu tree is filled synchronously in __init__; still defer one tick for Tk.
+        self.after(30, lambda: self._select_agents_item(panel, select_id))
 
     # Back-compat alias used by older call sites / docs.
     def open_analyze_panel(self, select_id: str | None = None) -> None:

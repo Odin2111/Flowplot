@@ -217,7 +217,8 @@ def build_fieldplot_icon_toolbar(parent: tk.Misc, gui) -> IconToolbar:
                 f"look_{tag}",
                 tip,
                 make_axis_drawer(label),
-                lambda t=tag: gui._set_axis_view(t),
+                # Named Align binding (glossary Look→Align); not a stale Look handler.
+                lambda t=tag: gui.action_align_axis(t),
             )
         )
     bar.add_separator()
