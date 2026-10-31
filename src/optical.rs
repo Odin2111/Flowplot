@@ -368,6 +368,13 @@ mod tests {
         .unwrap();
         let s = schlieren_from_grid(&grid);
         assert!(s.iter().any(|v| *v > 0.01), "expected nonzero schlieren");
+        // Anti-paste: optical field must differ from raw Density (gradient, not copy).
+        assert!(
+            s.iter()
+                .zip(grid.values.iter())
+                .any(|(a, b)| (a - b).abs() > 1e-6),
+            "schlieren must not equal Density (would indicate PNG/value paste)"
+        );
     }
 
     #[test]

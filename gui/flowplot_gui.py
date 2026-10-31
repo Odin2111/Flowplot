@@ -131,6 +131,9 @@ class FlowplotGui(tk.Tk):
         self.flowplot = find_flowplot_bin()
         self.status_var = tk.StringVar(value=self._status_idle())
         self.var_name = tk.StringVar(value="")
+        # Live numerical optics: schlieren | schlieren-chamarthi | shadowgraph | None.
+        # When set, Contour redraw recomputes density gradients (not a pasted PNG).
+        self.optical_kind: str | None = None
         self.plot_style = tk.StringVar(value="jfm")
         self.plot_type = tk.StringVar(value="2D Cartesian")
         self._preview_photo = None
@@ -1444,12 +1447,14 @@ class FlowplotGui(tk.Tk):
             scale = min(sx, sy)  # contain — whole domain, no crop
             new_w = max(1, int(round(img.width * scale)))
             new_h = max(1, int(round(img.height * scale)))
-            # NEAREST keeps HUD/label glyphs crisp when a scale is unavoidable.
-            resample = (
-                Image.Resampling.NEAREST
-                if abs(scale - 1.0) < 0.02 or scale > 0.85
-                else Image.Resampling.BILINEAR
-            )
+            # Never NEAREST-scale AA HUD text (looks dotted/garbled). Prefer
+            # BOX downscale / LANCZOS upscale; settle redraw already targets 1:1.
+            if abs(scale - 1.0) < 0.02:
+                resample = Image.Resampling.NEAREST
+            elif scale < 1.0:
+                resample = Image.Resampling.BOX
+            else:
+                resample = Image.Resampling.LANCZOS
             show = img.resize((new_w, new_h), resample)
         if show.width < 4 or show.height < 4:
             self._log(
@@ -1564,6 +1569,7 @@ class FlowplotGui(tk.Tk):
         self.layer_vector.set(False)
         self.layer_edge.set(False)
         self.layer_scatter.set(False)
+        self.optical_kind = None
         self.pathline_seeds.clear()
         self.clear_probe_marks()
         self._set_tool_mode("rotate")
@@ -1743,6 +1749,7 @@ class FlowplotGui(tk.Tk):
                 str(ds),
                 f"m={want_mesh}",
                 f"c={want_contour}",
+                f"opt={self.optical_kind or '-'}",
                 f"s={want_shade}",
                 f"p={want_pathlines}",
                 f"vec={want_vector}:{self.vector_u.get()}:{self.vector_v.get()}",
@@ -1816,6 +1823,8 @@ class FlowplotGui(tk.Tk):
                 layers.append("Mesh")
             if want_shade and not self.layer_contour.get():
                 layers.append(f"Shade({var})")
+            elif self.layer_contour.get() and self.optical_kind:
+                layers.append(f"Optical({self.optical_kind}/{var})")
             elif self.layer_contour.get():
                 layers.append(f"Contour({var})")
             if want_pathlines:
@@ -1893,7 +1902,34 @@ class FlowplotGui(tk.Tk):
                 needs_scalar = False
                 want_contour = want_pathlines = want_vector = False
                 want_edge = want_scatter = want_iso = False
+        if needs_scalar and self.optical_kind and want_contour and not want_pathlines:
+            # Live numerical Schlieren / Shadowgraph from density gradients.
+            dens = var or first_scalar(self.variables) or ""
+            args = [
+                "optical",
+                str(ds),
+                "--kind",
+                self.optical_kind,
+                "-o",
+                str(out),
+                "--style",
+                style,
+                *zone_args,
+                *size,
+                *plane,
+                *view,
+            ]
+            if dens:
+                args.extend(["--var", dens])
+            if self.contour_details.legend:
+                args.append("--legend")
+            return self._run_cli(args)
         if needs_scalar:
+            # Ordinary scalar Contour — drop any leftover optical mode.
+            if self.optical_kind and not want_contour:
+                pass
+            elif self.optical_kind and (want_pathlines or want_vector or want_iso):
+                self.optical_kind = None
             args = [
                 "contour",
                 str(ds),
@@ -2065,11 +2101,51 @@ class FlowplotGui(tk.Tk):
             self.var_name.set(picked)
         elif not self.var_name.get().strip() and self.variables:
             self.var_name.set(first_scalar(self.variables))
+        # Contour Details always means a dataset scalar, not optical derivatives.
+        self.optical_kind = None
         self._refresh_levels_label()
         self.layer_contour.set(True)
         self._log(f"Contour Details → var={self.var_name.get() or '(none)'}")
         self._render_cache.clear()
         self.action_redraw()
+
+    def apply_optical_mode(self, kind: str, density_var: str = "") -> None:
+        """Agents Schlieren/Shadowgraph — live |∇ρ|/∇²ρ redraw (not a PNG paste)."""
+        kind_l = (kind or "").strip().lower()
+        if kind_l in ("schlieren-primary", "primary"):
+            kind_l = "schlieren"
+        if kind_l not in ("schlieren", "schlieren-chamarthi", "shadowgraph"):
+            self._log(f"Unknown optical kind '{kind}' — ignored")
+            return
+        dens = (density_var or "").strip()
+        if dens:
+            self.var_name.set(dens)
+        elif not self.var_name.get().strip():
+            # Match CLI guess: prefer Density/rho names.
+            lower = {v.lower(): v for v in self.variables}
+            for key in ("density", "rho", "dens", "density_kg_m3"):
+                if key in lower:
+                    self.var_name.set(lower[key])
+                    break
+            else:
+                self.var_name.set(first_scalar(self.variables))
+        self.optical_kind = kind_l
+        self.layer_contour.set(True)
+        zs = self._style_for_zone(self.active_zone)
+        if zs is not None:
+            zs.show_contour = True
+            zs.show_zone = True
+        self._render_cache.clear()
+        self._log(
+            f"Optical mode {kind_l} on {self.var_name.get()} — "
+            "recomputing data gradients on redraw"
+        )
+        self.action_redraw()
+
+    def _on_agent_png(self, path: Path) -> None:
+        """Agents non-optical PNG refresh — leave optical mode."""
+        self.optical_kind = None
+        self._show_png_preview(path)
 
     def action_contour_add_level(self) -> None:
         """Contour ＋ Level — bump count, force Banded Contour, redraw."""
@@ -3140,7 +3216,7 @@ class FlowplotGui(tk.Tk):
                 values=self.variables,
                 state="readonly" if self.variables else "disabled",
             )
-            stay_above(existing, self, modal=False)
+            stay_above(existing, self, modal=False, always_on_top=True)
             self._select_agents_item(existing, select_id)
             return
         panel = AgentsPanel(
@@ -3151,7 +3227,8 @@ class FlowplotGui(tk.Tk):
             var_name=self.var_name.get(),
             nondim_args=self._nondim_args(),
             plot_style=self.plot_style.get(),
-            on_png=self._show_png_preview,
+            on_png=self._on_agent_png,
+            on_optical=self.apply_optical_mode,
             repo_root=ROOT.parent,
             title="Agents",
             focus_group=focus_group or "positivity-sanity",
