@@ -73,12 +73,10 @@ BTN_ACTIVE = "#cfd5db"
 
 COORD_NAMES = {"x", "y", "z", "r", "theta", "th", "i", "j", "k"}
 
+# Fieldplot plot-type picker: Cartesian only (no XY Line / Polar Line / Sketch).
 PLOT_TYPES = (
     "2D Cartesian",
     "3D Cartesian",
-    "XY Line",
-    "Polar Line",
-    "Sketch",
 )
 
 
@@ -708,15 +706,15 @@ class FlowplotGui(tk.Tk):
         )
 
         ttk.Label(parent, text="Plot type", style="Muted.TLabel").pack(anchor="w", padx=12)
-        type_box = ttk.Combobox(
+        self.plot_type_box = ttk.Combobox(
             parent,
             textvariable=self.plot_type,
             values=PLOT_TYPES,
             state="readonly",
             width=22,
         )
-        type_box.pack(anchor="w", padx=12, pady=(2, 10))
-        type_box.bind("<<ComboboxSelected>>", lambda _e: self._on_plot_type())
+        self.plot_type_box.pack(anchor="w", padx=12, pady=(2, 10))
+        self.plot_type_box.bind("<<ComboboxSelected>>", lambda _e: self._on_plot_type())
 
         layers = ttk.LabelFrame(parent, text="Show Zone Layers", padding=(8, 6))
         layers.pack(fill=tk.X, padx=10, pady=(0, 8))
@@ -1672,11 +1670,7 @@ class FlowplotGui(tk.Tk):
 
     def _on_plot_type(self) -> None:
         pt = self.plot_type.get()
-        if pt not in ("2D Cartesian", "3D Cartesian"):
-            messagebox.showinfo(
-                "Plot type",
-                f"{pt} is a stub in this build.\nUse 2D or 3D Cartesian for mesh/contour.",
-            )
+        if pt not in PLOT_TYPES:
             self.plot_type.set("2D Cartesian")
             return
         if pt == "3D Cartesian" and self.effectively_2d:
@@ -1957,7 +1951,7 @@ class FlowplotGui(tk.Tk):
             return
         if self._dragging and not allow_during_drag:
             return
-        if self.plot_type.get() not in ("2D Cartesian", "3D Cartesian"):
+        if self.plot_type.get() not in PLOT_TYPES:
             self._log(f"plot type {self.plot_type.get()} not drawable yet")
             return
         self.elevation_deg = self._clamp_elevation(self.elevation_deg)
