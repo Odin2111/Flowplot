@@ -1444,12 +1444,14 @@ class FlowplotGui(tk.Tk):
             scale = min(sx, sy)  # contain — whole domain, no crop
             new_w = max(1, int(round(img.width * scale)))
             new_h = max(1, int(round(img.height * scale)))
-            # NEAREST keeps HUD/label glyphs crisp when a scale is unavoidable.
-            resample = (
-                Image.Resampling.NEAREST
-                if abs(scale - 1.0) < 0.02 or scale > 0.85
-                else Image.Resampling.BILINEAR
-            )
+            # Never NEAREST-scale AA HUD text (looks dotted/garbled). Prefer
+            # BOX downscale / LANCZOS upscale; settle redraw already targets 1:1.
+            if abs(scale - 1.0) < 0.02:
+                resample = Image.Resampling.NEAREST
+            elif scale < 1.0:
+                resample = Image.Resampling.BOX
+            else:
+                resample = Image.Resampling.LANCZOS
             show = img.resize((new_w, new_h), resample)
         if show.width < 4 or show.height < 4:
             self._log(
