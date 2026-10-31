@@ -26,7 +26,7 @@ CLI discovery picks the newest of PATH / `target/release` / `target/debug` (over
 - **F** / Frame → Fit to Viewport / View → Fit whole domain clears pan and recenters
 - Pathlines: after enable, click-drag draws a rake/seed line; pathlines emit from that segment (exclusive vs Probe)
 - Product UI name is **Fieldplot** (window title / About / logo); CLI crate binary remains `flowplot`
-- Zone layers: Vector (U/V/W picker + arrows), Edge (boundary), Scatter (subsample), Iso-Surfaces (isolines)
+- Zone layers: each Show Zone Layers row has a Tecplot-like **gear** → Mesh (Zone Style), Contour (Contour Details), Shade / Vector / Edge / Scatter Details; Vector also uses U/V/W + `--overlay-skip`, Edge boundary, Scatter subsample, Iso-Surfaces (isolines)
 - Pathlines rake persists as canvas overlay + PNG traces after drag
 
 ## Run
