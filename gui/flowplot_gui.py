@@ -27,6 +27,17 @@ from tkinter import filedialog, messagebox, ttk
 from agents_panel import AgentsPanel
 from contour_details_dialog import ContourDetailsDialog, ContourDetailsState
 from icon_toolbar import build_fieldplot_icon_toolbar
+from layer_settings_dialog import (
+    EdgeDetailsDialog,
+    EdgeDetailsState,
+    ScatterDetailsDialog,
+    ScatterDetailsState,
+    ShadeDetailsDialog,
+    ShadeDetailsState,
+    VectorDetailsDialog,
+    VectorDetailsState,
+    add_layer_row,
+)
 from legend_options_dialog import LegendOptionsDialog, LegendOptionsState
 from open_dataset_dialog import ask_open_dataset
 from probe_dialog import ProbeDialog
@@ -126,9 +137,17 @@ class FlowplotGui(tk.Tk):
         self._preview_after: str | None = None
         self._zone_style_dialog: ZoneStyleDialog | None = None
         self._contour_details_dialog: ContourDetailsDialog | None = None
+        self._shade_details_dialog: ShadeDetailsDialog | None = None
+        self._vector_details_dialog: VectorDetailsDialog | None = None
+        self._edge_details_dialog: EdgeDetailsDialog | None = None
+        self._scatter_details_dialog: ScatterDetailsDialog | None = None
         self._legend_options_dialog: LegendOptionsDialog | None = None
         self._probe_dialog: ProbeDialog | None = None
         self.contour_details = ContourDetailsState()
+        self.shade_details = ShadeDetailsState()
+        self.vector_details = VectorDetailsState()
+        self.edge_details = EdgeDetailsState()
+        self.scatter_details = ScatterDetailsState()
         # Exclusive interaction tools (Tecplot-like): rotate | pan | probe | pathlines.
         # Default Rotate so left-drag orbits the domain (not pan/translate).
         self.tool_mode = tk.StringVar(value="rotate")
@@ -601,20 +620,22 @@ class FlowplotGui(tk.Tk):
 
         layers = ttk.LabelFrame(parent, text="Show Zone Layers", padding=(8, 6))
         layers.pack(fill=tk.X, padx=10, pady=(0, 8))
-        for label, var, cmd in (
-            ("Mesh", self.layer_mesh, self.action_redraw),
-            ("Contour", self.layer_contour, self.action_redraw),
-            ("Shade", self.layer_shade, self.action_redraw),
-            ("Vector", self.layer_vector, self.action_vector_layer),
-            ("Edge", self.layer_edge, self.action_edge_layer),
-            ("Scatter", self.layer_scatter, self.action_scatter_layer),
+        # Tecplot-like: checkbox + right-aligned gear → layer Details dialog.
+        for label, var, toggle, settings in (
+            ("Mesh", self.layer_mesh, self.action_redraw, self.action_mesh_settings),
+            ("Contour", self.layer_contour, self.action_redraw, self.action_contour_details),
+            ("Shade", self.layer_shade, self.action_shade_layer, self.action_shade_settings),
+            ("Vector", self.layer_vector, self.action_vector_layer, self.action_vector_settings),
+            ("Edge", self.layer_edge, self.action_edge_layer, self.action_edge_settings),
+            ("Scatter", self.layer_scatter, self.action_scatter_layer, self.action_scatter_settings),
         ):
-            ttk.Checkbutton(
+            add_layer_row(
                 layers,
-                text=label,
+                label=label,
                 variable=var,
-                command=cmd,
-            ).pack(anchor="w", pady=1)
+                on_toggle=toggle,
+                on_settings=settings,
+            )
 
         derived = ttk.LabelFrame(parent, text="Show Derived Objects", padding=(8, 6))
         derived.pack(fill=tk.X, padx=10, pady=(0, 8))
@@ -1903,6 +1924,15 @@ class FlowplotGui(tk.Tk):
                 args.append("--scatter")
             if want_iso:
                 args.append("--isolines")
+            if want_vector or want_scatter:
+                skip = (
+                    int(self.vector_details.skip)
+                    if want_vector
+                    else int(self.scatter_details.skip)
+                )
+                if want_vector and want_scatter:
+                    skip = max(int(self.vector_details.skip), int(self.scatter_details.skip))
+                args.extend(["--overlay-skip", str(max(1, skip))])
             # JSON so we can report pathline_traces after rake settle.
             if want_pathlines and args[:1] != ["--json"]:
                 args = ["--json", *args]
@@ -2630,6 +2660,55 @@ class FlowplotGui(tk.Tk):
         dlg.wait_window()
         return bool(result["ok"])
 
+    def action_mesh_settings(self) -> None:
+        """Show Zone Layers → Mesh gear → Zone Style (Mesh tab)."""
+        self.action_zone_style()
+
+    def action_shade_layer(self) -> None:
+        if self.layer_shade.get():
+            if not self._ensure_contour_var():
+                self.layer_shade.set(False)
+                self._log("Shade skipped — no scalar variable in dataset")
+                self._set_status("Shade unavailable (no scalar)")
+                return
+            self._log(f"Shade on → continuous flood ({self.var_name.get()})")
+        else:
+            self._log("Shade off")
+        self._render_cache.clear()
+        self.action_redraw()
+
+    def action_shade_settings(self) -> None:
+        """Show Zone Layers → Shade gear → Shade Details."""
+        existing = self._shade_details_dialog
+        if existing is not None and existing.winfo_exists():
+            stay_above(existing, self, modal=False)
+            return
+        dlg = ShadeDetailsDialog(
+            self,
+            self.shade_details,
+            on_apply=self._apply_shade_details,
+            variables=list(self.variables),
+            active_var=self.var_name.get(),
+        )
+        self._shade_details_dialog = dlg
+
+    def _apply_shade_details(self, state: ShadeDetailsState) -> None:
+        self.shade_details = state
+        self.layer_shade.set(True)
+        if state.use_active_var and not self.var_name.get().strip() and self.variables:
+            self.var_name.set(first_scalar(self.variables))
+        dlg = self._shade_details_dialog
+        if dlg is not None and dlg.winfo_exists():
+            picked = (dlg.active_var.get() or "").strip()
+            if picked:
+                self.var_name.set(picked)
+        self._log(
+            f"Shade Details: mode={state.color_mode} lighting={state.lighting} "
+            f"var={self.var_name.get() or '(none)'}"
+        )
+        self._render_cache.clear()
+        self.action_redraw()
+
     def action_vector_layer(self) -> None:
         if not self.layer_vector.get():
             self._render_cache.clear()
@@ -2644,13 +2723,90 @@ class FlowplotGui(tk.Tk):
         self._render_cache.clear()
         self.action_redraw()
 
+    def action_vector_settings(self) -> None:
+        """Show Zone Layers → Vector gear → Vector Details."""
+        gu, gv, gw = self._guess_velocity_names()
+        if not self.vector_u.get().strip():
+            self.vector_u.set(gu)
+        if not self.vector_v.get().strip():
+            self.vector_v.set(gv)
+        if not self.vector_w.get().strip():
+            self.vector_w.set(gw)
+        existing = self._vector_details_dialog
+        if existing is not None and existing.winfo_exists():
+            stay_above(existing, self, modal=False)
+            return
+        dlg = VectorDetailsDialog(
+            self,
+            u_var=self.vector_u,
+            v_var=self.vector_v,
+            w_var=self.vector_w,
+            state=self.vector_details,
+            variables=list(self.variables) or [""],
+            on_apply=self._apply_vector_details,
+        )
+        self._vector_details_dialog = dlg
+
+    def _apply_vector_details(self, state: VectorDetailsState) -> None:
+        self.vector_details = state
+        if not self.vector_u.get().strip() or not self.vector_v.get().strip():
+            messagebox.showwarning("Vector", "U and V are required.", parent=self)
+            return
+        self.layer_vector.set(True)
+        self._log(
+            f"Vector Details: U={self.vector_u.get()} V={self.vector_v.get()} "
+            f"skip={state.skip}"
+        )
+        self._render_cache.clear()
+        self.action_redraw()
+
     def action_edge_layer(self) -> None:
         self._log("Edge " + ("on" if self.layer_edge.get() else "off"))
         self._render_cache.clear()
         self.action_redraw()
 
+    def action_edge_settings(self) -> None:
+        """Show Zone Layers → Edge gear → Edge Details."""
+        existing = self._edge_details_dialog
+        if existing is not None and existing.winfo_exists():
+            stay_above(existing, self, modal=False)
+            return
+        dlg = EdgeDetailsDialog(
+            self,
+            self.edge_details,
+            on_apply=self._apply_edge_details,
+        )
+        self._edge_details_dialog = dlg
+
+    def _apply_edge_details(self, state: EdgeDetailsState) -> None:
+        self.edge_details = state
+        self.layer_edge.set(True)
+        self._log(f"Edge Details: color={state.color} pattern={state.line_pattern}")
+        self._render_cache.clear()
+        self.action_redraw()
+
     def action_scatter_layer(self) -> None:
         self._log("Scatter " + ("on" if self.layer_scatter.get() else "off"))
+        self._render_cache.clear()
+        self.action_redraw()
+
+    def action_scatter_settings(self) -> None:
+        """Show Zone Layers → Scatter gear → Scatter Details."""
+        existing = self._scatter_details_dialog
+        if existing is not None and existing.winfo_exists():
+            stay_above(existing, self, modal=False)
+            return
+        dlg = ScatterDetailsDialog(
+            self,
+            self.scatter_details,
+            on_apply=self._apply_scatter_details,
+        )
+        self._scatter_details_dialog = dlg
+
+    def _apply_scatter_details(self, state: ScatterDetailsState) -> None:
+        self.scatter_details = state
+        self.layer_scatter.set(True)
+        self._log(f"Scatter Details: skip={state.skip} color={state.color}")
         self._render_cache.clear()
         self.action_redraw()
 
