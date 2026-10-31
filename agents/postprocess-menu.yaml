@@ -59,7 +59,7 @@ groups:
         mcp: flowplot_load
 
   - id: positivity-sanity
-    title: Positivity & sanity
+    title: Field integrity
     summary: >
       Fundamental numerics health — NaN/Inf, extrema, and thermo positivity
       (ρ / p / T by name) on the loaded field.
@@ -153,7 +153,7 @@ groups:
         mcp: flowplot_nondim
 
   - id: reference-values
-    title: Reference values
+    title: Reference scales
     summary: Freestream / length / time refs for nondimensional charts (any code).
     items:
       - id: nondim-suggest
@@ -185,11 +185,11 @@ groups:
         mcp: flowplot_nondim
 
   - id: calculate-variables
-    title: Calculate variables
+    title: Derived fields
     summary: Field figures from named scalars (named scalar figures).
     items:
       - id: contour
-        title: Contour scalar
+        title: Flood scalar
         summary: Pseudocolor any named scalar to PNG.
         status: ready
         lehar:
@@ -347,7 +347,7 @@ groups:
         mcp: flowplot_contour
 
   - id: grid-mesh
-    title: Grid & mesh
+    title: Mesh checks
     summary: Mesh inventory and wireframe evidence (zone topology, any mesh origin).
     items:
       - id: mesh-inventory
@@ -390,7 +390,7 @@ groups:
         mcp: flowplot_contour
 
   - id: geometry-boundaries
-    title: Geometry & boundaries
+    title: Boundaries
     summary: Zone / boundary inventory and wall-adjacent field checks.
     items:
       - id: zone-boundary-inventory
@@ -420,7 +420,7 @@ groups:
         mcp: flowplot_contour
 
   - id: integration
-    title: Integration
+    title: Field integrals
     summary: Field mean / extrema QoI summaries (nodal stats on the loaded file).
     items:
       - id: field-integrate-extrema
@@ -481,7 +481,7 @@ groups:
 
 
   - id: optical
-    title: Schlieren & shadowgraph
+    title: Optical diagnostics
     summary: >
       Numerical density-gradient optics (any CFD density field) — primary
       Schlieren (Crisp map), Chamarthi Schlieren, and Zhang-style shadowgraph.

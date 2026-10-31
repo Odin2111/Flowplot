@@ -1,7 +1,7 @@
 """Zone Style dialog for Flowplot.
 
-Tabs include: Mesh, Contour, Vector, Scatter, Shade, Edge, Points,
-Surfaces, Volume, Effects. Mesh + Contour rows drive redraw; other tabs are
+Tabs include: Wireframe, Flood, Glyphs, Sample points, Solid fill, Boundary, Points,
+Surfaces, Volume, Effects. Wireframe + Flood rows drive redraw; other tabs are
 labeled stubs for now.
 """
 
@@ -31,12 +31,12 @@ LINE_PATTERNS = ("Solid", "Dashed", "Dotted")
 DEFAULT_MESH_COLOR = "#22A03C"
 
 ZONE_STYLE_TABS = (
-    "Mesh",
-    "Contour",
-    "Vector",
-    "Scatter",
-    "Shade",
-    "Edge",
+    "Wireframe",
+    "Flood",
+    "Glyphs",
+    "Sample points",
+    "Solid fill",
+    "Boundary",
     "Points",
     "Surfaces",
     "Volume",
@@ -133,7 +133,7 @@ class ZoneStyleDialog(tk.Toplevel):
         styles: list[ZoneStyleState],
         *,
         on_apply: Callable[[list[ZoneStyleState]], None] | None = None,
-        initial_tab: str = "Mesh",
+        initial_tab: str = "Wireframe",
     ) -> None:
         super().__init__(master)
         self.title("Zone Style")
@@ -147,7 +147,7 @@ class ZoneStyleDialog(tk.Toplevel):
         ]
         self._vars: list[dict] = []
         self._table_frame: ttk.Frame | None = None
-        self._active_tab = tk.StringVar(value=initial_tab if initial_tab in ZONE_STYLE_TABS else "Mesh")
+        self._active_tab = tk.StringVar(value=initial_tab if initial_tab in ZONE_STYLE_TABS else "Wireframe")
 
         self._build()
         self.protocol("WM_DELETE_WINDOW", self.destroy)
@@ -157,7 +157,7 @@ class ZoneStyleDialog(tk.Toplevel):
     def _build(self) -> None:
         tip = ttk.Label(
             self,
-            text="Per-zone Show Zone / Mesh / Contour (Apply redraws). Other tabs are stubs.",
+            text="Per-zone Show Zone / Wireframe / Flood (Apply redraws). Other tabs are stubs.",
             foreground=MUTED,
             background=BG,
         )
@@ -172,7 +172,7 @@ class ZoneStyleDialog(tk.Toplevel):
             page = ttk.Frame(nb, padding=4)
             nb.add(page, text=name)
             self._tab_bodies[name] = page
-            if name in ("Mesh", "Contour"):
+            if name in ("Wireframe", "Flood"):
                 # Shared table rebuilt on tab change so columns match the active tab.
                 pass
             else:
@@ -189,12 +189,12 @@ class ZoneStyleDialog(tk.Toplevel):
 
         # One shared working table hosted under Mesh; Contour reuses the same
         # widgets when that tab is selected (columns swap).
-        self._host = ttk.Frame(self._tab_bodies["Mesh"])
+        self._host = ttk.Frame(self._tab_bodies["Wireframe"])
         self._host.pack(fill=tk.BOTH, expand=True)
-        self._build_table(self._host, "Mesh")
+        self._build_table(self._host, "Wireframe")
 
         # Contour page shows the same table via raise/reparent on tab change.
-        self._contour_host = ttk.Frame(self._tab_bodies["Contour"])
+        self._contour_host = ttk.Frame(self._tab_bodies["Flood"])
         self._contour_host.pack(fill=tk.BOTH, expand=True)
 
         nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
@@ -217,10 +217,10 @@ class ZoneStyleDialog(tk.Toplevel):
         except tk.TclError:
             return
         self._active_tab.set(name)
-        if name not in ("Mesh", "Contour"):
+        if name not in ("Wireframe", "Flood"):
             return
         self._harvest()
-        parent = self._host if name == "Mesh" else self._contour_host
+        parent = self._host if name == "Wireframe" else self._contour_host
         for child in parent.winfo_children():
             child.destroy()
         # Move/rebuild table into the active working tab.
@@ -247,10 +247,10 @@ class ZoneStyleDialog(tk.Toplevel):
         canvas.bind("<Configure>", lambda e: canvas.itemconfigure(win, width=e.width))
 
         headers = ["Zone Number", "Zone Name", "Group", "Show Zone"]
-        if tab == "Mesh":
-            headers += ["Show Mesh", "Mesh Type", "Mesh Color", "Line Pattern"]
-        elif tab == "Contour":
-            headers += ["Show Contour"]
+        if tab == "Wireframe":
+            headers += ["Show Wireframe", "Wireframe Type", "Wireframe Color", "Line Pattern"]
+        elif tab == "Flood":
+            headers += ["Show Flood"]
 
         header = tk.Frame(inner, bg=HEADER_BG)
         header.pack(fill=tk.X)
@@ -295,7 +295,7 @@ class ZoneStyleDialog(tk.Toplevel):
             )
 
             col = 4
-            if tab == "Mesh":
+            if tab == "Wireframe":
                 tk.Checkbutton(row, variable=show_mesh, bg=bg, activebackground=bg).grid(
                     row=0, column=col
                 )
@@ -325,7 +325,7 @@ class ZoneStyleDialog(tk.Toplevel):
                 ) -> None:
                     rgb = parse_hex_rgb(var.get())
                     initial = "#%02x%02x%02x" % rgb if rgb else DEFAULT_MESH_COLOR
-                    picked = colorchooser.askcolor(color=initial, parent=self, title="Mesh Color")
+                    picked = colorchooser.askcolor(color=initial, parent=self, title="Wireframe Color")
                     if picked and picked[1]:
                         var.set(picked[1])
                         sw.configure(bg=picked[1])
@@ -347,7 +347,7 @@ class ZoneStyleDialog(tk.Toplevel):
                     state="readonly",
                     width=10,
                 ).grid(row=0, column=col, padx=2)
-            elif tab == "Contour":
+            elif tab == "Flood":
                 tk.Checkbutton(row, variable=show_contour, bg=bg, activebackground=bg).grid(
                     row=0, column=col
                 )
@@ -398,8 +398,8 @@ class ZoneStyleDialog(tk.Toplevel):
         for zs in self.styles:
             zs.show_zone = value
         tab = self._active_tab.get()
-        if tab in ("Mesh", "Contour"):
-            parent = self._host if tab == "Mesh" else self._contour_host
+        if tab in ("Wireframe", "Flood"):
+            parent = self._host if tab == "Wireframe" else self._contour_host
             for child in parent.winfo_children():
                 child.destroy()
             self._build_table(parent, tab)

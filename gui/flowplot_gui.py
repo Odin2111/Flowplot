@@ -273,13 +273,13 @@ class FlowplotGui(tk.Tk):
         menu.add_command(label="Quit", command=self.destroy)
 
     def _edit_menu_items(self, menu: tk.Menu) -> None:
-        menu.add_command(label="Clear probe markers", command=self.clear_probe_marks)
+        menu.add_command(label="Clear sample markers", command=self.clear_probe_marks)
         menu.add_command(label="Redraw", command=self.action_redraw)
 
     def _view_menu_items(self, menu: tk.Menu) -> None:
         for label in ("+X", "-X", "+Y", "-Y", "+Z", "-Z"):
             menu.add_command(
-                label=f"Look {label}",
+                label=f"Align {label}",
                 command=lambda v=label.lower(): self._set_axis_view(v),
             )
         menu.add_separator()
@@ -293,11 +293,11 @@ class FlowplotGui(tk.Tk):
         """Plot menu — only wired actions (no stub placeholders)."""
         menu.add_command(label="Zone Style…", command=self.action_zone_style)
         menu.add_separator()
-        menu.add_command(label="Contour Details…", command=self.action_contour_details)
+        menu.add_command(label="Flood Details…", command=self.action_contour_details)
         menu.add_command(label="Legend Options…", command=self.action_legend_options)
         menu.add_command(label="Pathlines (rake)…", command=self.action_pathlines_tool)
         menu.add_command(label="Iso-Surfaces…", command=self.action_isosurfaces)
-        menu.add_command(label="Slices…", command=self.action_slices_focus)
+        menu.add_command(label="Cuts…", command=self.action_slices_focus)
         menu.add_separator()
         menu.add_command(label="Clear pathline seeds", command=self.clear_pathline_seeds)
         menu.add_command(label="Redraw", command=self.action_redraw)
@@ -305,7 +305,7 @@ class FlowplotGui(tk.Tk):
 
     def _data_menu_items(self, menu: tk.Menu) -> None:
         menu.add_command(label="Dataset info…", command=self.action_dataset_info)
-        menu.add_command(label="Probe…", command=self.action_open_probe_window)
+        menu.add_command(label="Sample…", command=self.action_open_probe_window)
         menu.add_separator()
         menu.add_command(
             label="Extract profile…",
@@ -318,20 +318,20 @@ class FlowplotGui(tk.Tk):
 
     def _options_menu_items(self, menu: tk.Menu) -> None:
         menu.add_command(label="Legend Options…", command=self.action_legend_options)
-        menu.add_command(label="Contour Details…", command=self.action_contour_details)
+        menu.add_command(label="Flood Details…", command=self.action_contour_details)
         menu.add_separator()
         menu.add_radiobutton(label="Plot style · Default", variable=self.plot_style, value="default")
         menu.add_radiobutton(label="Plot style · JFM", variable=self.plot_style, value="jfm")
 
     def _tools_menu_items(self, menu: tk.Menu) -> None:
-        menu.add_command(label="Rotate (orbit)", command=self.action_rotate_tool)
-        menu.add_command(label="Pan / translate", command=self.action_pan_tool)
-        menu.add_command(label="Probe tool", command=self.action_toggle_probe)
+        menu.add_command(label="Orbit", command=self.action_rotate_tool)
+        menu.add_command(label="Translate", command=self.action_pan_tool)
+        menu.add_command(label="Sample tool", command=self.action_toggle_probe)
         menu.add_command(label="Pathlines rake", command=self.action_pathlines_tool)
         menu.add_separator()
         menu.add_command(label="More levels", command=self.action_contour_add_level)
         menu.add_command(label="Fewer levels", command=self.action_contour_remove_level)
-        menu.add_command(label="Contour labels", command=self.action_toggle_contour_labels)
+        menu.add_command(label="Flood labels", command=self.action_toggle_contour_labels)
 
     def _agents_cascade(self, parent: tk.Menu, title: str, items: list[tuple[str, str, str]]) -> None:
         """Add a categorized Agents submenu: (label, item_id, focus_group)."""
@@ -347,7 +347,7 @@ class FlowplotGui(tk.Tk):
         """Agents menu — named Agents, categorized by CFD applicability."""
         self._agents_cascade(
             menu,
-            "Positivity & sanity",
+            "Field integrity",
             [
                 ("Field sanity…", "field-sanity", "positivity-sanity"),
                 ("Positivity check…", "positivity-check", "positivity-sanity"),
@@ -364,7 +364,7 @@ class FlowplotGui(tk.Tk):
         )
         self._agents_cascade(
             menu,
-            "Reference values",
+            "Reference scales",
             [
                 ("Suggest / apply scales…", "nondim-suggest", "reference-values"),
                 ("Archival / ERCOFTAC scales…", "plot-agent-scales", "reference-values"),
@@ -372,9 +372,9 @@ class FlowplotGui(tk.Tk):
         )
         self._agents_cascade(
             menu,
-            "Calculate variables",
+            "Derived fields",
             [
-                ("Contour scalar…", "contour", "calculate-variables"),
+                ("Flood scalar…", "contour", "calculate-variables"),
                 ("Turbulence field…", "turbulence-field", "calculate-variables"),
             ],
         )
@@ -398,7 +398,7 @@ class FlowplotGui(tk.Tk):
         )
         self._agents_cascade(
             menu,
-            "Grid & mesh",
+            "Mesh checks",
             [
                 ("Mesh / zone inventory…", "mesh-inventory", "grid-mesh"),
                 ("Mesh wireframe…", "mesh-wireframe", "grid-mesh"),
@@ -407,7 +407,7 @@ class FlowplotGui(tk.Tk):
         )
         self._agents_cascade(
             menu,
-            "Geometry & boundaries",
+            "Boundaries",
             [
                 ("Zone / boundary inventory…", "zone-boundary-inventory", "geometry-boundaries"),
                 ("Wall / boundary field…", "wall-boundary-field", "geometry-boundaries"),
@@ -415,7 +415,7 @@ class FlowplotGui(tk.Tk):
         )
         self._agents_cascade(
             menu,
-            "Integration",
+            "Field integrals",
             [
                 ("Field mean / extrema…", "field-integrate-extrema", "integration"),
             ],
@@ -430,7 +430,7 @@ class FlowplotGui(tk.Tk):
         )
         self._agents_cascade(
             menu,
-            "Schlieren & shadowgraph",
+            "Optical diagnostics",
             [
                 ("Schlieren (primary / Crisp)…", "schlieren-primary", "optical"),
                 ("Schlieren (Chamarthi)…", "schlieren-chamarthi", "optical"),
@@ -585,7 +585,7 @@ class FlowplotGui(tk.Tk):
         self.viewport.bind("<ButtonRelease-3>", self._on_orbit_release)
         tip = ttk.Label(
             view_wrap,
-            text="Rotate tool: left-drag orbits · Pan tool: left-drag translates · mid/right always orbit · F=fit",
+            text="Orbit tool: left-drag orbits · Translate tool: left-drag translates · mid/right always orbit · F=fit",
             font=("Helvetica", 8),
             foreground=MUTED,
         )
@@ -644,12 +644,12 @@ class FlowplotGui(tk.Tk):
         layers.pack(fill=tk.X, padx=10, pady=(0, 8))
         # Fieldplot: checkbox + right-aligned gear → layer Details dialog.
         for label, var, toggle, settings in (
-            ("Mesh", self.layer_mesh, self.action_redraw, self.action_mesh_settings),
-            ("Contour", self.layer_contour, self.action_redraw, self.action_contour_details),
-            ("Shade", self.layer_shade, self.action_shade_layer, self.action_shade_settings),
-            ("Vector", self.layer_vector, self.action_vector_layer, self.action_vector_settings),
-            ("Edge", self.layer_edge, self.action_edge_layer, self.action_edge_settings),
-            ("Scatter", self.layer_scatter, self.action_scatter_layer, self.action_scatter_settings),
+            ("Wireframe", self.layer_mesh, self.action_redraw, self.action_mesh_settings),
+            ("Flood", self.layer_contour, self.action_redraw, self.action_contour_details),
+            ("Solid fill", self.layer_shade, self.action_shade_layer, self.action_shade_settings),
+            ("Glyphs", self.layer_vector, self.action_vector_layer, self.action_vector_settings),
+            ("Boundary", self.layer_edge, self.action_edge_layer, self.action_edge_settings),
+            ("Sample points", self.layer_scatter, self.action_scatter_layer, self.action_scatter_settings),
         ):
             add_layer_row(
                 layers,
@@ -669,7 +669,7 @@ class FlowplotGui(tk.Tk):
         ).pack(anchor="w")
         ttk.Checkbutton(
             derived,
-            text="Slices",
+            text="Cuts",
             variable=self.layer_slices,
             command=self._on_slices_checkbox,
         ).pack(anchor="w")
@@ -683,7 +683,7 @@ class FlowplotGui(tk.Tk):
             derived, text="Redraw", style="Tool.TButton", command=self.action_redraw
         ).pack(anchor="w", pady=(6, 0))
 
-        ttk.Label(parent, text="Contour variable", style="Muted.TLabel").pack(anchor="w", padx=12, pady=(4, 0))
+        ttk.Label(parent, text="Flood variable", style="Muted.TLabel").pack(anchor="w", padx=12, pady=(4, 0))
         self.var_combo = ttk.Combobox(
             parent,
             textvariable=self.var_name,
@@ -735,7 +735,7 @@ class FlowplotGui(tk.Tk):
         ttk.Button(parent, text="Zone Style…", style="Tool.TButton", command=self.action_zone_style).pack(
             padx=12, pady=(2, 4), anchor="w"
         )
-        ttk.Button(parent, text="Contour Details…", style="Tool.TButton", command=self.action_contour_details).pack(
+        ttk.Button(parent, text="Flood Details…", style="Tool.TButton", command=self.action_contour_details).pack(
             padx=12, pady=(2, 4), anchor="w"
         )
         ttk.Button(parent, text="Redraw layers", style="Tool.TButton", command=self.action_redraw).pack(
@@ -760,7 +760,7 @@ class FlowplotGui(tk.Tk):
                 command=lambda v=label.lower(): self._set_axis_view(v),
             ).pack(side=tk.LEFT, padx=1, pady=1)
 
-        rot_box = ttk.LabelFrame(parent, text="Rotate / Zoom", padding=(8, 6))
+        rot_box = ttk.LabelFrame(parent, text="Orbit / Zoom", padding=(8, 6))
         rot_box.pack(fill=tk.X, padx=8, pady=(0, 8))
         rot_row = ttk.Frame(rot_box, style="Panel.TFrame")
         rot_row.pack(fill=tk.X)
@@ -786,7 +786,7 @@ class FlowplotGui(tk.Tk):
         self.view_label.pack(anchor="w", pady=(6, 0))
         ttk.Label(
             parent,
-            text="Rotate ON → left-drag orbits\nPan ON → left-drag translates\nMid/right = orbit · F = fit",
+            text="Orbit ON → left-drag orbits\nTranslate ON → left-drag translates\nMid/right = orbit · F = fit",
             style="Muted.TLabel",
             justify=tk.LEFT,
         ).pack(anchor="w", padx=10, pady=(4, 8))
@@ -910,7 +910,7 @@ class FlowplotGui(tk.Tk):
         c.create_text(
             w // 2,
             h // 2 + 18,
-            text="File → Open shows Mesh (crate)\nEnable Contour layer for Pressure etc.",
+            text="File → Open shows Wireframe (crate)\nEnable Flood layer for Pressure etc.",
             fill="#8a97a1",
             font=("Helvetica", 10),
             justify=tk.CENTER,
@@ -1303,7 +1303,7 @@ class FlowplotGui(tk.Tk):
         self._kill_cli()
         self._render_gen += 1
         self._set_status(
-            f"Panning… pan=({self.view_pan_x:.0f},{self.view_pan_y:.0f}) · settle on release"
+            f"Translating… pan=({self.view_pan_x:.0f},{self.view_pan_y:.0f}) · settle on release"
         )
 
     def _on_pan_drag(self, event: tk.Event) -> None:
@@ -1316,14 +1316,14 @@ class FlowplotGui(tk.Tk):
         self.view_pan_y += float(dy)
         # Keep last PNG in place; domain pan is applied by CLI settle redraw.
         self._set_status(
-            f"Panning… pan=({self.view_pan_x:.0f},{self.view_pan_y:.0f}) · settle on release"
+            f"Translating… pan=({self.view_pan_x:.0f},{self.view_pan_y:.0f}) · settle on release"
         )
 
     def _on_pan_release(self, _event: tk.Event) -> None:
         self._pan_last = None
         self._panning = False
         self._set_status(
-            f"Pan ({self.view_pan_x:.0f},{self.view_pan_y:.0f}) · settling…"
+            f"Translate ({self.view_pan_x:.0f},{self.view_pan_y:.0f}) · settling…"
         )
         self._render_cache.clear()
         self._schedule_settle(delay_ms=50)
@@ -1528,7 +1528,7 @@ class FlowplotGui(tk.Tk):
         self._sync_contour_variable_widgets()
         self._log(f"variables: {', '.join(self.variables) if self.variables else '(none)'}")
         self._log(
-            f"default contour var: {self.var_name.get() or '(none)'} (Contour layer still off)"
+            f"default flood var: {self.var_name.get() or '(none)'} (Flood layer still off)"
         )
 
     def _sync_contour_variable_widgets(self) -> None:
@@ -1726,7 +1726,7 @@ class FlowplotGui(tk.Tk):
                 self.zone_ordered = None
                 self.zone_styles = []
         else:
-            self._log("warning: flowplot info failed — Mesh redraw may still work")
+            self._log("warning: flowplot info failed — Wireframe redraw may still work")
             self._set_variables([])
             self.effectively_2d = True
             self.zone_ordered = None
@@ -1752,7 +1752,7 @@ class FlowplotGui(tk.Tk):
         self._sync_contour_variable_widgets()
         if not self.variables:
             self.after(50, self._retry_variables_after_open)
-        self._set_status(f"{chosen.name} · Mesh on · Rotate tool")
+        self._set_status(f"{chosen.name} · Wireframe on · Orbit tool")
 
     def _retry_variables_after_open(self) -> None:
         """Second chance: if Mesh Open left Contour variable empty, re-query info."""
@@ -1763,7 +1763,7 @@ class FlowplotGui(tk.Tk):
             return
         proc = self._run_cli(["--json", "info", str(self.dataset_path)])
         if not (proc and proc.returncode == 0 and proc.stdout):
-            self._log("Contour variable still empty — info retry failed")
+            self._log("Flood variable still empty — info retry failed")
             self._sync_contour_variable_widgets()
             return
         try:
@@ -1771,11 +1771,11 @@ class FlowplotGui(tk.Tk):
             vars_ = payload.get("variables") or []
             if isinstance(vars_, list) and vars_:
                 self._set_variables([str(v) for v in vars_])
-                self._log("Contour variable list recovered after Open retry")
+                self._log("Flood variable list recovered after Open retry")
             else:
                 self._sync_contour_variable_widgets()
         except json.JSONDecodeError:
-            self._log("Contour variable retry: bad info JSON")
+            self._log("Flood variable retry: bad info JSON")
             self._sync_contour_variable_widgets()
 
     def _post_load_mesh_settle(self) -> None:
@@ -1789,7 +1789,7 @@ class FlowplotGui(tk.Tk):
         # Clear placeholder immediately so a slow CLI does not look like "no data".
         if self.last_png is None:
             self.viewport.delete("placeholder")
-            self._set_status(f"Drawing Mesh… {self.dataset_path.name}")
+            self._set_status(f"Drawing Wireframe… {self.dataset_path.name}")
         self._schedule_settle(delay_ms=10)
         # Second chance if the first settle was cancelled by a configure/select race.
         self.after(250, self._ensure_mesh_preview_after_load)
@@ -1805,7 +1805,7 @@ class FlowplotGui(tk.Tk):
             self._ensure_toolbar_visible()
             return
         # Still blank — force a Mesh-only redraw once.
-        self._log("Open settle missed Mesh PNG — forcing Mesh redraw")
+        self._log("Open settle missed Wireframe PNG — forcing Wireframe redraw")
         self.layer_mesh.set(True)
         self.action_redraw(interactive=False, mesh_only=True)
         self._ensure_toolbar_visible()
@@ -1989,21 +1989,21 @@ class FlowplotGui(tk.Tk):
             self._show_png_preview(stable)
             layers = []
             if want_mesh:
-                layers.append("Mesh")
+                layers.append("Wireframe")
             if want_shade and not self.layer_contour.get():
-                layers.append(f"Shade({var})")
+                layers.append(f"Solid fill({var})")
             elif self.layer_contour.get() and self.optical_kind:
                 layers.append(f"Optical({self.optical_kind}/{var})")
             elif self.layer_contour.get():
-                layers.append(f"Contour({var})")
+                layers.append(f"Flood({var})")
             if want_pathlines:
                 layers.append("Pathlines")
             if want_vector:
-                layers.append("Vector")
+                layers.append("Glyphs")
             if want_edge:
-                layers.append("Edge")
+                layers.append("Boundary")
             if want_scatter:
-                layers.append("Scatter")
+                layers.append("Sample points")
             if want_iso:
                 layers.append("Iso")
             tag = "preview" if quality == "preview" else "full"
@@ -2064,10 +2064,10 @@ class FlowplotGui(tk.Tk):
                 skipped = self._quietly_disable_scalar_layers()
                 self._log(
                     "No scalar variable available — skipped "
-                    + (", ".join(skipped) if skipped else "Contour/Iso")
-                    + "; drawing Mesh only."
+                    + (", ".join(skipped) if skipped else "Flood/Iso")
+                    + "; drawing Wireframe only."
                 )
-                self._set_status("No scalar var — Mesh only")
+                self._set_status("No scalar var — Wireframe only")
                 needs_scalar = False
                 want_contour = want_pathlines = want_vector = False
                 want_edge = want_scatter = want_iso = False
@@ -2169,11 +2169,11 @@ class FlowplotGui(tk.Tk):
         """Turn off Contour/Iso/… without a modal when no scalar variable exists."""
         skipped: list[str] = []
         for label, var in (
-            ("Contour", self.layer_contour),
-            ("Shade", self.layer_shade),
-            ("Vector", self.layer_vector),
-            ("Edge", self.layer_edge),
-            ("Scatter", self.layer_scatter),
+            ("Flood", self.layer_contour),
+            ("Solid fill", self.layer_shade),
+            ("Glyphs", self.layer_vector),
+            ("Boundary", self.layer_edge),
+            ("Sample points", self.layer_scatter),
             ("Iso-Surfaces", self.layer_isosurfaces),
             ("Pathlines", self.layer_pathlines),
         ):
@@ -2235,8 +2235,8 @@ class FlowplotGui(tk.Tk):
     def action_enable_contour(self) -> None:
         if not self._ensure_contour_var():
             self.layer_contour.set(False)
-            self._log("Contour skipped — no scalar variable in dataset")
-            self._set_status("Contour unavailable (no scalar)")
+            self._log("Flood skipped — no scalar variable in dataset")
+            self._set_status("Flood unavailable (no scalar)")
             return
         self.layer_contour.set(True)
         # Keep Zone Style Contour Show in sync for the active zone.
@@ -2277,7 +2277,7 @@ class FlowplotGui(tk.Tk):
         self.optical_kind = None
         self._refresh_levels_label()
         self.layer_contour.set(True)
-        self._log(f"Contour Details → var={self.var_name.get() or '(none)'}")
+        self._log(f"Flood Details → var={self.var_name.get() or '(none)'}")
         self._render_cache.clear()
         self.action_redraw()
 
@@ -2327,7 +2327,7 @@ class FlowplotGui(tk.Tk):
         if not self.var_name.get().strip() and self.variables:
             self.var_name.set(first_scalar(self.variables))
         self._refresh_levels_label()
-        self._log(f"Contour levels → {self.contour_details.nlevels} (banded)")
+        self._log(f"Flood levels → {self.contour_details.nlevels} (banded)")
         self._render_cache.clear()
         self.action_redraw()
 
@@ -2339,7 +2339,7 @@ class FlowplotGui(tk.Tk):
         if not self.var_name.get().strip() and self.variables:
             self.var_name.set(first_scalar(self.variables))
         self._refresh_levels_label()
-        self._log(f"Contour levels → {self.contour_details.nlevels} (banded)")
+        self._log(f"Flood levels → {self.contour_details.nlevels} (banded)")
         self._render_cache.clear()
         self.action_redraw()
 
@@ -2350,7 +2350,7 @@ class FlowplotGui(tk.Tk):
         ):
             self.contour_details.coloring = "Banded"
         self._refresh_levels_label()
-        self._log("Contour labels " + ("on" if self.contour_details.show_labels else "off"))
+        self._log("Flood labels " + ("on" if self.contour_details.show_labels else "off"))
         self.layer_contour.set(True)
         self._render_cache.clear()
         self.action_redraw()
@@ -2394,7 +2394,7 @@ class FlowplotGui(tk.Tk):
         self._drag_last = None
         if mode == "probe":
             self.viewport.configure(cursor="crosshair")
-            self._set_status("Probe — click Viewport")
+            self._set_status("Sample — click Viewport")
             self.action_open_probe_window()
         elif mode == "pathlines":
             self.viewport.configure(cursor="pencil")
@@ -2402,14 +2402,14 @@ class FlowplotGui(tk.Tk):
             self._set_status("Pathlines — click-drag a rake/seed line")
         elif mode == "pan":
             self.viewport.configure(cursor="fleur")
-            self._set_status("Pan / translate — left-drag moves the domain · F=fit")
+            self._set_status("Translate — left-drag moves the domain · F=fit")
         else:
             # Rotate: exchange-style cursor; left-drag orbits az/el.
             try:
                 self.viewport.configure(cursor="exchange")
             except tk.TclError:
                 self.viewport.configure(cursor="cross")
-            self._set_status("Rotate — left-drag orbits az/el · mid/right also orbit · F=fit")
+            self._set_status("Orbit — left-drag orbits az/el · mid/right also orbit · F=fit")
         if hasattr(self, "_icon_toolbar"):
             self._icon_toolbar.set_active_tools({mode})
         if prev != mode:
@@ -2419,12 +2419,12 @@ class FlowplotGui(tk.Tk):
     def action_rotate_tool(self) -> None:
         """Curved-arrow Rotate toolbar — exclusive orbit tool (left-drag az/el)."""
         self._set_tool_mode("rotate")
-        self._log("Rotate tool ON — left-drag orbits the domain")
+        self._log("Orbit tool ON — left-drag orbits the domain")
 
     def action_pan_tool(self) -> None:
         """Pan / translate tool — left-drag moves the domain in screen space."""
         self._set_tool_mode("pan")
-        self._log("Pan tool ON — left-drag translates the domain")
+        self._log("Translate tool ON — left-drag translates the domain")
 
     def _ensure_pathline_velocity_vars(self) -> bool:
         """Fill U/V(/W) from dataset names when empty. Returns False if U/V missing."""
@@ -2505,7 +2505,7 @@ class FlowplotGui(tk.Tk):
     def clear_probe_marks(self) -> None:
         self.probe_marks.clear()
         self.viewport.delete("probe")
-        self._log("Probe markers cleared")
+        self._log("Sample markers cleared")
 
     def clear_pathline_seeds(self) -> None:
         self.pathline_seeds.clear()
@@ -2555,12 +2555,12 @@ class FlowplotGui(tk.Tk):
         pw, ph = self._preview_size
         nw, nh = self._preview_native
         if pw < 2 or ph < 2 or nw < 2 or nh < 2:
-            self._log("Probe: no preview mapped yet — redraw first")
+            self._log("Sample: no preview mapped yet — redraw first")
             return
         lx = cx - ox
         ly = cy - oy
         if lx < 0 or ly < 0 or lx >= pw or ly >= ph:
-            self._log("Probe: click outside the plot image")
+            self._log("Sample: click outside the plot image")
             return
         px = int(lx * nw / pw)
         py = int(ly * nh / ph)
@@ -2886,7 +2886,7 @@ class FlowplotGui(tk.Tk):
         if not self.vector_w.get().strip():
             self.vector_w.set(gw)
         dlg = tk.Toplevel(self)
-        dlg.title("Vector variables")
+        dlg.title("Glyphs variables")
         dlg.geometry("340x200")
         dlg.resizable(False, False)
         stay_above(dlg, self, modal=True)
@@ -2905,7 +2905,7 @@ class FlowplotGui(tk.Tk):
 
         def ok() -> None:
             if not self.vector_u.get().strip() or not self.vector_v.get().strip():
-                messagebox.showwarning("Vector", "U and V are required.", parent=dlg)
+                messagebox.showwarning("Glyphs", "U and V are required.", parent=dlg)
                 return
             result["ok"] = True
             dlg.destroy()
@@ -2928,12 +2928,12 @@ class FlowplotGui(tk.Tk):
         if self.layer_shade.get():
             if not self._ensure_contour_var():
                 self.layer_shade.set(False)
-                self._log("Shade skipped — no scalar variable in dataset")
-                self._set_status("Shade unavailable (no scalar)")
+                self._log("Solid fill skipped — no scalar variable in dataset")
+                self._set_status("Solid fill unavailable (no scalar)")
                 return
-            self._log(f"Shade on → continuous flood ({self.var_name.get()})")
+            self._log(f"Solid fill on → continuous flood ({self.var_name.get()})")
         else:
-            self._log("Shade off")
+            self._log("Solid fill off")
         self._render_cache.clear()
         self.action_redraw()
 
@@ -2963,7 +2963,7 @@ class FlowplotGui(tk.Tk):
             if picked:
                 self.var_name.set(picked)
         self._log(
-            f"Shade Details: mode={state.color_mode} lighting={state.lighting} "
+            f"Solid fill Details: mode={state.color_mode} lighting={state.lighting} "
             f"var={self.var_name.get() or '(none)'}"
         )
         self._render_cache.clear()
@@ -2978,7 +2978,7 @@ class FlowplotGui(tk.Tk):
             self.layer_vector.set(False)
             return
         self._log(
-            f"Vector: U={self.vector_u.get()} V={self.vector_v.get()} W={self.vector_w.get() or '(none)'}"
+            f"Glyphs: U={self.vector_u.get()} V={self.vector_v.get()} W={self.vector_w.get() or '(none)'}"
         )
         self._render_cache.clear()
         self.action_redraw()
@@ -3010,18 +3010,18 @@ class FlowplotGui(tk.Tk):
     def _apply_vector_details(self, state: VectorDetailsState) -> None:
         self.vector_details = state
         if not self.vector_u.get().strip() or not self.vector_v.get().strip():
-            messagebox.showwarning("Vector", "U and V are required.", parent=self)
+            messagebox.showwarning("Glyphs", "U and V are required.", parent=self)
             return
         self.layer_vector.set(True)
         self._log(
-            f"Vector Details: U={self.vector_u.get()} V={self.vector_v.get()} "
+            f"Glyphs Details: U={self.vector_u.get()} V={self.vector_v.get()} "
             f"skip={state.skip}"
         )
         self._render_cache.clear()
         self.action_redraw()
 
     def action_edge_layer(self) -> None:
-        self._log("Edge " + ("on" if self.layer_edge.get() else "off"))
+        self._log("Boundary " + ("on" if self.layer_edge.get() else "off"))
         self._render_cache.clear()
         self.action_redraw()
 
@@ -3041,12 +3041,12 @@ class FlowplotGui(tk.Tk):
     def _apply_edge_details(self, state: EdgeDetailsState) -> None:
         self.edge_details = state
         self.layer_edge.set(True)
-        self._log(f"Edge Details: color={state.color} pattern={state.line_pattern}")
+        self._log(f"Boundary Details: color={state.color} pattern={state.line_pattern}")
         self._render_cache.clear()
         self.action_redraw()
 
     def action_scatter_layer(self) -> None:
-        self._log("Scatter " + ("on" if self.layer_scatter.get() else "off"))
+        self._log("Sample points " + ("on" if self.layer_scatter.get() else "off"))
         self._render_cache.clear()
         self.action_redraw()
 
@@ -3066,7 +3066,7 @@ class FlowplotGui(tk.Tk):
     def _apply_scatter_details(self, state: ScatterDetailsState) -> None:
         self.scatter_details = state
         self.layer_scatter.set(True)
-        self._log(f"Scatter Details: skip={state.skip} color={state.color}")
+        self._log(f"Sample points Details: skip={state.skip} color={state.color}")
         self._render_cache.clear()
         self.action_redraw()
 
@@ -3162,7 +3162,7 @@ class FlowplotGui(tk.Tk):
             self,
             self.zone_styles,
             on_apply=self._apply_zone_styles,
-            initial_tab="Mesh",
+            initial_tab="Wireframe",
         )
         self._zone_style_dialog = dlg
 
@@ -3432,7 +3432,7 @@ class FlowplotGui(tk.Tk):
         messagebox.showinfo(
             "About Fieldplot",
             "Fieldplot — CFD post-processor\n"
-            "Fieldplot menus + Plot panel (Mesh first).\n"
+            "Fieldplot menus + Plot panel (Wireframe first).\n"
             "Agents menu: positivity, profiles, shocks, hypersonic, grid, …\n"
             "Checks apply to any loaded CFD dataset (physics/numerics).\n"
             "CLI binary remains `flowplot` for now.\n"
@@ -3506,7 +3506,7 @@ def _capture_and_quit(app: FlowplotGui, out: Path) -> None:
     draw.rectangle((8, 48, 248, h - 28), fill="#e2e5e8")
     draw.text((20, 60), "Plot", fill="#1f2a33")
     draw.text((20, 90), f"type: {app.plot_type.get()}", fill="#5c6b76")
-    draw.text((20, 110), f"Mesh: {app.layer_mesh.get()}", fill="#5c6b76")
+    draw.text((20, 110), f"Wireframe: {app.layer_mesh.get()}", fill="#5c6b76")
     draw.text((20, 130), f"Contour: {app.layer_contour.get()}", fill="#5c6b76")
 
     vx0, vy0, vx1, vy1 = 256, 48, w - 216, h - 28

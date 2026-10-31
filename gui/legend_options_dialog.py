@@ -22,7 +22,7 @@ ALIGNS = ("Right", "Left")
 
 @dataclass
 class LegendOptionsState:
-    """Contour Details → Legend working slice."""
+    """Flood Details → Legend working slice."""
 
     show: bool = True
     align: str = "Right"  # Right | Left
@@ -69,7 +69,7 @@ class LegendOptionsDialog(tk.Toplevel):
         ).pack(side=tk.LEFT, padx=12, pady=8)
         tk.Label(
             hdr,
-            text="Contour Details → Legend",
+            text="Flood Details → Legend",
             bg=HEADER_BG,
             fg=MUTED,
             font=("Helvetica", 8),
@@ -105,7 +105,7 @@ class LegendOptionsDialog(tk.Toplevel):
 
         tk.Label(
             body,
-            text="Apply redraws Contour with the colorbar on the chosen side.\n"
+            text="Apply redraws Flood with the colorbar on the chosen side.\n"
             "Font 0 keeps the VisIt-quality auto size from raster width.",
             bg=PANEL,
             fg=MUTED,

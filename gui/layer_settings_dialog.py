@@ -126,12 +126,12 @@ def draw_scatter_gear(c: tk.Canvas) -> None:
 
 
 LAYER_GEAR_DRAWERS: dict[str, Callable[[tk.Canvas], None]] = {
-    "Mesh": draw_mesh_gear,
-    "Contour": draw_contour_gear,
-    "Shade": draw_shade_gear,
-    "Vector": draw_vector_gear,
-    "Edge": draw_edge_gear,
-    "Scatter": draw_scatter_gear,
+    "Wireframe": draw_mesh_gear,
+    "Flood": draw_contour_gear,
+    "Solid fill": draw_shade_gear,
+    "Glyphs": draw_vector_gear,
+    "Boundary": draw_edge_gear,
+    "Sample points": draw_scatter_gear,
 }
 
 
@@ -224,8 +224,8 @@ class _LayerDetailsBase(tk.Toplevel):
 
 
 class ShadeDetailsDialog(_LayerDetailsBase):
-    title_text = "Shade Details"
-    subtitle = "Flood under mesh"
+    title_text = "Solid fill Details"
+    subtitle = "Flood under wireframe"
 
     def __init__(
         self,
@@ -274,7 +274,7 @@ class ShadeDetailsDialog(_LayerDetailsBase):
 
         def _pick() -> None:
             picked = colorchooser.askcolor(
-                color=self.rgb.get() or "#808080", parent=self, title="Shade RGB"
+                color=self.rgb.get() or "#808080", parent=self, title="Solid fill RGB"
             )
             if picked and picked[1]:
                 self.rgb.set(picked[1])
@@ -292,7 +292,7 @@ class ShadeDetailsDialog(_LayerDetailsBase):
         ).pack(side=tk.LEFT)
         tk.Label(
             rgb_row,
-            text="(solid fill when not using Contour coloring)",
+            text="(solid fill when not using Flood coloring)",
             bg=PANEL,
             fg=MUTED,
             font=("Helvetica", 8),
@@ -300,7 +300,7 @@ class ShadeDetailsDialog(_LayerDetailsBase):
 
         ttk.Checkbutton(
             self.body,
-            text="Use active Contour variable for flood",
+            text="Use active Flood variable for flood",
             variable=self.use_active,
         ).pack(anchor="w", padx=12, pady=4)
         if self._variables:
@@ -327,8 +327,8 @@ class ShadeDetailsDialog(_LayerDetailsBase):
         ).pack(side=tk.LEFT, padx=8)
         tk.Label(
             self.body,
-            text="Shade alone forces continuous flood under Mesh wires.\n"
-            "Contour Details coloring wins when Contour is also on.",
+            text="Solid fill alone forces continuous flood under Wireframe.\n"
+            "Flood Details coloring wins when Flood is also on.",
             bg=PANEL,
             fg=MUTED,
             justify=tk.LEFT,
@@ -354,7 +354,7 @@ class ShadeDetailsDialog(_LayerDetailsBase):
 
 
 class VectorDetailsDialog(_LayerDetailsBase):
-    title_text = "Vector Details"
+    title_text = "Glyphs Details"
     subtitle = "U / V / W components"
 
     def __init__(
@@ -424,8 +424,8 @@ class VectorDetailsDialog(_LayerDetailsBase):
 
 
 class EdgeDetailsDialog(_LayerDetailsBase):
-    title_text = "Edge Details"
-    subtitle = "Boundary wireframe"
+    title_text = "Boundary Details"
+    subtitle = "Domain boundary"
 
     def __init__(
         self,
@@ -445,7 +445,7 @@ class EdgeDetailsDialog(_LayerDetailsBase):
     def _build_body(self) -> None:
         row = tk.Frame(self.body, bg=PANEL)
         row.pack(anchor="w", fill=tk.X, padx=12, pady=12)
-        tk.Label(row, text="Edge color", bg=PANEL, fg=FG).pack(side=tk.LEFT)
+        tk.Label(row, text="Boundary color", bg=PANEL, fg=FG).pack(side=tk.LEFT)
         self._swatch = tk.Label(
             row, text="  ", bg=self.color.get() or DEFAULT_EDGE_COLOR, width=3, relief=tk.GROOVE
         )
@@ -453,7 +453,7 @@ class EdgeDetailsDialog(_LayerDetailsBase):
 
         def _pick() -> None:
             picked = colorchooser.askcolor(
-                color=self.color.get() or DEFAULT_EDGE_COLOR, parent=self, title="Edge Color"
+                color=self.color.get() or DEFAULT_EDGE_COLOR, parent=self, title="Boundary Color"
             )
             if picked and picked[1]:
                 self.color.set(picked[1])
@@ -482,7 +482,7 @@ class EdgeDetailsDialog(_LayerDetailsBase):
         ).pack(side=tk.LEFT, padx=8)
         tk.Label(
             self.body,
-            text="Edge draws the ordered-grid perimeter (--edges).\n"
+            text="Boundary draws the ordered-grid perimeter (--edges).\n"
             "Color/pattern are stored for the next overlay pass.",
             bg=PANEL,
             fg=MUTED,
@@ -504,7 +504,7 @@ class EdgeDetailsDialog(_LayerDetailsBase):
 
 
 class ScatterDetailsDialog(_LayerDetailsBase):
-    title_text = "Scatter Details"
+    title_text = "Sample points Details"
     subtitle = "Nodal markers"
 
     def __init__(
@@ -544,7 +544,7 @@ class ScatterDetailsDialog(_LayerDetailsBase):
             picked = colorchooser.askcolor(
                 color=self.color.get() or DEFAULT_SCATTER_COLOR,
                 parent=self,
-                title="Scatter Color",
+                title="Sample points Color",
             )
             if picked and picked[1]:
                 self.color.set(picked[1])

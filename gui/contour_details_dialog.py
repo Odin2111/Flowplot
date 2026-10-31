@@ -88,7 +88,7 @@ class ContourDetailsDialog(tk.Toplevel):
         variable: str = "",
     ) -> None:
         super().__init__(master)
-        self.title("Contour & Multi-Coloring Details")
+        self.title("Flood & Multi-Coloring Details")
         self.configure(bg=BG)
         self.resizable(True, True)
         self.geometry("520x460")
@@ -153,7 +153,7 @@ class ContourDetailsDialog(tk.Toplevel):
         hdr.pack(side=tk.TOP, fill=tk.X)
         tk.Label(
             hdr,
-            text="Contour Details",
+            text="Flood Details",
             bg=HEADER_BG,
             fg=FG,
             font=("Helvetica", 11, "bold"),
@@ -200,7 +200,7 @@ class ContourDetailsDialog(tk.Toplevel):
         pad = {"padx": 12, "pady": 6}
         tk.Label(
             parent,
-            text="Contour variable",
+            text="Flood variable",
             bg=PANEL,
             fg=ACCENT,
             font=("Helvetica", 9, "bold"),

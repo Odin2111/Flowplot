@@ -38,7 +38,7 @@ def ask_export_png(
     preset = tk.StringVar(value="jfm-crisp" if initial_style == "jfm" else "current")
     ttk.Radiobutton(
         body,
-        text="Current Viewport (interactive Contour Details)",
+        text="Current Viewport (interactive Flood Details)",
         variable=preset,
         value="current",
     ).pack(anchor="w", pady=2)

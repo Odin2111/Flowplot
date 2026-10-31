@@ -629,7 +629,7 @@ class AgentsPanel(tk.Toplevel):
                 self,
                 variables=self.variables,
                 initial=initial,
-                title=self._items.get(item_id, {}).get("title") or "Contour",
+                title=self._items.get(item_id, {}).get("title") or "Flood",
                 hint=hint,
             )
             if not chosen:

@@ -4,7 +4,7 @@ Rust CFD post-processing library with a zone/variable data model:
 
 **Dataset → Zone → named Variables**, with ordered (I / IJ / IJK) or finite-element connectivity, and nodal or cell-centered values.
 
-This slice adds **mesh (wireframe) PNGs**, **scalar contour PNGs**, **reference-scale nondimensionalization** (CLI/config), and **pathlines** (streamlines of the velocity field). The **GUI** Plot panel defaults to Mesh on, Contour optional (`gui/`).
+This slice adds **mesh (wireframe) PNGs**, **scalar contour PNGs**, **reference-scale nondimensionalization** (CLI/config), and **pathlines** (streamlines of the velocity field). The **GUI** Plot panel defaults to Wireframe on, Flood optional (`gui/`).
 
 ## Build
 
@@ -36,7 +36,7 @@ cargo build
 python3 gui/flowplot_gui.py
 ```
 
-**File → Open** runs `info`, fills the variable list, enables **Mesh**, leaves **Contour** off, and fills the Viewport (no letterbox waste). Turn on Contour (and pick e.g. `Pressure`) to overlay. Contour toolbar under the menu: **＋/－** levels, **Abc** labels, **✎ Probe** (click prints values on the plot), **Details…** → Contour & Multi-Coloring Details. **XYZ** buttons and viewport drag rotate; **Cut / Track** sets the plane. **Plot → Zone Style…** / **Plot → Contour…** for zone and contour details. See [docs/gui-layout.md](docs/gui-layout.md).
+**File → Open** runs `info`, fills the variable list, enables **Wireframe**, leaves **Flood** off, and fills the Viewport (no letterbox waste). Turn on Flood (and pick e.g. `Pressure`) to overlay. Flood toolbar under the menu: **＋/－** levels, **Abc** labels, **✎ Sample** (click prints values on the plot), **Details…** → Flood & Multi-Coloring Details. **Align ±X/Y/Z** and viewport drag orbit; **Cut / Track** sets the plane. **Plot → Zone Style…** / **Plot → Flood Details…** for zone and flood details. See [docs/gui-layout.md](docs/gui-layout.md).
 
 ## CLI
 

@@ -191,7 +191,7 @@ def build_fieldplot_icon_toolbar(parent: tk.Misc, gui) -> IconToolbar:
     bar.add_icon(
         IconSpec(
             "rotate",
-            "Rotate — left-drag orbits az/el",
+            "Orbit — left-drag orbits az/el",
             draw_rotate,
             gui.action_rotate_tool,
         )
@@ -199,7 +199,7 @@ def build_fieldplot_icon_toolbar(parent: tk.Misc, gui) -> IconToolbar:
     bar.add_icon(
         IconSpec(
             "pan",
-            "Pan / translate — left-drag moves the domain",
+            "Translate — left-drag moves the domain",
             draw_pan,
             gui.action_pan_tool,
         )
@@ -221,8 +221,8 @@ def build_fieldplot_icon_toolbar(parent: tk.Misc, gui) -> IconToolbar:
             )
         )
     bar.add_separator()
-    bar.add_icon(IconSpec("probe", "Probe tool", draw_probe, gui.action_toggle_probe))
-    bar.add_icon(IconSpec("slice", "Slices / cut plane", draw_slice, gui.action_slices_focus))
+    bar.add_icon(IconSpec("probe", "Sample tool", draw_probe, gui.action_toggle_probe))
+    bar.add_icon(IconSpec("slice", "Cut plane", draw_slice, gui.action_slices_focus))
     bar.add_separator()
     bar.add_icon(
         IconSpec("levels_minus", "Fewer contour levels", draw_levels_minus, gui.action_contour_remove_level)
@@ -231,7 +231,7 @@ def build_fieldplot_icon_toolbar(parent: tk.Misc, gui) -> IconToolbar:
         IconSpec("levels_plus", "More contour levels", draw_levels_plus, gui.action_contour_add_level)
     )
     bar.add_icon(
-        IconSpec("labels", "Contour labels", draw_labels, gui.action_toggle_contour_labels)
+        IconSpec("labels", "Flood labels", draw_labels, gui.action_toggle_contour_labels)
     )
     bar.add_icon(
         IconSpec("pathlines", "Pathlines rake", draw_pathlines, gui.action_pathlines_tool)
