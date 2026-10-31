@@ -6,12 +6,14 @@
 
 mod cgns;
 mod fluent;
+mod silo_hdf5;
 mod tecplot;
 mod tecplot_binary;
 mod vtk;
 
 pub use cgns::CgnsReader;
 pub use fluent::FluentReader;
+pub use silo_hdf5::SiloHdf5Reader;
 pub use tecplot::TecplotAsciiReader;
 pub use tecplot_binary::TecplotBinaryReader;
 pub use vtk::{VtkLegacyAsciiReader, VtkXmlReader};
@@ -59,6 +61,8 @@ pub fn load_path(path: &Path) -> Result<Dataset> {
         "vtk" => VtkLegacyAsciiReader.read_path(path),
         "vtu" | "vtp" | "vti" | "vts" | "vtr" | "pvtu" | "pvtp" => VtkXmlReader.read_path(path),
         "cgns" | "cgz" => CgnsReader.read_path(path),
+        // Internal: Silo-compatible / HDF5 stub. UI lists these under Open dataset filters.
+        "h5" | "hdf5" | "he5" | "silo" | "pdb" => SiloHdf5Reader.read_path(path),
         _ => Err(Error::UnsupportedFormat {
             path: path.to_path_buf(),
         }),

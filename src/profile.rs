@@ -155,6 +155,60 @@ pub fn extract_profile(
     }
 }
 
+/// World-space line sample (Fieldplot **Line sample** / VisIt Lineout analogue).
+///
+/// Samples `n` points from `(x0,y0)` → `(x1,y1)` with bilinear interpolation.
+pub fn extract_line_sample(
+    ds: &Dataset,
+    var: &str,
+    zone_idx: usize,
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+    n: usize,
+    plane: PlaneSpec,
+) -> Result<Profile> {
+    if n < 2 {
+        return Err(Error::plot("line sample needs at least 2 points (--n)"));
+    }
+    let var_idx = find_var(ds, var)?;
+    let grid = extract_scalar_grid(ds, zone_idx, var_idx, plane)?;
+    let mut samples = Vec::with_capacity(n);
+    for i in 0..n {
+        let t = i as f64 / (n - 1) as f64;
+        let x = x0 + t * (x1 - x0);
+        let y = y0 + t * (y1 - y0);
+        let value = grid.sample(x, y).ok_or_else(|| {
+            Error::plot(format!(
+                "line sample point ({x}, {y}) is outside the active plane"
+            ))
+        })?;
+        let s = t * ((x1 - x0).hypot(y1 - y0));
+        samples.push(ProfileSample { s, x, y, value });
+    }
+    Ok(Profile {
+        variable: var.to_string(),
+        zone: zone_idx,
+        axis: "line".into(),
+        index: n,
+        samples,
+    })
+}
+
+/// CSV text for a line sample / profile (`s,x,y,value` header).
+pub fn profile_to_csv(profile: &Profile) -> String {
+    let mut out = String::from("# Fieldplot line sample\n");
+    out.push_str("s,x,y,value\n");
+    for s in &profile.samples {
+        out.push_str(&format!(
+            "{:.10},{:.10},{:.10},{:.10}\n",
+            s.s, s.x, s.y, s.value
+        ));
+    }
+    out
+}
+
 /// Optional RMSE vs a two-column reference CSV (`s,value` or `x,value`).
 pub fn compare_profile_rmse(profile: &Profile, ref_s: &[f64], ref_v: &[f64]) -> Option<f64> {
     if ref_s.len() != ref_v.len() || ref_s.is_empty() || profile.samples.is_empty() {

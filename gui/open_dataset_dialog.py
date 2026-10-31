@@ -35,6 +35,11 @@ CFD_GLOBS = (
     "*.vts",
     "*.vtr",
     "*.cas",
+    "*.h5",
+    "*.hdf5",
+    "*.he5",
+    "*.silo",
+    "*.pdb",
 )
 
 FILTERS: list[tuple[str, tuple[str, ...]]] = [
@@ -43,6 +48,8 @@ FILTERS: list[tuple[str, tuple[str, ...]]] = [
     ("CGNS", ("*.cgns", "*.cgz")),
     ("VTK", ("*.vtk", "*.vtu", "*.vtp", "*.vti", "*.vts", "*.vtr")),
     ("Fluent", ("*.cas", "*.dat")),
+    # Open dataset formats — no third-party product brands in the label.
+    ("HDF5 / mesh database", ("*.h5", "*.hdf5", "*.he5", "*.silo", "*.pdb")),
     ("All files", ("*",)),
 ]
 
