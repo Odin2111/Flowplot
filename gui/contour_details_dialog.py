@@ -1,8 +1,7 @@
-"""Tecplot-like Contour & Multi-Coloring Details dialog.
+"""Contour & Multi-Coloring Details dialog (Fieldplot).
 
-Tabs mirror Tecplot 360 Contour Details: Levels and Color, Bands, Lines,
-Labels, Legend. Working slice: levels count, colormap, banded vs continuous,
-legend on/off. Other controls are labeled stubs.
+Tabs: Levels and Color, Bands, Lines, Labels, Legend. Working slice: contour
+variable, levels count, colormap, banded vs continuous, legend on/off.
 """
 
 from __future__ import annotations
@@ -40,7 +39,7 @@ DETAIL_TABS = ("Levels and Color", "Bands", "Lines", "Labels", "Legend")
 
 @dataclass
 class ContourDetailsState:
-    """Contour Details working slice (Tecplot Contour & Multi-Coloring)."""
+    """Contour Details working slice (levels, color, legend)."""
 
     coloring: str = "Continuous"  # Continuous | Banded
     nlevels: int = 16
@@ -53,6 +52,7 @@ class ContourDetailsState:
     label_skip: int = 1  # stub
     band_min: float | None = None  # stub
     band_max: float | None = None  # stub
+    variable: str = ""  # active contour scalar (zone variable name)
 
     def cli_coloring(self) -> str:
         return "banded" if self.coloring.lower().startswith("band") else "continuous"
@@ -76,23 +76,35 @@ class ContourDetailsState:
 
 
 class ContourDetailsDialog(tk.Toplevel):
-    """Side/modal Contour Details notebook."""
+    """Contour Details notebook with zone-scalar variable picker."""
 
     def __init__(
         self,
         master: tk.Misc,
         state: ContourDetailsState,
         on_apply: Callable[[ContourDetailsState], None],
+        *,
+        variables: list[str] | None = None,
+        variable: str = "",
     ) -> None:
         super().__init__(master)
         self.title("Contour & Multi-Coloring Details")
         self.configure(bg=BG)
         self.resizable(True, True)
-        self.geometry("520x420")
-        self.minsize(440, 360)
+        self.geometry("520x460")
+        self.minsize(440, 380)
         self.state = replace(state)
         self._on_apply = on_apply
+        self._variables = list(variables or [])
 
+        initial_var = (variable or state.variable or "").strip()
+        if initial_var and initial_var not in self._variables and self._variables:
+            # Keep stale name visible until dataset refresh.
+            pass
+        if not initial_var and self._variables:
+            initial_var = self._variables[0]
+
+        self.variable_var = tk.StringVar(value=initial_var)
         self.coloring_var = tk.StringVar(value=self.state.coloring)
         self.nlevels_var = tk.IntVar(value=max(2, int(self.state.nlevels)))
         self.colormap_var = tk.StringVar(value=self.state.colormap)
@@ -107,6 +119,20 @@ class ContourDetailsDialog(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         stay_above(self, master, modal=False)
 
+    def set_variables(self, variables: list[str], variable: str = "") -> None:
+        """Refresh scalar list after File → Open (keep dialog open)."""
+        self._variables = list(variables or [])
+        if self._var_combo is not None:
+            self._var_combo.configure(
+                values=self._variables,
+                state="readonly" if self._variables else "disabled",
+            )
+        chosen = (variable or self.variable_var.get() or "").strip()
+        if chosen and chosen in self._variables:
+            self.variable_var.set(chosen)
+        elif self._variables and self.variable_var.get() not in self._variables:
+            self.variable_var.set(self._variables[0])
+
     def _build(self) -> None:
         hdr = tk.Frame(self, bg=HEADER_BG)
         hdr.pack(side=tk.TOP, fill=tk.X)
@@ -119,7 +145,7 @@ class ContourDetailsDialog(tk.Toplevel):
         ).pack(side=tk.LEFT, padx=12, pady=8)
         tk.Label(
             hdr,
-            text="Tecplot-like Levels · Color · Legend",
+            text="Levels · Color · Legend",
             bg=HEADER_BG,
             fg=MUTED,
             font=("Helvetica", 8),
@@ -157,6 +183,29 @@ class ContourDetailsDialog(tk.Toplevel):
 
     def _build_levels_tab(self, parent: tk.Frame) -> None:
         pad = {"padx": 12, "pady": 6}
+        tk.Label(
+            parent,
+            text="Contour variable",
+            bg=PANEL,
+            fg=ACCENT,
+            font=("Helvetica", 9, "bold"),
+        ).pack(anchor="w", **pad)
+        self._var_combo = ttk.Combobox(
+            parent,
+            textvariable=self.variable_var,
+            values=self._variables,
+            state="readonly" if self._variables else "disabled",
+            width=28,
+        )
+        self._var_combo.pack(anchor="w", padx=12)
+        tk.Label(
+            parent,
+            text="All zone scalars (Mach, Pressure, Temperature, …). Apply redraws.",
+            bg=PANEL,
+            fg=MUTED,
+            font=("Helvetica", 8),
+        ).pack(anchor="w", padx=12, pady=(2, 8))
+
         tk.Label(
             parent,
             text="Coloring",
@@ -264,7 +313,7 @@ class ContourDetailsDialog(tk.Toplevel):
         ).pack(side=tk.LEFT, padx=8)
         tk.Label(
             parent,
-            text="Matches Tecplot Contour Details → Legend. Toolbar also has Legend Options…",
+            text="Same options as Plot → Legend Options… / toolbar Legend.",
             bg=PANEL,
             fg=MUTED,
             font=("Helvetica", 8),
@@ -306,5 +355,6 @@ class ContourDetailsDialog(tk.Toplevel):
             show_lines=bool(self.lines_var.get()),
             show_labels=bool(self.labels_var.get()),
             label_skip=max(1, int(self.label_skip_var.get() or 1)),
+            variable=(self.variable_var.get() or "").strip(),
         )
         self._on_apply(self.state)

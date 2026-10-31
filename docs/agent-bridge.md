@@ -1,6 +1,6 @@
 # Agent bridge (lehar ↔ Flowplot)
 
-`lehar-agent` (and sibling plot skills) should drive Flowplot through the **CLI JSON contract** or the thin **stdio MCP** wrapper. Do not call Tecplot 360 / PyTecplot for ASCII cases Flowplot already reads, and do not invent proprietary binary readers.
+`lehar-agent` (and sibling plot skills) should drive Flowplot through the **CLI JSON contract** or the thin **stdio MCP** wrapper. Do not call external proprietary GUI/plot APIs for ASCII cases Flowplot already reads, and do not invent proprietary binary readers.
 
 ## CLI (stable agent contract)
 
@@ -35,12 +35,12 @@ Tools: `flowplot_load`, `flowplot_contour`, `flowplot_nondim`, `flowplot_pathlin
 | lehar surface | Flowplot call |
 |---|---|
 | `lehar-agent data inspect` (ASCII `.dat`/`.tec` discovery) | `flowplot load <file> --json` for zone/variable inventory |
-| Field / research figures (`tecplot_animation`, `research_figures`, `observability_plots`) | `contour` / `pathlines` PNG artifacts under the run `engineering/` or `plots/` tree |
+| Field / research figures (`plt-animation-ascii`, `research_figures`, `observability_plots`) | `contour` / `pathlines` PNG artifacts under the run `engineering/` or `plots/` tree |
 | Case nondim / ERCOFTAC-style audits (`plot-agent`, BL agents) | `nondim --json` then pass the same scales into `contour` / `pathlines` |
 | FastAPI `POST /api/v1/runs/{run_id}/engineering/{agent_id}` | Agent implementation shells CLI or MCP; returns `AgentArtifact.plots` paths |
-| `artifact export-plot` | Prefer Flowplot PNG when the source is public Tecplot/VTK ASCII |
+| `artifact export-plot` | Prefer Flowplot PNG when the source is public PLT/VTK ASCII |
 
-Binary `.plt` / `.szplt` stays on lehar’s native Tecplot111 / optional PyTecplot / VisIt adapters — Flowplot deliberately does not reverse-engineer those.
+Binary `.szplt` and other proprietary packs stay on lehar/VisIt adapters — Flowplot reads public `.plt` layouts only and does not reverse-engineer closed formats.
 
 ## Suggested agent workflow
 

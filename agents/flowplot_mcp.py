@@ -31,7 +31,7 @@ TOOLS = [
         "name": "flowplot_load",
         "description": (
             "Load a CFD mesh/field file with Flowplot and return zone/variable JSON "
-            "(Tecplot/VTK ASCII). Prefer this before contour/pathlines."
+            "(PLT/VTK ASCII). Prefer this before contour/pathlines."
         ),
         "inputSchema": {
             "type": "object",

@@ -1,4 +1,4 @@
-"""Tecplot Analyze–style input dialogs for Fieldplot Agents.
+"""Fieldplot Agents input dialogs for Fieldplot Agents.
 
 Dialogs collect refs / variables / freestream / line specs before an agent run.
 Solver-agnostic: values apply to whatever CFD dataset is loaded.

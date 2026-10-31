@@ -1,4 +1,4 @@
-//! Lightweight Tecplot-like overlays: vectors, boundary edges, scatter, isolines.
+//! Lightweight overlays: vectors, boundary edges, scatter, isolines.
 
 use crate::contour::{draw_line, put_pixel, world_to_pixel, ContourImage};
 use crate::field::Grid2D;

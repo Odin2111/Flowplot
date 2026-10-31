@@ -1,4 +1,4 @@
-//! Tecplot binary `.plt` reader (public Data Format Guide layout).
+//! PLT binary `.plt` reader (public Data Format Guide layout).
 //!
 //! Supports `#!TDV111` and `#!TDV112` little-endian files. No SZL (`.szplt`)
 //! and no reverse-engineering of proprietary apps.
@@ -21,7 +21,7 @@ pub struct TecplotBinaryReader;
 
 impl Reader for TecplotBinaryReader {
     fn format_name(&self) -> &'static str {
-        "Tecplot binary"
+        "PLT binary"
     }
 
     fn read_path(&self, path: &Path) -> Result<Dataset> {
@@ -30,7 +30,7 @@ impl Reader for TecplotBinaryReader {
     }
 }
 
-/// True when the file begins with the public Tecplot binary magic `#!TDV`.
+/// True when the file begins with the public PLT binary magic `#!TDV`.
 pub fn is_tecplot_binary(path: &Path) -> Result<bool> {
     let mut buf = [0u8; 5];
     let mut f = File::open(path).map_err(|e| Error::io(path, e))?;
@@ -41,10 +41,10 @@ pub fn is_tecplot_binary(path: &Path) -> Result<bool> {
 pub fn parse_tecplot_binary<R: Read + Seek>(r: &mut R) -> Result<Dataset> {
     let mut magic = [0u8; 8];
     r.read_exact(&mut magic)
-        .map_err(|e| Error::parse("Tecplot binary", format!("short magic: {e}")))?;
+        .map_err(|e| Error::parse("PLT binary", format!("short magic: {e}")))?;
     if &magic[..5] != b"#!TDV" {
         return Err(Error::parse(
-            "Tecplot binary",
+            "PLT binary",
             format!(
                 "expected #!TDV… magic, got {:?}",
                 String::from_utf8_lossy(&magic)
@@ -55,7 +55,7 @@ pub fn parse_tecplot_binary<R: Read + Seek>(r: &mut R) -> Result<Dataset> {
     let endian_one = read_i32(r)?;
     if endian_one != 1 {
         return Err(Error::parse(
-            "Tecplot binary",
+            "PLT binary",
             "only little-endian files (byte-order marker 1) are supported",
         ));
     }
@@ -67,7 +67,7 @@ pub fn parse_tecplot_binary<R: Read + Seek>(r: &mut R) -> Result<Dataset> {
     let num_var = read_i32(r)?;
     if !(1..=4096).contains(&num_var) {
         return Err(Error::parse(
-            "Tecplot binary",
+            "PLT binary",
             format!("invalid NumVars={num_var}"),
         ));
     }
@@ -88,7 +88,7 @@ pub fn parse_tecplot_binary<R: Read + Seek>(r: &mut R) -> Result<Dataset> {
             continue;
         }
         return Err(Error::parse(
-            "Tecplot binary",
+            "PLT binary",
             format!(
                 "unsupported header marker {marker} (geometry/text/aux not loaded; use zone-only .plt)"
             ),
@@ -96,7 +96,7 @@ pub fn parse_tecplot_binary<R: Read + Seek>(r: &mut R) -> Result<Dataset> {
     }
 
     if zone_headers.is_empty() {
-        return Err(Error::parse("Tecplot binary", "no zones in header"));
+        return Err(Error::parse("PLT binary", "no zones in header"));
     }
 
     let mut zones = Vec::with_capacity(zone_headers.len());
@@ -104,7 +104,7 @@ pub fn parse_tecplot_binary<R: Read + Seek>(r: &mut R) -> Result<Dataset> {
         let marker = read_f32(r)?;
         if (marker - ZONE_MARKER).abs() >= 1e-3 {
             return Err(Error::parse(
-                "Tecplot binary",
+                "PLT binary",
                 format!("expected zone data marker 299, got {marker}"),
             ));
         }
@@ -134,7 +134,7 @@ pub fn parse_tecplot_binary<R: Read + Seek>(r: &mut R) -> Result<Dataset> {
 
 fn parse_version(magic: &[u8; 8]) -> Result<u32> {
     let s = std::str::from_utf8(magic)
-        .map_err(|_| Error::parse("Tecplot binary", "magic is not UTF-8"))?;
+        .map_err(|_| Error::parse("PLT binary", "magic is not UTF-8"))?;
     let digits: String = s
         .chars()
         .skip(5)
@@ -143,7 +143,7 @@ fn parse_version(magic: &[u8; 8]) -> Result<u32> {
         .collect();
     digits.parse::<u32>().map_err(|_| {
         Error::parse(
-            "Tecplot binary",
+            "PLT binary",
             format!("cannot parse version from magic {s:?}"),
         )
     })
@@ -183,7 +183,7 @@ fn read_zone_header<R: Read>(r: &mut R, version: u32, num_var: usize) -> Result<
         let strand = read_i32(r)?;
         let sol = read_f64(r)?;
         let _color = read_i32(r)?;
-        // Tecplot uses -1 / 0 for “no strand”; keep any non-negative id.
+        // Format uses -1 / 0 for “no strand”; keep any non-negative id.
         if strand >= 0 {
             strand_id = Some(strand);
         }
@@ -200,7 +200,7 @@ fn read_zone_header<R: Read>(r: &mut R, version: u32, num_var: usize) -> Result<
     };
     if data_packing != 0 {
         return Err(Error::parse(
-            "Tecplot binary",
+            "PLT binary",
             format!("zone {name:?} uses POINT packing (unsupported; public block packing only)"),
         ));
     }
@@ -223,7 +223,7 @@ fn read_zone_header<R: Read>(r: &mut R, version: u32, num_var: usize) -> Result<
     let misc_fn = read_i32(r)?;
     if raw_fn != 0 || misc_fn != 0 {
         return Err(Error::parse(
-            "Tecplot binary",
+            "PLT binary",
             format!("zone {name:?}: face-neighbor arrays are not supported"),
         ));
     }
@@ -234,7 +234,7 @@ fn read_zone_header<R: Read>(r: &mut R, version: u32, num_var: usize) -> Result<
         let k = read_i32(r)? as usize;
         if i == 0 || j == 0 || k == 0 {
             return Err(Error::parse(
-                "Tecplot binary",
+                "PLT binary",
                 format!("zone {name:?}: invalid IJK ({i},{j},{k})"),
             ));
         }
@@ -252,7 +252,7 @@ fn read_zone_header<R: Read>(r: &mut R, version: u32, num_var: usize) -> Result<
         (None, npts, nelems)
     } else {
         return Err(Error::parse(
-            "Tecplot binary",
+            "PLT binary",
             format!("zone {name:?}: unsupported ZoneType={zone_type}"),
         ));
     };
@@ -265,7 +265,7 @@ fn read_zone_header<R: Read>(r: &mut R, version: u32, num_var: usize) -> Result<
         }
         if flag != 1 {
             return Err(Error::parse(
-                "Tecplot binary",
+                "PLT binary",
                 format!("zone {name:?}: bad aux flag {flag}"),
             ));
         }
@@ -379,7 +379,7 @@ fn read_zone_data<R: Read>(r: &mut R, header: &ZoneHeader, num_var: usize) -> Re
             let one_based = min >= 1 && (max as usize) <= header.num_points;
             if !zero_based && !one_based {
                 return Err(Error::parse(
-                    "Tecplot binary",
+                    "PLT binary",
                     format!(
                         "zone {:?}: connectivity range [{min},{max}] incompatible with {} nodes",
                         header.name, header.num_points
@@ -445,19 +445,19 @@ fn read_var_block<R: Read>(r: &mut R, data_type: i32, count: usize) -> Result<Ve
             for _ in 0..count {
                 let mut b = [0u8; 1];
                 r.read_exact(&mut b)
-                    .map_err(|e| Error::parse("Tecplot binary", e.to_string()))?;
+                    .map_err(|e| Error::parse("PLT binary", e.to_string()))?;
                 out.push(b[0] as f64);
             }
         }
         6 => {
             return Err(Error::parse(
-                "Tecplot binary",
+                "PLT binary",
                 "bit-packed variables are not supported",
             ));
         }
         other => {
             return Err(Error::parse(
-                "Tecplot binary",
+                "PLT binary",
                 format!("unsupported variable data type {other}"),
             ));
         }
@@ -474,7 +474,7 @@ fn read_tec_string<R: Read>(r: &mut R) -> Result<String> {
         }
         if !(0..=0x10FFFF).contains(&c) {
             return Err(Error::parse(
-                "Tecplot binary",
+                "PLT binary",
                 format!("invalid string code point {c}"),
             ));
         }
@@ -485,28 +485,28 @@ fn read_tec_string<R: Read>(r: &mut R) -> Result<String> {
 fn read_i16<R: Read>(r: &mut R) -> Result<i16> {
     let mut b = [0u8; 2];
     r.read_exact(&mut b)
-        .map_err(|e| Error::parse("Tecplot binary", e.to_string()))?;
+        .map_err(|e| Error::parse("PLT binary", e.to_string()))?;
     Ok(i16::from_le_bytes(b))
 }
 
 fn read_i32<R: Read>(r: &mut R) -> Result<i32> {
     let mut b = [0u8; 4];
     r.read_exact(&mut b)
-        .map_err(|e| Error::parse("Tecplot binary", e.to_string()))?;
+        .map_err(|e| Error::parse("PLT binary", e.to_string()))?;
     Ok(i32::from_le_bytes(b))
 }
 
 fn read_f32<R: Read>(r: &mut R) -> Result<f32> {
     let mut b = [0u8; 4];
     r.read_exact(&mut b)
-        .map_err(|e| Error::parse("Tecplot binary", e.to_string()))?;
+        .map_err(|e| Error::parse("PLT binary", e.to_string()))?;
     Ok(f32::from_le_bytes(b))
 }
 
 fn read_f64<R: Read>(r: &mut R) -> Result<f64> {
     let mut b = [0u8; 8];
     r.read_exact(&mut b)
-        .map_err(|e| Error::parse("Tecplot binary", e.to_string()))?;
+        .map_err(|e| Error::parse("PLT binary", e.to_string()))?;
     Ok(f64::from_le_bytes(b))
 }
 
@@ -523,7 +523,7 @@ pub fn write_minimal_tdv112_ordered(
 ) -> Result<()> {
     if variables.len() != blocks.len() {
         return Err(Error::parse(
-            "Tecplot binary",
+            "PLT binary",
             "variables/blocks length mismatch",
         ));
     }
@@ -531,7 +531,7 @@ pub fn write_minimal_tdv112_ordered(
     for b in blocks {
         if b.len() != nnodes {
             return Err(Error::parse(
-                "Tecplot binary",
+                "PLT binary",
                 format!("block len {} != I*J={nnodes}", b.len()),
             ));
         }

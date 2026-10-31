@@ -1,4 +1,4 @@
-"""Tecplot-like icon toolbar under the menubar (canvas-drawn icons)."""
+"""icon toolbar under the menubar (canvas-drawn icons)."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def draw_rotate(c: tk.Canvas) -> None:
 
 
 def draw_pan(c: tk.Canvas) -> None:
-    # Four-way translate arrows (Tecplot-like Translate / Pan).
+    # Four-way translate arrows (Pan).
     c.create_line(11, 4, 11, 18, fill=ACCENT, width=2, arrow=tk.BOTH)
     c.create_line(4, 11, 18, 11, fill=ACCENT, width=2, arrow=tk.BOTH)
 
@@ -94,7 +94,7 @@ def draw_pathlines(c: tk.Canvas) -> None:
 
 
 class IconToolbar(tk.Frame):
-    """Horizontal Tecplot-style icon strip."""
+    """Horizontal icon strip."""
 
     def __init__(self, master: tk.Misc, **kw) -> None:
         super().__init__(master, bg=MENU_BG, highlightthickness=0, **kw)
@@ -169,7 +169,7 @@ class IconToolbar(tk.Frame):
 
 
 def build_fieldplot_icon_toolbar(parent: tk.Misc, gui) -> IconToolbar:
-    """Wire Tecplot-like icons to FieldplotGui actions."""
+    """Wire icons to FieldplotGui actions."""
     bar = IconToolbar(parent)
     logo = tk.Canvas(bar, width=100, height=ICON, bg=MENU_BG, highlightthickness=0, bd=0)
     logo.pack(side=tk.LEFT, padx=(6, 4), pady=2)
@@ -188,7 +188,7 @@ def build_fieldplot_icon_toolbar(parent: tk.Misc, gui) -> IconToolbar:
     bar.add_icon(
         IconSpec(
             "rotate",
-            "Rotate — left-drag orbits az/el (Tecplot Rotate)",
+            "Rotate — left-drag orbits az/el",
             draw_rotate,
             gui.action_rotate_tool,
         )

@@ -1,4 +1,4 @@
-//! Tecplot-like CFD data model: Dataset → Zone → named Variables.
+//! CFD data model: Dataset → Zone → named Variables.
 //!
 //! Ordered zones use implicit I / IJ / IJK neighbors. Finite-element zones
 //! store explicit connectivity. Field values are nodal or cell-centered.
@@ -42,7 +42,7 @@ impl OrderedDims {
     }
 }
 
-/// Finite-element cell shape (public Tecplot / VTK-style names only).
+/// Finite-element cell shape (public PLT / VTK-style names only).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ElementType {
     Line,
@@ -146,7 +146,7 @@ impl Zone {
     }
 }
 
-/// Tecplot SolutionTime / StrandID / AUXDATA (VisIt/Silo-like) for one zone.
+/// SolutionTime / StrandID / AUXDATA (VisIt/Silo-like) for one zone.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ZoneMeta {
     pub solution_time: Option<f64>,

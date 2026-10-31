@@ -34,7 +34,7 @@ use flowplot::{load_path, Dataset};
 #[derive(Parser, Debug)]
 #[command(
     name = "flowplot",
-    about = "CFD post-processor: load Tecplot/VTK, mesh, contour, optical, nondim, pathlines, validate, profile, menu",
+    about = "CFD post-processor: load PLT/VTK, mesh, contour, optical, nondim, pathlines, validate, profile, menu",
     arg_required_else_help = true
 )]
 struct Cli {
@@ -71,7 +71,7 @@ enum Commands {
         /// Plane/slice, e.g. k=0, i=1, j=2 (default: auto).
         #[arg(long)]
         plane: Option<String>,
-        /// View: auto|+x|-x|+y|-y|+z|-z|az=deg,el=deg (Tecplot-like).
+        /// View: auto|+x|-x|+y|-y|+z|-z|az=deg,el=deg (Fieldplot).
         #[arg(long)]
         view: Option<String>,
         #[arg(long, default_value_t = 800)]
@@ -114,7 +114,7 @@ enum Commands {
         /// Plane/slice, e.g. k=0, i=1, j=2 (default: auto).
         #[arg(long)]
         plane: Option<String>,
-        /// View: auto|+x|-x|+y|-y|+z|-z|az=deg,el=deg (Tecplot-like).
+        /// View: auto|+x|-x|+y|-y|+z|-z|az=deg,el=deg (Fieldplot).
         #[arg(long)]
         view: Option<String>,
         /// Color-range minimum (default: data min).
@@ -195,7 +195,7 @@ enum Commands {
         #[arg(long, default_value_t = 4)]
         overlay_skip: usize,
     },
-    /// Probe all (or one) variables at world or pixel coordinates (Tecplot-like).
+    /// Probe all (or one) variables at world or pixel coordinates (Fieldplot).
     Probe {
         path: PathBuf,
         /// Optional single variable; omit to sample every variable at the point.

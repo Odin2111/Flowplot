@@ -33,7 +33,7 @@ impl FromStr for PlotStyle {
     }
 }
 
-/// Contour fill mode (Tecplot Contour Details → Levels and Color).
+/// Contour fill mode (Levels and Color).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ContourColoring {
     /// Smooth continuous colormap (default).
@@ -57,7 +57,7 @@ impl FromStr for ContourColoring {
     }
 }
 
-/// Named colormap override (Tecplot Multi-Coloring).
+/// Named colormap override (multi-coloring).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ColorMapName {
     #[default]
@@ -224,7 +224,7 @@ pub struct ContourOptions {
     /// VisIt-like title / time / variable / colorbar overlay (default on).
     pub annotate: bool,
     pub path_hint: Option<String>,
-    /// Continuous flood vs banded levels (Tecplot Contour Details).
+    /// Continuous flood vs banded levels (Contour Details).
     pub coloring: ContourColoring,
     /// Number of contour bands / levels (used when banded; also HUD).
     pub nlevels: u32,

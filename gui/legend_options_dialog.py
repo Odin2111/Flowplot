@@ -1,4 +1,4 @@
-"""Tecplot-like Legend Options (show, alignment, font, colorbar)."""
+"""Legend Options (show, alignment, font, colorbar)."""
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ class LegendOptionsDialog(tk.Toplevel):
         ).pack(side=tk.LEFT, padx=12, pady=8)
         tk.Label(
             hdr,
-            text="Tecplot Contour Details → Legend",
+            text="Contour Details → Legend",
             bg=HEADER_BG,
             fg=MUTED,
             font=("Helvetica", 8),

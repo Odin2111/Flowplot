@@ -220,7 +220,7 @@ pub fn pick_plot_coord_indices(
     let max_span = sx.max(sy).max(sz).max(1e-30);
     let eps = (1e-8 * max_span).max(1e-30);
 
-    // Prefer Tecplot-like XY when both vary; otherwise fall back to XZ / YZ.
+    // Prefer XY when both vary; otherwise fall back to XZ / YZ.
     if sx > eps && sy > eps {
         return (x_i, y_i);
     }
