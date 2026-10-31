@@ -386,6 +386,7 @@ class AgentsPanel(tk.Toplevel):
             "profiles",
             "grid-mesh",
             "reference-values",
+            "optical",
         }
         for group in groups:
             gid = group.get("id") or "group"
@@ -539,6 +540,54 @@ class AgentsPanel(tk.Toplevel):
             self.nondim_args = args
             return True
 
+        optical_ids = {
+            "schlieren-primary",
+            "schlieren-chamarthi",
+            "shadowgraph",
+        }
+        if item_id in optical_ids:
+            # Density var optional — CLI guesses Density/rho; offer override.
+            dens_hints = (
+                "density",
+                "rho",
+                "dens",
+                "density_kg_m3",
+            )
+            initial = guess_named(self.variables, dens_hints) or self.var_name.get()
+            chosen = ask_contour_var(
+                self,
+                variables=self.variables,
+                initial=initial,
+                title=self._items.get(item_id, {}).get("title") or "Optical",
+                hint="Density (or rho) for |∇ρ| / ∇²ρ. Any CFD density field.",
+            )
+            if not chosen:
+                return False
+            self.var_name.set(chosen)
+            return True
+
+        if item_id == "entropy-sensor-field":
+            sensor_hints = (
+                "entropy",
+                "ducros",
+                "sensor",
+                "pressure",
+                "mach",
+                "schlieren",
+            )
+            initial = guess_named(self.variables, sensor_hints) or self.var_name.get()
+            chosen = ask_contour_var(
+                self,
+                variables=self.variables,
+                initial=initial,
+                title="Entropy / shock sensor",
+                hint="Prefer entropy / Ducros / sensor; else Pressure or Mach.",
+            )
+            if not chosen:
+                return False
+            self.var_name.set(chosen)
+            return True
+
         contour_ids = {
             "contour",
             "positivity-field",
@@ -614,17 +663,31 @@ class AgentsPanel(tk.Toplevel):
                 self.var_name.set(var)
 
         needs_var = "var" in required or command in ("contour", "profile")
-        needs_out = "out" in required or command in ("contour", "pathlines", "mesh")
+        needs_out = "out" in required or command in (
+            "contour",
+            "pathlines",
+            "mesh",
+            "optical",
+        )
+        optical = command == "optical" or item_id in (
+            "schlieren-primary",
+            "schlieren-chamarthi",
+            "shadowgraph",
+        )
+        if optical and var:
+            # optical uses --var for density name
+            needs_var = True
 
         if needs_var:
-            if not var:
+            if not var and not optical:
                 messagebox.showwarning(
                     "Variable",
                     "Select a variable for this agent.",
                     parent=self,
                 )
                 return None
-            args.extend(["--var", var])
+            if var:
+                args.extend(["--var", var])
 
         out_path: Path | None = None
         if needs_out:
@@ -636,6 +699,10 @@ class AgentsPanel(tk.Toplevel):
             args.extend(self.nondim_args)
             if item_id == "contour-pathlines":
                 args.append("--pathlines")
+            if item_id == "entropy-sensor-field" and "--colormap" not in args:
+                args.extend(["--colormap", "elmar"])
+        elif command == "optical":
+            args.extend(["--style", self.plot_style])
         elif command == "pathlines":
             args.extend(["--style", self.plot_style])
             args.extend(self.nondim_args)

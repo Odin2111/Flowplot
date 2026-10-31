@@ -28,6 +28,7 @@
 //! - [`pathlines`] — particle traces / streamlines of the velocity field
 //! - [`validate`] — field sanity / positivity checks (lehar validation ideas)
 //! - [`profile`] — line / centerline extracts (lehar extract-line analogue)
+//! - [`optical`] — numerical Schlieren / Shadowgraph from density
 
 pub mod annotate;
 pub mod contour;
@@ -37,6 +38,7 @@ pub mod field;
 pub mod menu;
 pub mod mesh;
 pub mod nondim;
+pub mod optical;
 pub mod overlays;
 pub mod pathlines;
 pub mod profile;
@@ -48,8 +50,12 @@ pub use annotate::{
     draw_annotations, draw_axes_triad, draw_probe_label, AnnotationInfo, LegendAlign,
 };
 pub use contour::{
-    pixel_to_world, render_contour, world_to_pixel, world_to_pixel_plot, write_png, ColorMapName,
-    ContourColoring, ContourImage, ContourOptions, PlotStyle,
+    pixel_to_world, render_contour, render_contour_grid, world_to_pixel, world_to_pixel_plot,
+    write_png, ColorMapName, ContourColoring, ContourImage, ContourOptions, PlotStyle,
+};
+pub use optical::{
+    guess_density_var, render_optical, schlieren_from_grid, shadowgraph_from_grid,
+    write_optical_png, OpticalKind, OpticalOptions,
 };
 pub use dataset::{
     Connectivity, Dataset, ElementType, Location, OrderedDims, Topology, VariableData, Zone,

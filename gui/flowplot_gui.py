@@ -19,6 +19,7 @@ import sys
 import tempfile
 import time
 import tkinter as tk
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -401,6 +402,16 @@ class FlowplotGui(tk.Tk):
             [
                 ("Trace pathlines…", "pathlines", "pathlines"),
                 ("Contour + pathlines…", "contour-pathlines", "pathlines"),
+            ],
+        )
+        self._agents_cascade(
+            menu,
+            "Schlieren & shadowgraph",
+            [
+                ("Schlieren (primary / Crisp)…", "schlieren-primary", "optical"),
+                ("Schlieren (Chamarthi)…", "schlieren-chamarthi", "optical"),
+                ("Shadowgraph…", "shadowgraph", "optical"),
+                ("Entropy / shock-sensor…", "entropy-sensor-field", "optical"),
             ],
         )
         menu.add_separator()
@@ -2823,24 +2834,45 @@ class FlowplotGui(tk.Tk):
         if not ds:
             return
         release_grabs(self)
-        dest = filedialog.asksaveasfilename(
-            parent=self,
-            title="Export PNG",
-            defaultextension=".png",
-            filetypes=[("PNG", "*.png")],
-            initialfile="flowplot.png",
-        )
+        from export_dialog import ask_export_png
+
+        choice = ask_export_png(self, initial_style=self.plot_style.get())
+        if not choice:
+            return
+        dest = choice.get("path")
+        preset = choice.get("preset") or "current"
         if not dest:
             return
-        # Force a redraw into the chosen path via temporary swap.
-        prev = Path(tempfile.gettempdir()) / "flowplot_gui_view.png"
+        # Apply JFM Crisp export preset (from JFM_Crisp_2D_Contour Tecplot macro).
+        prev_style = self.plot_style.get()
+        prev_cd = replace(self.contour_details) if hasattr(self, "contour_details") else None
+        if preset == "jfm-crisp":
+            self.plot_style.set("jfm")
+            self.layer_mesh.set(False)
+            self.layer_contour.set(True)
+            self.layer_shade.set(False)
+            cd = self.contour_details
+            self.contour_details = replace(
+                cd,
+                coloring="Banded",
+                nlevels=max(16, int(cd.nlevels or 16)),
+                legend=True,
+                show_labels=False,
+                colormap=cd.colormap if cd.colormap != "Default" else "JFM",
+            )
+            self._log("Export preset: JFM Crisp (banded flood, no mesh, white paper)")
         self.action_redraw()
         if self.last_png and self.last_png.is_file():
             shutil.copyfile(self.last_png, dest)
-            self._log(f"Exported {dest}")
+            self._log(f"Exported {dest} (preset={preset})")
             self._show_png_preview(Path(dest))
         else:
-            self._log(f"export failed (no preview); last expected {prev}")
+            self._log("export failed (no preview PNG)")
+        # Restore interactive style unless user already on JFM.
+        if preset == "jfm-crisp" and prev_style != "jfm":
+            self.plot_style.set(prev_style)
+        if preset == "jfm-crisp" and prev_cd is not None:
+            self.contour_details = prev_cd
 
     def stub_plot(self, name: str) -> None:
         messagebox.showinfo(

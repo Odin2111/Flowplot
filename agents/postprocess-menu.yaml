@@ -479,6 +479,72 @@ groups:
           planned_flags: ["--var", "-o", "--pathlines", "--seed", "--json"]
         mcp: flowplot_contour
 
+
+  - id: optical
+    title: Schlieren & shadowgraph
+    summary: >
+      Numerical density-gradient optics (any CFD density field) — primary
+      Schlieren (Crisp map), Chamarthi Schlieren, and Zhang-style shadowgraph.
+    items:
+      - id: schlieren-primary
+        title: Schlieren (primary / Crisp)
+        summary: log(1+|∇ρ|) with Schlieren-Crisp white→lavender→navy colormap.
+        status: ready
+        lehar:
+          surface: research_figures / schlieren
+        flowplot:
+          command: optical
+          template: "flowplot optical {path} --kind schlieren [--var Density] -o {out} --json"
+          required_args: [path, out]
+          optional_flags: ["--var", "--zone", "--plane", "--vmin", "--vmax", "--legend"]
+          notes: "Guesses Density/rho by name; Tecplot Schlieren Crisp palette."
+        mcp: flowplot_contour
+
+      - id: schlieren-chamarthi
+        title: Schlieren (Chamarthi)
+        summary: Chamarthi log(1+|∇ρ|) with reversed grayscale, display range 0–5.
+        status: ready
+        lehar:
+          surface: research_figures / chamarthi
+        flowplot:
+          command: optical
+          template: "flowplot optical {path} --kind schlieren-chamarthi [--var Density] -o {out} --json"
+          required_args: [path, out]
+          optional_flags: ["--var", "--zone", "--plane", "--vmin", "--vmax"]
+          notes: "Second Schlieren type (Chamarthi2 recipe); principle-based on Density."
+        mcp: flowplot_contour
+
+      - id: shadowgraph
+        title: Shadowgraph
+        summary: sign(∇²ρ)·log(1+|∇²ρ|) grayscale (Zhang–Zhang–Shu numerical shadowgraph).
+        status: ready
+        lehar:
+          surface: research_figures / shadowgraph
+        flowplot:
+          command: optical
+          template: "flowplot optical {path} --kind shadowgraph [--var Density] -o {out} --json"
+          required_args: [path, out]
+          optional_flags: ["--var", "--zone", "--plane", "--vmin", "--vmax"]
+        mcp: flowplot_contour
+
+      - id: entropy-sensor-field
+        title: Entropy / shock-sensor contour
+        summary: Contour entropy or Ducros/pressure sensor when exported as a field.
+        status: ready
+        lehar:
+          agent: numerical_fingerprint
+          surface: WA-CR / entropy naming
+        flowplot:
+          command: contour
+          template: "flowplot contour {path} --var {var} -o {out} --colormap elmar --json"
+          required_args: [path, var, out]
+          optional_flags: ["--plane", "--zone", "--colormap"]
+          notes: >
+            Looks for entropy / ducros / sensor names. WA-CR naming notes:
+            Wave-Appropriate Conservative Reconstruction ≠ entropy-preserving flux;
+            Chandrashekar EC hybrid is a separate selectable flux name.
+        mcp: flowplot_contour
+
   - id: suites
     title: Suites
     summary: Orchestrated evidence suites that attach Fieldplot field panels.

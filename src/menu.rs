@@ -252,6 +252,7 @@ mod tests {
             "grid-mesh",
             "geometry-boundaries",
             "integration",
+            "optical",
         ] {
             assert!(group_ids.contains(&need), "missing group {need}");
         }
@@ -272,6 +273,9 @@ mod tests {
             "mesh-inventory",
             "hypersonic-field-extrema",
             "shock-polar-field",
+            "schlieren-primary",
+            "schlieren-chamarthi",
+            "shadowgraph",
         ] {
             assert!(ids.contains(&need), "missing {need}");
         }
