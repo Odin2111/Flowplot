@@ -79,6 +79,84 @@ PLOT_TYPES = (
     "3D Cartesian",
 )
 
+# Map CLI/name-based nondim suggestion kinds → Nondim scales panel keys.
+_NONDIM_KIND_TO_SCALE: dict[str, str] = {
+    "LengthX": "Lx",
+    "LengthY": "Ly",
+    "LengthZ": "Lz",
+    "Velocity": "U_ref",
+    "Temperature": "T_ref",
+}
+
+
+def scale_value_from_extents(kind: str, vmin: float, vmax: float) -> float | None:
+    """Pick a convenience reference from field extents (GUI fill-in only).
+
+    Length → domain span (or peak if span is zero). Velocity → peak |value|.
+    Temperature → positive floor when available, else peak. Never returns 0/NaN.
+    """
+    if not math.isfinite(vmin) or not math.isfinite(vmax):
+        return None
+    span = abs(vmax - vmin)
+    peak = max(abs(vmin), abs(vmax))
+    if kind in ("LengthX", "LengthY", "LengthZ"):
+        val = span if span > 0.0 else peak
+    elif kind == "Velocity":
+        val = peak
+    elif kind == "Temperature":
+        val = vmin if vmin > 0.0 else peak
+    else:
+        return None
+    if not math.isfinite(val) or val == 0.0:
+        return None
+    return val
+
+
+def proposed_scales_from_nondim_payload(payload: dict) -> dict[str, float]:
+    """From ``flowplot nondim --json`` payload, propose numeric scales by kind.
+
+    Uses ``nondim_suggestions`` + ``fields`` min/max. When several variables map
+    to the same scale key (e.g. U and V → U_ref), keep the largest magnitude.
+    """
+    suggestions = payload.get("nondim_suggestions") or []
+    fields = payload.get("fields") or []
+    by_name: dict[str, tuple[float, float]] = {}
+    if isinstance(fields, list):
+        for item in fields:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("variable") or "").strip()
+            if not name:
+                continue
+            try:
+                vmin = float(item["min"])
+                vmax = float(item["max"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            by_name[name] = (vmin, vmax)
+
+    proposed: dict[str, float] = {}
+    if not isinstance(suggestions, list):
+        return proposed
+    for sug in suggestions:
+        if not isinstance(sug, dict):
+            continue
+        kind = str(sug.get("kind") or "")
+        key = _NONDIM_KIND_TO_SCALE.get(kind)
+        if not key:
+            continue
+        var = str(sug.get("variable") or "").strip()
+        extents = by_name.get(var)
+        if extents is None:
+            continue
+        val = scale_value_from_extents(kind, extents[0], extents[1])
+        if val is None:
+            continue
+        prev = proposed.get(key)
+        if prev is None or abs(val) > abs(prev):
+            proposed[key] = val
+    return proposed
+
 
 def find_flowplot_bin() -> str | None:
     """Locate the flowplot CLI.
@@ -3775,38 +3853,94 @@ class FlowplotGui(tk.Tk):
                 }
             return
 
+    def _fill_empty_scales_from_payload(self, payload: dict) -> list[str]:
+        """Fill blank Nondim scale entries from suggestion field extents. Returns keys filled."""
+        proposed = proposed_scales_from_nondim_payload(payload)
+        filled: list[str] = []
+        for key, val in proposed.items():
+            var = self.scale_vars.get(key)
+            if var is None:
+                continue
+            if var.get().strip():
+                continue
+            var.set(f"{val:g}")
+            filled.append(key)
+        return filled
+
     def action_nondim(self) -> None:
-        """Data / Plot → Apply nondim scales — CLI + visible summary."""
+        """Data / Plot → Apply nondim scales — fill empties, CLI flags, redraw Flood."""
         release_grabs(self)
         ds = self._require_dataset()
         if not ds:
             return
-        args = self._nondim_args()
-        if not args:
-            messagebox.showwarning(
-                "Apply nondim scales",
-                "Set at least one of U_ref / Lx / Ly / Lz / T_ref in Nondim scales,\n"
-                "then run Apply nondim scales again.",
-                parent=self,
-            )
-            self._set_status("Nondim — enter scales first")
-            return
-        proc = self._run_cli(["--json", "nondim", str(ds), *args])
-        if proc is None or proc.returncode != 0:
+
+        # Probe suggestions + field extents (include any scales already typed).
+        probe = self._run_cli(["--json", "nondim", str(ds), *self._nondim_args()])
+        if probe is None or probe.returncode != 0:
             messagebox.showerror(
                 "Apply nondim scales",
                 "flowplot nondim failed — see Log for details.",
                 parent=self,
             )
             return
-        summary = (proc.stdout or "").strip()
-        if len(summary) > 1200:
-            summary = summary[:1200] + "…"
-        messagebox.showinfo(
-            "Apply nondim scales",
-            summary or "Nondim scales applied.",
-            parent=self,
-        )
+        payload: dict = {}
+        try:
+            lines = [ln for ln in (probe.stdout or "").splitlines() if ln.strip()]
+            payload = json.loads(lines[-1]) if lines else {}
+            if not isinstance(payload, dict):
+                payload = {}
+        except (json.JSONDecodeError, IndexError, TypeError):
+            messagebox.showerror(
+                "Apply nondim scales",
+                "Could not parse nondim JSON — see Log for details.",
+                parent=self,
+            )
+            return
+
+        filled = self._fill_empty_scales_from_payload(payload)
+        args = self._nondim_args()
+        if not args:
+            messagebox.showwarning(
+                "Apply nondim scales",
+                "Set at least one of U_ref / Lx / Ly / Lz / T_ref in Nondim scales,\n"
+                "or load variables with recognizable X/Y/U/T names so suggestions can fill them.",
+                parent=self,
+            )
+            self._set_status("Nondim — enter scales first")
+            return
+
+        # Re-apply when we filled empties or the probe did not apply yet.
+        need_apply = bool(filled) or not payload.get("applied")
+        if need_apply:
+            applied = self._run_cli(["--json", "nondim", str(ds), *args])
+            if applied is None or applied.returncode != 0:
+                messagebox.showerror(
+                    "Apply nondim scales",
+                    "flowplot nondim failed — see Log for details.",
+                    parent=self,
+                )
+                return
+            try:
+                lines = [ln for ln in (applied.stdout or "").splitlines() if ln.strip()]
+                payload = json.loads(lines[-1]) if lines else payload
+            except (json.JSONDecodeError, IndexError, TypeError):
+                pass
+
+        # Flood redraw with --u-ref/--lx/--ly/--t-ref (and friends).
+        if not self.layer_contour.get():
+            self.layer_contour.set(True)
+        self.action_redraw()
+
+        parts = [
+            f"{key}={self.scale_vars[key].get().strip()}"
+            for key in ("U_ref", "Lx", "Ly", "Lz", "T_ref")
+            if self.scale_vars[key].get().strip()
+        ]
+        msg = "Nondim applied: " + ", ".join(parts)
+        if filled:
+            msg += f" (filled {', '.join(filled)} from suggestions)"
+        self._log(msg)
+        self._set_status(msg)
 
     def action_export_png(self) -> None:
         ds = self._require_dataset()

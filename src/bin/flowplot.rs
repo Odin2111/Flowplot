@@ -2064,6 +2064,37 @@ fn run_probe(
     Ok(())
 }
 
+fn field_minmax_summaries(ds: &Dataset, json: bool) -> Vec<String> {
+    let mut field_summaries = Vec::new();
+    for (i, name) in ds.variables.iter().enumerate() {
+        let mut vmin = f64::INFINITY;
+        let mut vmax = f64::NEG_INFINITY;
+        for zone in &ds.zones {
+            if let Some(f) = zone.fields.get(i) {
+                for &v in &f.values {
+                    if v.is_finite() {
+                        vmin = vmin.min(v);
+                        vmax = vmax.max(v);
+                    }
+                }
+            }
+        }
+        if vmin.is_finite() {
+            if json {
+                field_summaries.push(format!(
+                    "{{\"variable\":{},\"min\":{},\"max\":{}}}",
+                    json_string(name),
+                    json_f64(vmin),
+                    json_f64(vmax)
+                ));
+            } else {
+                field_summaries.push(format!("  {name}: min={vmin} max={vmax}"));
+            }
+        }
+    }
+    field_summaries
+}
+
 fn run_nondim(path: &PathBuf, nondim: &NondimArgs, summary: bool, json: bool) -> flowplot::Result<()> {
     let ds = load_path(path)?;
     let suggestions = suggest_scales(&ds.variables);
@@ -2078,49 +2109,39 @@ fn run_nondim(path: &PathBuf, nondim: &NondimArgs, summary: bool, json: bool) ->
         && scales.lz.is_none()
         && scales.t_ref.is_none()
     {
+        let fields = if summary {
+            field_minmax_summaries(&ds, json)
+        } else {
+            Vec::new()
+        };
         if json {
             println!(
-                "{{\"status\":\"ok\",\"command\":\"nondim\",\"path\":{},\"applied\":false,\"message\":{},\"nondim_suggestions\":{}}}",
+                "{{\"status\":\"ok\",\"command\":\"nondim\",\"path\":{},\"applied\":false,\"message\":{},\"nondim_suggestions\":{},\"fields\":[{}]}}",
                 json_string(&path.display().to_string()),
                 json_string("no scales passed; suggestions only (never invent physics)"),
-                suggestions_json(&suggestions)
+                suggestions_json(&suggestions),
+                fields.join(",")
             );
         } else {
             println!("no scales passed; suggestions only (never invent physics)");
+            for line in &fields {
+                println!("{line}");
+            }
         }
         return Ok(());
     }
     let out = apply_nondim(&ds, &scales)?;
-    let mut field_summaries = Vec::new();
-    if summary {
+    let field_summaries = if summary {
         if !json {
             println!("after nondim:");
         }
-        for (i, name) in out.variables.iter().enumerate() {
-            let mut vmin = f64::INFINITY;
-            let mut vmax = f64::NEG_INFINITY;
-            for zone in &out.zones {
-                if let Some(f) = zone.fields.get(i) {
-                    for &v in &f.values {
-                        if v.is_finite() {
-                            vmin = vmin.min(v);
-                            vmax = vmax.max(v);
-                        }
-                    }
-                }
-            }
-            if vmin.is_finite() {
-                if json {
-                    field_summaries.push(format!(
-                        "{{\"variable\":{},\"min\":{},\"max\":{}}}",
-                        json_string(name),
-                        json_f64(vmin),
-                        json_f64(vmax)
-                    ));
-                } else {
-                    println!("  {name}: min={vmin} max={vmax}");
-                }
-            }
+        field_minmax_summaries(&out, json)
+    } else {
+        Vec::new()
+    };
+    if !json && summary {
+        for line in &field_summaries {
+            println!("{line}");
         }
     }
     if json {
