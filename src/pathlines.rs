@@ -35,8 +35,9 @@ impl Default for PathlineOptions {
             plane: PlaneSpec::Auto,
             view: ViewSpec::Auto,
             seeds: Vec::new(),
-            max_steps: 200,
-            step_size: 0.02,
+            max_steps: 1000,
+            // <= 0 means auto from domain size / |U| (see suggest_step_size).
+            step_size: 0.0,
             bidirectional: true,
         }
     }
@@ -51,12 +52,30 @@ pub struct Pathline {
 pub fn guess_velocity_vars(ds: &Dataset) -> Result<(String, String)> {
     let u = first_var(
         ds,
-        &["U", "Vx", "VX", "VelocityX", "x-velocity", "X-VELOCITY"],
+        &[
+            "U",
+            "Ux",
+            "UX",
+            "Vx",
+            "VX",
+            "VelocityX",
+            "x-velocity",
+            "X-VELOCITY",
+        ],
     )
     .ok_or_else(|| Error::plot("could not guess U velocity variable; pass --u-var"))?;
     let v = first_var(
         ds,
-        &["V", "Vy", "VY", "VelocityY", "y-velocity", "Y-VELOCITY"],
+        &[
+            "V",
+            "Uy",
+            "UY",
+            "Vy",
+            "VY",
+            "VelocityY",
+            "y-velocity",
+            "Y-VELOCITY",
+        ],
     )
     .ok_or_else(|| Error::plot("could not guess V velocity variable; pass --v-var"))?;
     Ok((u, v))
@@ -71,6 +90,57 @@ fn first_var(ds: &Dataset, cands: &[&str]) -> Option<String> {
     None
 }
 
+/// Mean structured cell size from grid bounds (for CFL-limited integration).
+pub fn characteristic_cell_size(grid: &Grid2D) -> f64 {
+    let (xmin, xmax, ymin, ymax) = grid.bounds();
+    let di = grid.ni.saturating_sub(1).max(1) as f64;
+    let dj = grid.nj.saturating_sub(1).max(1) as f64;
+    let lx = (xmax - xmin).abs() / di;
+    let ly = (ymax - ymin).abs() / dj;
+    lx.min(ly).max(1e-30)
+}
+
+/// Auto `--dt` from domain cell size / max |U| so one step stays inside a cell.
+///
+/// Hypersonic fields (U ~ 10³ on a unit-length mesh) need dt ≪ 0.02; a fixed
+/// 0.02 jumps off the domain immediately and yields zero traces.
+pub fn suggest_step_size(grid: &Grid2D, u: &[f64], v: &[f64]) -> f64 {
+    let h = characteristic_cell_size(grid);
+    let mut umax = 0.0_f64;
+    let n = u.len().min(v.len());
+    for i in 0..n {
+        let s = (u[i] * u[i] + v[i] * v[i]).sqrt();
+        if s.is_finite() {
+            umax = umax.max(s);
+        }
+    }
+    if umax < 1e-30 {
+        return h * 0.25;
+    }
+    (0.35 * h / umax).clamp(1e-16, h * 2.0)
+}
+
+/// Resolve user `--dt`: `<= 0` or non-finite → auto; oversized explicit dt → clamp.
+pub fn resolve_step_size(requested: f64, grid: &Grid2D, u: &[f64], v: &[f64]) -> f64 {
+    let auto = suggest_step_size(grid, u, v);
+    if !requested.is_finite() || requested <= 0.0 {
+        return auto;
+    }
+    // Guard legacy default 0.02 on high-speed fields: one step must not exceed ~2 cells.
+    let h = characteristic_cell_size(grid);
+    let mut umax = 0.0_f64;
+    for i in 0..u.len().min(v.len()) {
+        let s = (u[i] * u[i] + v[i] * v[i]).sqrt();
+        if s.is_finite() {
+            umax = umax.max(s);
+        }
+    }
+    if umax > 1e-30 && requested * umax > 2.0 * h {
+        return auto;
+    }
+    requested
+}
+
 /// Trace pathlines on an ordered zone velocity field.
 pub fn trace_pathlines(ds: &Dataset, opts: &PathlineOptions) -> Result<Vec<Pathline>> {
     if opts.seeds.is_empty() {
@@ -81,8 +151,8 @@ pub fn trace_pathlines(ds: &Dataset, opts: &PathlineOptions) -> Result<Vec<Pathl
     if opts.max_steps == 0 {
         return Err(Error::plot("pathlines --max-steps must be > 0"));
     }
-    if !(opts.step_size.is_finite() && opts.step_size > 0.0) {
-        return Err(Error::plot("pathlines --dt must be finite and > 0"));
+    if !opts.step_size.is_finite() {
+        return Err(Error::plot("pathlines --dt must be finite (use 0 for auto)"));
     }
 
     let u_idx = find_var(ds, &opts.u_var)?;
@@ -91,7 +161,8 @@ pub fn trace_pathlines(ds: &Dataset, opts: &PathlineOptions) -> Result<Vec<Pathl
         Some(find_var(ds, w)?)
     } else {
         // Optional W — used only if present and user asked; 2D plane integrates U,V.
-        first_var(ds, &["W", "Vz", "VZ", "VelocityZ"]).and_then(|name| find_var(ds, &name).ok())
+        first_var(ds, &["W", "Uz", "UZ", "Vz", "VZ", "VelocityZ"])
+            .and_then(|name| find_var(ds, &name).ok())
     };
 
     let base = extract_scalar_grid_view(ds, opts.zone, u_idx, opts.plane, opts.view)?;
@@ -109,11 +180,16 @@ pub fn trace_pathlines(ds: &Dataset, opts: &PathlineOptions) -> Result<Vec<Pathl
         values: u_field.clone(),
     };
 
+    let dt = resolve_step_size(opts.step_size, &grid, &u_field, &v_field);
+    let h = characteristic_cell_size(&grid);
+
     let mut lines = Vec::new();
     for seed in &opts.seeds {
+        // Snap seeds that miss the mesh AABB slightly (rake near edges).
+        let seed = snap_seed_into_grid(&grid, *seed).unwrap_or(*seed);
         let mut pts = Vec::new();
         if opts.bidirectional {
-            let mut back = integrate(&grid, &u_field, &v_field, *seed, -opts.step_size, opts.max_steps);
+            let mut back = integrate(&grid, &u_field, &v_field, seed, -dt, opts.max_steps, h);
             back.reverse();
             if let Some(last) = back.last() {
                 if (last[0] - seed[0]).abs() < 1e-15 && (last[1] - seed[1]).abs() < 1e-15 {
@@ -122,20 +198,36 @@ pub fn trace_pathlines(ds: &Dataset, opts: &PathlineOptions) -> Result<Vec<Pathl
             }
             pts.extend(back);
         }
-        let fwd = integrate(
-            &grid,
-            &u_field,
-            &v_field,
-            *seed,
-            opts.step_size,
-            opts.max_steps,
-        );
+        let fwd = integrate(&grid, &u_field, &v_field, seed, dt, opts.max_steps, h);
         pts.extend(fwd);
         if pts.len() >= 2 {
             lines.push(Pathline { points: pts });
         }
     }
     Ok(lines)
+}
+
+/// Pull a near-miss seed onto a point that samples inside the mesh.
+fn snap_seed_into_grid(grid: &Grid2D, seed: [f64; 2]) -> Option<[f64; 2]> {
+    if grid.sample(seed[0], seed[1]).is_some() {
+        return Some(seed);
+    }
+    let (xmin, xmax, ymin, ymax) = grid.bounds();
+    let eps_x = 1e-6 * (xmax - xmin).abs().max(1.0);
+    let eps_y = 1e-6 * (ymax - ymin).abs().max(1.0);
+    let x = seed[0].clamp(xmin + eps_x, xmax - eps_x);
+    let y = seed[1].clamp(ymin + eps_y, ymax - eps_y);
+    if grid.sample(x, y).is_some() {
+        return Some([x, y]);
+    }
+    // Domain center usually sits inside a cone/wedge IJ block.
+    let cx = 0.5 * (xmin + xmax);
+    let cy = 0.5 * (ymin + ymax);
+    if grid.sample(cx, cy).is_some() {
+        Some([cx, cy])
+    } else {
+        None
+    }
 }
 
 fn integrate(
@@ -145,6 +237,7 @@ fn integrate(
     seed: [f64; 2],
     dt: f64,
     max_steps: usize,
+    cell_h: f64,
 ) -> Vec<[f64; 2]> {
     let mut pts = vec![seed];
     let mut x = seed[0];
@@ -157,18 +250,29 @@ fn integrate(
         if !speed.is_finite() || speed < 1e-14 {
             break;
         }
+        // CFL clamp: never advance more than ~0.45 cell per RK stage.
+        let dt_lim = 0.45 * cell_h / speed;
+        let dt_use = if dt.abs() > dt_lim {
+            dt.signum() * dt_lim
+        } else {
+            dt
+        };
         // RK2 (Heun)
-        let x1 = x + dt * vx;
-        let y1 = y + dt * vy;
+        let x1 = x + dt_use * vx;
+        let y1 = y + dt_use * vy;
         let Some((vx2, vy2)) = velocity_at(grid, u, v, x1, y1) else {
             break;
         };
-        let nx = x + 0.5 * dt * (vx + vx2);
-        let ny = y + 0.5 * dt * (vy + vy2);
+        let nx = x + 0.5 * dt_use * (vx + vx2);
+        let ny = y + 0.5 * dt_use * (vy + vy2);
         if !nx.is_finite() || !ny.is_finite() {
             break;
         }
         if velocity_at(grid, u, v, nx, ny).is_none() {
+            break;
+        }
+        // Stall detection — tiny steps with no progress.
+        if (nx - x).hypot(ny - y) < 1e-15 * cell_h {
             break;
         }
         x = nx;
@@ -340,5 +444,77 @@ mod tests {
         assert!(pts.len() > 5);
         assert!(pts.last().unwrap()[0] > pts[0][0] + 0.2);
         assert!((pts.last().unwrap()[1] - pts[0][1]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn auto_dt_survives_hypersonic_speeds() {
+        // Domain ~[0,1]² with U=1000 — fixed dt=0.02 leaves in one step.
+        let mut x = Vec::new();
+        let mut y = Vec::new();
+        let mut u = Vec::new();
+        let mut v = Vec::new();
+        for j in 0..5 {
+            for i in 0..5 {
+                x.push(i as f64 / 4.0);
+                y.push(j as f64 / 4.0);
+                u.push(1000.0);
+                v.push(0.0);
+            }
+        }
+        let ds = Dataset {
+            title: None,
+            variables: vec!["X".into(), "Y".into(), "U".into(), "V".into()],
+            zones: vec![Zone {
+                name: "z".into(),
+                topology: Topology::Ordered(OrderedDims::Ij { i: 5, j: 5 }),
+                fields: vec![
+                    VariableData {
+                        location: Location::Nodal,
+                        values: x,
+                    },
+                    VariableData {
+                        location: Location::Nodal,
+                        values: y,
+                    },
+                    VariableData {
+                        location: Location::Nodal,
+                        values: u,
+                    },
+                    VariableData {
+                        location: Location::Nodal,
+                        values: v,
+                    },
+                ],
+            }],
+            ..Default::default()
+        };
+        let broken = trace_pathlines(
+            &ds,
+            &PathlineOptions {
+                seeds: vec![[0.25, 0.5]],
+                max_steps: 200,
+                step_size: 0.02, // legacy default — must auto-clamp
+                bidirectional: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !broken.is_empty() && broken[0].points.len() > 5,
+            "auto CFL should keep hypersonic pathlines on the mesh"
+        );
+        let auto = trace_pathlines(
+            &ds,
+            &PathlineOptions {
+                seeds: vec![[0.25, 0.5]],
+                max_steps: 200,
+                step_size: 0.0,
+                bidirectional: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!auto.is_empty());
+        assert!(auto[0].points.len() > 5);
     }
 }

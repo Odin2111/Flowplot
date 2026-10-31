@@ -1806,9 +1806,26 @@ class FlowplotGui(tk.Tk):
                 layers.append("Iso")
             tag = "preview" if quality == "preview" else "full"
             zname = self._zone_label(zone_idx)
-            self._set_status(
-                (" + ".join(layers) if layers else "Done") + f" · zone {zname} [{tag}]"
-            )
+            n_traces = None
+            if want_pathlines and proc and proc.stdout:
+                try:
+                    payload = json.loads(proc.stdout.strip().splitlines()[-1])
+                    n_traces = payload.get("pathline_traces")
+                    if n_traces is None and payload.get("command") == "pathlines":
+                        n_traces = payload.get("traces")
+                except (json.JSONDecodeError, IndexError, TypeError):
+                    n_traces = None
+            status = (" + ".join(layers) if layers else "Done") + f" · zone {zname} [{tag}]"
+            if want_pathlines and n_traces is not None:
+                status += f" · {n_traces} pathline(s)"
+                if int(n_traces) == 0:
+                    self._log(
+                        "Pathlines: 0 traces — check U/V vars and seeds inside the mesh "
+                        "(dt is auto from |U|)."
+                    )
+                else:
+                    self._log(f"Pathlines: {n_traces} integrated trace(s) on settle")
+            self._set_status(status)
 
     def _redraw_cli(
         self,
@@ -1877,7 +1894,6 @@ class FlowplotGui(tk.Tk):
             if want_pathlines:
                 args.append("--pathlines")
                 args.extend(self._pathline_seed_args())
-                args.extend(self._vector_cli_vars())
             if want_vector:
                 args.append("--vectors")
                 args.extend(self._vector_cli_vars())
@@ -1887,6 +1903,9 @@ class FlowplotGui(tk.Tk):
                 args.append("--scatter")
             if want_iso:
                 args.append("--isolines")
+            # JSON so we can report pathline_traces after rake settle.
+            if want_pathlines and args[:1] != ["--json"]:
+                args = ["--json", *args]
             return self._run_cli(args)
         args = [
             "mesh",
@@ -2117,11 +2136,34 @@ class FlowplotGui(tk.Tk):
         self._set_tool_mode("pan")
         self._log("Pan tool ON — left-drag translates the domain")
 
+    def _ensure_pathline_velocity_vars(self) -> bool:
+        """Fill U/V(/W) from dataset names when empty. Returns False if U/V missing."""
+        gu, gv, gw = self._guess_velocity_names()
+        if not self.vector_u.get().strip() and gu:
+            self.vector_u.set(gu)
+        if not self.vector_v.get().strip() and gv:
+            self.vector_v.set(gv)
+        if not self.vector_w.get().strip() and gw:
+            self.vector_w.set(gw)
+        return bool(self.vector_u.get().strip() and self.vector_v.get().strip())
+
     def _on_pathlines_layer(self) -> None:
         """Derived Pathlines checkbox — enable rake tool; do not fight Probe."""
         if self.layer_pathlines.get():
+            if not self._ensure_pathline_velocity_vars():
+                self.layer_pathlines.set(False)
+                messagebox.showwarning(
+                    "Pathlines",
+                    "No U/V velocity variables found.\n"
+                    "Pathlines need velocity components on the loaded dataset.",
+                    parent=self,
+                )
+                return
             self._set_tool_mode("pathlines")
-            self._log("Pathlines on — click-drag a rake/seed line in the Viewport")
+            self._log(
+                "Pathlines on — click-drag a rake/seed line "
+                f"(U={self.vector_u.get()}, V={self.vector_v.get()})"
+            )
             if self.pathline_seeds:
                 self._render_cache.clear()
                 self.action_redraw()
@@ -2139,7 +2181,18 @@ class FlowplotGui(tk.Tk):
 
     def action_pathlines_tool(self) -> None:
         """Enter Pathlines rake mode (Tecplot-style click-drag seed line)."""
+        if not self._ensure_pathline_velocity_vars():
+            messagebox.showwarning(
+                "Pathlines",
+                "No U/V velocity variables found in this dataset.\n"
+                "Pathlines need velocity components (UI name is Pathlines, not Streamtraces).",
+                parent=self,
+            )
+            return
         self._set_tool_mode("pathlines")
+        self._log(
+            f"Pathlines tool — rake seeds (U={self.vector_u.get()}, V={self.vector_v.get()})"
+        )
 
     def action_open_probe_window(self) -> None:
         existing = self._probe_dialog
@@ -2602,9 +2655,23 @@ class FlowplotGui(tk.Tk):
         self.action_redraw()
 
     def _pathline_seed_args(self) -> list[str]:
+        """Seeds + auto dt + U/V for Pathlines (never Streamtraces)."""
         args: list[str] = []
         for x, y in self.pathline_seeds[-24:]:
             args.extend(["--seed", f"{x:.8g},{y:.8g}"])
+        # 0 = auto CFL from cell size / |U| (required for hypersonic / large-U fields).
+        args.extend(["--dt", "0", "--max-steps", "1000"])
+        # Ensure velocity names are known before the CLI guesses.
+        gu, gv, _gw = self._guess_velocity_names()
+        u = self.vector_u.get().strip() or gu
+        v = self.vector_v.get().strip() or gv
+        if u:
+            args.extend(["--u-var", u])
+        if v:
+            args.extend(["--v-var", v])
+        w = self.vector_w.get().strip()
+        if w:
+            args.extend(["--w-var", w])
         return args
 
     def action_isosurfaces(self) -> None:
