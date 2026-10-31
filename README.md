@@ -103,7 +103,7 @@ Agents (lehar-agent / MCP): prefer `--json` or `FLOWPLOT_BIN=… python3 agents/
 | Format | Extensions | Status |
 |--------|------------|--------|
 | PLT ASCII | `.dat`, `.tp`, ASCII `.plt` | **Working** (minimal: `TITLE` / `VARIABLES` / ordered or FE `ZONE`) |
-| PLT binary | `.plt` (`#!TDV111` / `#!TDV112`) | **Working** — public Data Format Guide layout (block packing; ordered + basic FE) |
+| PLT binary | `.plt` (`#!TDV111` / `#!TDV112`) | **Working** — public Data Format Guide layout (block packing; ordered + FE; skips Text/Geometry/aux header records used by LEHAR `.combined.plt`) |
 | VTK legacy ASCII | `.vtk` | **Working** (structured grid + unstructured grid subset) |
 | VTK XML | `.vtu`, `.vtp`, … | **Stub** — clear `Unimplemented` error |
 | CGNS | `.cgns`, `.cgz` | **Working** when system `libcgns` is found at build; else clear stub (`apt install libcgns-dev`, `--features cgns`) |

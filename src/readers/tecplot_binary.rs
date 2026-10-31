@@ -16,6 +16,13 @@ use crate::readers::Reader;
 
 const ZONE_MARKER: f32 = 299.0;
 const EOH_MARKER: f32 = 357.0;
+/// Geometry / Text / CustomLabel / UserRec / DatasetAux / VarAux (Data Format Guide).
+const GEOMETRY_MARKER: f32 = 399.0;
+const TEXT_MARKER: f32 = 499.0;
+const CUSTOM_LABEL_MARKER: f32 = 599.0;
+const USER_REC_MARKER: f32 = 699.0;
+const DATASET_AUX_MARKER: f32 = 799.0;
+const VAR_AUX_MARKER: f32 = 899.0;
 
 pub struct TecplotBinaryReader;
 
@@ -87,11 +94,41 @@ pub fn parse_tecplot_binary<R: Read + Seek>(r: &mut R) -> Result<Dataset> {
             zone_headers.push(read_zone_header(r, version, num_var)?);
             continue;
         }
+        // LEHAR `.combined.plt` writes TECTXT* run metadata (499) before zones.
+        // Skip non-zone header records so zone data still loads.
+        if (marker - TEXT_MARKER).abs() < 1e-3 {
+            skip_text_record(r)?;
+            continue;
+        }
+        if (marker - GEOMETRY_MARKER).abs() < 1e-3 {
+            skip_geometry_record(r)?;
+            continue;
+        }
+        if (marker - CUSTOM_LABEL_MARKER).abs() < 1e-3 {
+            skip_custom_label_record(r)?;
+            continue;
+        }
+        if (marker - USER_REC_MARKER).abs() < 1e-3 {
+            let _ = read_tec_string(r)?;
+            continue;
+        }
+        if (marker - DATASET_AUX_MARKER).abs() < 1e-3 {
+            let _ = read_tec_string(r)?;
+            let _fmt = read_i32(r)?;
+            let _ = read_tec_string(r)?;
+            continue;
+        }
+        if (marker - VAR_AUX_MARKER).abs() < 1e-3 {
+            // Variable number is written as a Tecplot int32 string (chars + 0).
+            let _ = read_tec_string(r)?;
+            let _ = read_tec_string(r)?;
+            let _fmt = read_i32(r)?;
+            let _ = read_tec_string(r)?;
+            continue;
+        }
         return Err(Error::parse(
             "PLT binary",
-            format!(
-                "unsupported header marker {marker} (geometry/text/aux not loaded; use zone-only .plt)"
-            ),
+            format!("unsupported header marker {marker}"),
         ));
     }
 
@@ -170,6 +207,136 @@ fn ordered_cell_count(i: usize, j: usize, k: usize) -> usize {
         (_, 1) => di * dj,
         _ => di * dj * dk,
     }
+}
+
+/// Skip a Text header record (marker 499 already consumed).
+fn skip_text_record<R: Read>(r: &mut R) -> Result<()> {
+    let _coord_sys = read_i32(r)?;
+    let _scope = read_i32(r)?;
+    let _x = read_f64(r)?;
+    let _y = read_f64(r)?;
+    let _z = read_f64(r)?;
+    let _font = read_i32(r)?;
+    let _height_units = read_i32(r)?;
+    let _height = read_f64(r)?;
+    let _box_type = read_i32(r)?;
+    let _box_margin = read_f64(r)?;
+    let _box_linewidth = read_f64(r)?;
+    let _box_outline = read_i32(r)?;
+    let _box_fill = read_i32(r)?;
+    let _angle = read_f64(r)?;
+    let _line_spacing = read_f64(r)?;
+    let _anchor = read_i32(r)?;
+    let _zone = read_i32(r)?;
+    let _color = read_i32(r)?;
+    let _macro = read_tec_string(r)?;
+    let _clipping = read_i32(r)?;
+    let _text = read_tec_string(r)?;
+    Ok(())
+}
+
+/// Skip a Geometry header record (marker 399 already consumed).
+fn skip_geometry_record<R: Read>(r: &mut R) -> Result<()> {
+    let coord_sys = read_i32(r)?;
+    let _scope = read_i32(r)?;
+    let _draw_order = read_i32(r)?;
+    let _x = read_f64(r)?;
+    let _y = read_f64(r)?;
+    let _z = read_f64(r)?;
+    let _zone = read_i32(r)?;
+    let _color = read_i32(r)?;
+    let _fill_color = read_i32(r)?;
+    let _is_filled = read_i32(r)?;
+    let geom_type = read_i32(r)?;
+    let _line_pattern = read_i32(r)?;
+    let _pattern_length = read_f64(r)?;
+    let _line_thickness = read_f64(r)?;
+    let _num_ellipse_pts = read_i32(r)?;
+    let _arrow_style = read_i32(r)?;
+    let _arrow_attach = read_i32(r)?;
+    let _arrow_size = read_f64(r)?;
+    let _arrow_angle = read_f64(r)?;
+    let _macro = read_tec_string(r)?;
+    let gtype = read_i32(r)?; // 1=float, 2=double
+    let _clipping = read_i32(r)?;
+    let grid3d = coord_sys == 4;
+    match geom_type {
+        0 => {
+            // Line: polylines with X/Y/(Z) blocks.
+            let n_poly = read_i32(r)?;
+            if !(0..=1_000_000).contains(&n_poly) {
+                return Err(Error::parse(
+                    "PLT binary",
+                    format!("geometry polyline count {n_poly} out of range"),
+                ));
+            }
+            for _ in 0..n_poly {
+                let n_pts = read_i32(r)?;
+                if !(0..=10_000_000).contains(&n_pts) {
+                    return Err(Error::parse(
+                        "PLT binary",
+                        format!("geometry point count {n_pts} out of range"),
+                    ));
+                }
+                let n = n_pts as usize;
+                let blocks = if grid3d { 3 } else { 2 };
+                for _ in 0..blocks {
+                    skip_gtype_block(r, gtype, n)?;
+                }
+            }
+        }
+        1 | 4 => {
+            // Rectangle / Ellipse: two GTYPE values.
+            skip_gtype_block(r, gtype, 2)?;
+        }
+        2 | 3 => {
+            // Square / Circle: one GTYPE value.
+            skip_gtype_block(r, gtype, 1)?;
+        }
+        other => {
+            return Err(Error::parse(
+                "PLT binary",
+                format!("unsupported geometry type {other}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn skip_gtype_block<R: Read>(r: &mut R, gtype: i32, count: usize) -> Result<()> {
+    match gtype {
+        1 => {
+            for _ in 0..count {
+                let _ = read_f32(r)?;
+            }
+        }
+        2 => {
+            for _ in 0..count {
+                let _ = read_f64(r)?;
+            }
+        }
+        other => {
+            return Err(Error::parse(
+                "PLT binary",
+                format!("unsupported geometry field type {other}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn skip_custom_label_record<R: Read>(r: &mut R) -> Result<()> {
+    let n = read_i32(r)?;
+    if !(0..=100_000).contains(&n) {
+        return Err(Error::parse(
+            "PLT binary",
+            format!("custom label count {n} out of range"),
+        ));
+    }
+    for _ in 0..n {
+        let _ = read_tec_string(r)?;
+    }
+    Ok(())
 }
 
 fn read_zone_header<R: Read>(r: &mut R, version: u32, num_var: usize) -> Result<ZoneHeader> {
@@ -546,6 +713,30 @@ pub fn write_minimal_tdv112_ordered(
     for v in variables {
         write_tec_string(&mut f, path, v)?;
     }
+    // Optional LEHAR-style TECTXT metadata (marker 499) before the zone.
+    write_f32(&mut f, path, TEXT_MARKER)?;
+    write_i32(&mut f, path, 1)?; // Frame coords
+    write_i32(&mut f, path, 1)?; // Local scope
+    write_f64(&mut f, path, 0.02)?;
+    write_f64(&mut f, path, 0.97)?;
+    write_f64(&mut f, path, 0.0)?;
+    write_i32(&mut f, path, 1)?; // font
+    write_i32(&mut f, path, 2)?; // point height units
+    write_f64(&mut f, path, 10.0)?;
+    write_i32(&mut f, path, 1)?; // hollow box
+    write_f64(&mut f, path, 0.35)?;
+    write_f64(&mut f, path, 0.05)?;
+    write_i32(&mut f, path, 0)?;
+    write_i32(&mut f, path, 7)?;
+    write_f64(&mut f, path, 0.0)?;
+    write_f64(&mut f, path, 1.1)?;
+    write_i32(&mut f, path, 6)?; // anchor
+    write_i32(&mut f, path, 0)?; // zone
+    write_i32(&mut f, path, 0)?; // color
+    write_tec_string(&mut f, path, "")?; // macro
+    write_i32(&mut f, path, 0)?; // clipping
+    write_tec_string(&mut f, path, "LEHAR\nFlux: hllc")?;
+
     write_f32(&mut f, path, ZONE_MARKER)?;
     write_tec_string(&mut f, path, zone_name)?;
     write_i32(&mut f, path, -1)?;
@@ -628,6 +819,40 @@ mod tests {
         assert_eq!(ds.variables, vec!["X", "Y", "P"]);
         assert_eq!(ds.zones[0].node_count(), 4);
         assert_eq!(ds.zones[0].fields[2].values, vec![1.0, 2.0, 3.0, 4.0]);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn skips_text_marker_before_zone() {
+        // write_minimal_tdv112_ordered embeds a 499 text record like LEHAR combined.plt.
+        let path = std::env::temp_dir().join("flowplot_tdv112_with_text.plt");
+        write_minimal_tdv112_ordered(
+            &path,
+            "combined",
+            "R0_Tet",
+            2,
+            2,
+            &["X", "Y", "P"],
+            &[
+                vec![0.0, 1.0, 0.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![1.0, 2.0, 3.0, 4.0],
+            ],
+        )
+        .unwrap();
+        let raw = std::fs::read(&path).unwrap();
+        let mut has_text = false;
+        for i in 0..raw.len().saturating_sub(4) {
+            let v = f32::from_le_bytes(raw[i..i + 4].try_into().unwrap());
+            if (v - TEXT_MARKER).abs() < 1e-3 {
+                has_text = true;
+                break;
+            }
+        }
+        assert!(has_text, "fixture must include text marker 499");
+        let ds = TecplotBinaryReader.read_path(&path).unwrap();
+        assert_eq!(ds.zone_count(), 1);
+        assert_eq!(ds.zones[0].name, "R0_Tet");
         let _ = std::fs::remove_file(&path);
     }
 

@@ -1,13 +1,16 @@
 //! Wireframe mesh (zone grid / "crate") render to PNG.
 //!
 //! Default first view: show the mesh with **equal aspect**
-//! (no stretch), Contour off. Uses ordered IJ / IJK plane extraction.
+//! (no stretch), Contour off. Ordered IJ / IJK use plane extraction;
+//! finite-element zones draw projected element edges (LEHAR tet/hex combined.plt).
+
+use std::collections::HashSet;
 
 use crate::annotate::{draw_annotations, AnnotationInfo};
 use crate::contour::{
     draw_frame, draw_line, put_pixel, write_png, ContourImage, PlotStyle,
 };
-use crate::dataset::Dataset;
+use crate::dataset::{Dataset, ElementType, Topology};
 use crate::error::{Error, Result};
 use crate::field::{
     extract_scalar_grid_view, find_var, guess_coord_vars, resolve_view, Grid2D, PlaneSpec,
@@ -204,6 +207,14 @@ pub fn render_mesh(ds: &Dataset, opts: &MeshOptions) -> Result<ContourImage> {
     if opts.width == 0 || opts.height == 0 {
         return Err(Error::plot("mesh width/height must be > 0"));
     }
+    let zone = ds
+        .zones
+        .get(opts.zone)
+        .ok_or_else(|| Error::plot(format!("zone index {} out of range", opts.zone)))?;
+    if matches!(zone.topology, Topology::FiniteElement { .. }) {
+        return render_fe_mesh(ds, opts);
+    }
+
     let grid = extract_mesh_grid_view(ds, opts.zone, opts.plane, opts.view)?;
     if grid.ni < 1 || grid.nj < 1 {
         return Err(Error::plot("mesh grid is empty"));
@@ -263,6 +274,213 @@ pub fn render_mesh(ds: &Dataset, opts: &MeshOptions) -> Result<ContourImage> {
         info.view_orient = camera;
         info.plane = Some(match opts.plane {
             PlaneSpec::Auto => "auto".into(),
+            PlaneSpec::Index { axis, index } => format!("{axis}={index}"),
+        });
+        draw_annotations(&mut img, &info);
+    }
+    Ok(img)
+}
+
+fn element_edge_pairs(et: ElementType) -> &'static [(usize, usize)] {
+    match et {
+        ElementType::Line => &[(0, 1)],
+        ElementType::Triangle => &[(0, 1), (1, 2), (2, 0)],
+        ElementType::Quad => &[(0, 1), (1, 2), (2, 3), (3, 0)],
+        ElementType::Tetra => &[
+            (0, 1),
+            (0, 2),
+            (0, 3),
+            (1, 2),
+            (1, 3),
+            (2, 3),
+        ],
+        ElementType::Hexa => &[
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 0),
+            (4, 5),
+            (5, 6),
+            (6, 7),
+            (7, 4),
+            (0, 4),
+            (1, 5),
+            (2, 6),
+            (3, 7),
+        ],
+        ElementType::Pyramid => &[
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 0),
+            (0, 4),
+            (1, 4),
+            (2, 4),
+            (3, 4),
+        ],
+        ElementType::Wedge => &[
+            (0, 1),
+            (1, 2),
+            (2, 0),
+            (3, 4),
+            (4, 5),
+            (5, 3),
+            (0, 3),
+            (1, 4),
+            (2, 5),
+        ],
+        ElementType::Mixed => &[],
+    }
+}
+
+fn fe_node_coord(zone: &crate::dataset::Zone, var_idx: Option<usize>, node: usize) -> f64 {
+    let Some(vi) = var_idx else {
+        return 0.0;
+    };
+    zone.fields
+        .get(vi)
+        .and_then(|f| f.values.get(node).copied())
+        .unwrap_or(0.0)
+}
+
+/// Project FE element edges into screen space and draw a wireframe.
+fn render_fe_mesh(ds: &Dataset, opts: &MeshOptions) -> Result<ContourImage> {
+    let zone = &ds.zones[opts.zone];
+    let Topology::FiniteElement {
+        num_nodes,
+        connectivity,
+    } = &zone.topology
+    else {
+        return Err(Error::plot("internal: expected finite-element zone"));
+    };
+    if *num_nodes == 0 {
+        return Err(Error::plot("finite-element zone has no nodes"));
+    }
+    let Some(npe) = connectivity.nodes_per_elem else {
+        return Err(Error::plot(
+            "mixed finite-element connectivity is not supported for mesh wireframe",
+        ));
+    };
+    if npe == 0 || connectivity.indices.len() < npe {
+        return Err(Error::plot("finite-element connectivity is empty"));
+    }
+
+    let (x_i, y_i, z_i) = guess_coord_vars(ds);
+    let camera = resolve_view(ds, opts.zone, opts.plane, opts.view)?;
+    let mut projected = Vec::with_capacity(*num_nodes);
+    let mut xmin = f64::INFINITY;
+    let mut xmax = f64::NEG_INFINITY;
+    let mut ymin = f64::INFINITY;
+    let mut ymax = f64::NEG_INFINITY;
+    for node in 0..*num_nodes {
+        let wx = fe_node_coord(zone, x_i, node);
+        let wy = fe_node_coord(zone, y_i, node);
+        let wz = fe_node_coord(zone, z_i, node);
+        let (u, v) = camera.project(wx, wy, wz);
+        xmin = xmin.min(u);
+        xmax = xmax.max(u);
+        ymin = ymin.min(v);
+        ymax = ymax.max(v);
+        projected.push((u, v));
+    }
+    if !xmin.is_finite() || !xmax.is_finite() || !ymin.is_finite() || !ymax.is_finite() {
+        return Err(Error::plot("finite-element coordinates are non-finite"));
+    }
+    if (xmax - xmin).abs() < 1e-30 {
+        xmax = xmin + 1.0;
+    }
+    if (ymax - ymin).abs() < 1e-30 {
+        ymax = ymin + 1.0;
+    }
+
+    let mut map = if opts.fill {
+        AspectMap::fit_fill(
+            opts.width,
+            opts.height,
+            xmin,
+            xmax,
+            ymin,
+            ymax,
+            opts.margin,
+        )
+    } else {
+        AspectMap::fit(
+            opts.width,
+            opts.height,
+            xmin,
+            xmax,
+            ymin,
+            ymax,
+            opts.margin,
+        )
+    };
+    map.pan_x = opts.pan_x;
+    map.pan_y = opts.pan_y;
+
+    let mut rgba = vec![0u8; (opts.width as usize) * (opts.height as usize) * 4];
+    for px in rgba.chunks_exact_mut(4) {
+        px.copy_from_slice(&opts.bg_rgba);
+    }
+    // FE has no structured I×J; expose node span as an I×1 line for status/HUD.
+    let mut img = ContourImage {
+        width: opts.width,
+        height: opts.height,
+        rgba,
+        vmin: 0.0,
+        vmax: 1.0,
+        grid: Grid2D {
+            ni: (*num_nodes).max(1),
+            nj: 1,
+            x: projected.iter().map(|(u, _)| *u).collect(),
+            y: projected.iter().map(|(_, v)| *v).collect(),
+            values: vec![0.0; *num_nodes],
+        },
+        pan_x: opts.pan_x,
+        pan_y: opts.pan_y,
+    };
+
+    let pairs = element_edge_pairs(connectivity.element_type);
+    if pairs.is_empty() {
+        return Err(Error::plot(
+            "unsupported finite-element type for mesh wireframe",
+        ));
+    }
+    let mut seen: HashSet<(usize, usize)> = HashSet::new();
+    let nelem = connectivity.indices.len() / npe;
+    for e in 0..nelem {
+        let base = e * npe;
+        for &(a, b) in pairs {
+            if a >= npe || b >= npe {
+                continue;
+            }
+            let na = connectivity.indices[base + a];
+            let nb = connectivity.indices[base + b];
+            if na >= *num_nodes || nb >= *num_nodes {
+                continue;
+            }
+            let key = if na < nb { (na, nb) } else { (nb, na) };
+            if !seen.insert(key) {
+                continue;
+            }
+            let (x0, y0) = projected[na];
+            let (x1, y1) = projected[nb];
+            let (px0, py0) = map.world_to_pixel(x0, y0);
+            let (px1, py1) = map.world_to_pixel(x1, y1);
+            draw_line(&mut img, px0, py0, px1, py1, opts.line_rgba);
+        }
+    }
+
+    if opts.style.draw_frame() {
+        draw_frame(&mut img, opts.style.frame_rgba(), opts.style.frame_thickness());
+    }
+    if opts.annotate {
+        let mut info =
+            AnnotationInfo::from_dataset(ds, opts.zone, None, opts.path_hint.as_deref());
+        info.colorbar = false;
+        info.view = Some(camera.label());
+        info.view_orient = camera;
+        info.plane = Some(match opts.plane {
+            PlaneSpec::Auto => "fe-edges".into(),
             PlaneSpec::Index { axis, index } => format!("{axis}={index}"),
         });
         draw_annotations(&mut img, &info);
