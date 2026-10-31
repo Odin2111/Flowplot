@@ -80,7 +80,7 @@ Binary `.plt` / `.szplt` stays on lehar native readers. Flowplot only takes publ
 | id | Title | Status | Lehar | Flowplot / MCP |
 |----|-------|--------|-------|----------------|
 | `bow-shock-field` | Bow-shock field | stub | `bow_shock_validation` | `load` → `nondim` → `contour` (Mach/ρ); optional `--pathlines` |
-| `shock-polar-field` | Shock-polar field | stub | `shock_polar` | `contour --var Mach\|p --u-ref …` |
+| `shock-polar-field` | Shock polar (θ–β–M) | ready | `shock_polar` | Analyze chart (`gui/shock_polar.py`); CFD polar in lehar |
 | `shock-tracking-field` | Shock-tracking field evidence | stub | `shock_tracking` | `contour --var p\|rho` |
 | `shock-stability-field` | Shock-sensor / pressure contour | stub | `shock_stability` | `contour --var sensor\|p` |
 | `rankine-hugoniot-field` | Rankine–Hugoniot state contour | stub | `rankine_hugoniot` | `contour` optional evidence |

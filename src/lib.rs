@@ -37,13 +37,16 @@ pub mod field;
 pub mod menu;
 pub mod mesh;
 pub mod nondim;
+pub mod overlays;
 pub mod pathlines;
 pub mod profile;
 pub mod readers;
 pub mod validate;
 pub mod view;
 
-pub use annotate::{draw_annotations, draw_probe_label, AnnotationInfo};
+pub use annotate::{
+    draw_annotations, draw_axes_triad, draw_probe_label, AnnotationInfo, LegendAlign,
+};
 pub use contour::{
     pixel_to_world, render_contour, world_to_pixel, world_to_pixel_plot, write_png, ColorMapName,
     ContourColoring, ContourImage, ContourOptions, PlotStyle,
@@ -54,16 +57,22 @@ pub use dataset::{
 };
 pub use error::{Error, Result};
 pub use field::{
-    dataset_is_effectively_2d, extract_scalar_grid_view, pick_plot_coord_indices, PlaneSpec,
+    dataset_is_effectively_2d, extract_scalar_grid_view, pick_plot_coord_indices, resolve_view,
+    suggest_default_view, PlaneSpec,
 };
 pub use menu::{format_item_text, format_menu_text, format_stub_run, PostprocessMenu};
 pub use mesh::{
     extract_mesh_grid, extract_mesh_grid_view, overlay_mesh, render_mesh, write_mesh_png,
     AspectMap, MeshOptions, DEFAULT_MESH_RGBA,
 };
-pub use view::{LookAxis, ViewSpec};
+pub use view::{
+    clamp_planar_elevation, principal_plane_from_angles, LookAxis, PrincipalPlane, ViewSpec,
+};
 pub use nondim::{
     apply_nondim, format_suggestions, suggest_scales, NondimScales, NondimSuggestion, ScaleKind,
+};
+pub use overlays::{
+    overlay_boundary_edges, overlay_isolines, overlay_scatter, overlay_vectors,
 };
 pub use pathlines::{
     default_seeds, guess_velocity_vars, overlay_pathlines, overlay_pathlines_styled,

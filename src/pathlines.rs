@@ -248,6 +248,8 @@ pub fn render_pathlines_png_styled(
         vmin: 0.0,
         vmax: 1.0,
         grid,
+        pan_x: 0.0,
+        pan_y: 0.0,
     };
     let lines = trace_pathlines(ds, opts)?;
     overlay_pathlines_styled(&mut img, &lines, style);

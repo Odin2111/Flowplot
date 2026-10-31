@@ -12,6 +12,8 @@ from dataclasses import dataclass, replace
 from tkinter import ttk
 from typing import Callable
 
+from windowing import stay_above
+
 
 PANEL = "#e2e5e8"
 BG = "#eceef0"
@@ -34,8 +36,10 @@ class ContourDetailsState:
     nlevels: int = 16
     colormap: str = "Default"
     legend: bool = True
+    legend_align: str = "Right"  # Right | Left
+    legend_font_px: float = 0.0  # 0 = auto
     show_lines: bool = False  # stub
-    show_labels: bool = False  # stub / toolbar Contour Label
+    show_labels: bool = False  # toolbar Contour labels
     label_skip: int = 1  # stub
     band_min: float | None = None  # stub
     band_max: float | None = None  # stub
@@ -53,6 +57,9 @@ class ContourDetailsState:
         }
         return m.get(self.colormap, "default")
 
+    def cli_legend_align(self) -> str:
+        return "left" if self.legend_align.lower().startswith("left") else "right"
+
 
 class ContourDetailsDialog(tk.Toplevel):
     """Side/modal Contour Details notebook."""
@@ -69,7 +76,6 @@ class ContourDetailsDialog(tk.Toplevel):
         self.resizable(True, True)
         self.geometry("520x420")
         self.minsize(440, 360)
-        self.transient(master)
         self.state = replace(state)
         self._on_apply = on_apply
 
@@ -77,16 +83,15 @@ class ContourDetailsDialog(tk.Toplevel):
         self.nlevels_var = tk.IntVar(value=max(2, int(self.state.nlevels)))
         self.colormap_var = tk.StringVar(value=self.state.colormap)
         self.legend_var = tk.BooleanVar(value=self.state.legend)
+        self.legend_align_var = tk.StringVar(value=self.state.legend_align)
+        self.legend_font_var = tk.DoubleVar(value=float(self.state.legend_font_px or 0.0))
         self.lines_var = tk.BooleanVar(value=self.state.show_lines)
         self.labels_var = tk.BooleanVar(value=self.state.show_labels)
         self.label_skip_var = tk.IntVar(value=max(1, int(self.state.label_skip)))
 
         self._build()
         self.protocol("WM_DELETE_WINDOW", self.destroy)
-        try:
-            self.grab_set()
-        except tk.TclError:
-            pass
+        stay_above(self, master, modal=False)
 
     def _build(self) -> None:
         hdr = tk.Frame(self, bg=HEADER_BG)
@@ -202,18 +207,20 @@ class ContourDetailsDialog(tk.Toplevel):
     def _build_labels_tab(self, parent: tk.Frame) -> None:
         ttk.Checkbutton(
             parent,
-            text="Show contour labels",
+            text="Show contour labels (iso-value stamps)",
             variable=self.labels_var,
         ).pack(anchor="w", padx=12, pady=12)
         row = tk.Frame(parent, bg=PANEL)
         row.pack(anchor="w", padx=12)
-        tk.Label(row, text="Label every Nth level (stub)", bg=PANEL, fg=FG).pack(side=tk.LEFT)
+        tk.Label(row, text="Label every Nth level (spacing hint)", bg=PANEL, fg=FG).pack(
+            side=tk.LEFT
+        )
         ttk.Spinbox(row, from_=1, to=16, textvariable=self.label_skip_var, width=5).pack(
             side=tk.LEFT, padx=8
         )
         tk.Label(
             parent,
-            text="Toolbar Contour Label toggles this flag; iso-label placement is stubbed.",
+            text="Toolbar Abc Label toggles stamps along a mid-plane scan of the flood.",
             bg=PANEL,
             fg=MUTED,
             font=("Helvetica", 8),
@@ -225,13 +232,29 @@ class ContourDetailsDialog(tk.Toplevel):
             text="Show legend (colorbar)",
             variable=self.legend_var,
         ).pack(anchor="w", padx=12, pady=12)
+        row = tk.Frame(parent, bg=PANEL)
+        row.pack(anchor="w", fill=tk.X, padx=12, pady=6)
+        tk.Label(row, text="Alignment", bg=PANEL, fg=FG).pack(side=tk.LEFT)
+        ttk.Combobox(
+            row,
+            textvariable=self.legend_align_var,
+            values=("Right", "Left"),
+            state="readonly",
+            width=10,
+        ).pack(side=tk.LEFT, padx=8)
+        row2 = tk.Frame(parent, bg=PANEL)
+        row2.pack(anchor="w", fill=tk.X, padx=12, pady=6)
+        tk.Label(row2, text="Font size (px, 0=auto)", bg=PANEL, fg=FG).pack(side=tk.LEFT)
+        ttk.Spinbox(
+            row2, from_=0, to=28, increment=1, textvariable=self.legend_font_var, width=6
+        ).pack(side=tk.LEFT, padx=8)
         tk.Label(
             parent,
-            text="Legend position / font size stubs match Tecplot Contour Details → Legend.",
+            text="Matches Tecplot Contour Details → Legend. Toolbar also has Legend Options…",
             bg=PANEL,
             fg=MUTED,
             font=("Helvetica", 8),
-        ).pack(anchor="w", padx=12)
+        ).pack(anchor="w", padx=12, pady=10)
 
     def _build_stub_tab(self, parent: tk.Frame, title: str, body: str) -> None:
         tk.Label(
@@ -255,11 +278,17 @@ class ContourDetailsDialog(tk.Toplevel):
             n = int(self.nlevels_var.get())
         except (tk.TclError, ValueError, TypeError):
             n = 16
+        try:
+            font = float(self.legend_font_var.get())
+        except (tk.TclError, ValueError, TypeError):
+            font = 0.0
         self.state = ContourDetailsState(
             coloring=self.coloring_var.get() or "Continuous",
             nlevels=max(2, min(64, n)),
             colormap=self.colormap_var.get() or "Default",
             legend=bool(self.legend_var.get()),
+            legend_align=self.legend_align_var.get() or "Right",
+            legend_font_px=max(0.0, font),
             show_lines=bool(self.lines_var.get()),
             show_labels=bool(self.labels_var.get()),
             label_skip=max(1, int(self.label_skip_var.get() or 1)),

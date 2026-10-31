@@ -13,6 +13,45 @@ pub enum LookAxis {
     Z,
 }
 
+/// World plane a face-on camera looks at (used for planar edge-on clamps).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrincipalPlane {
+    /// X right, Y up — look along ±Z.
+    Xy,
+    /// X right, Z up — look along ±Y (meridian / RZ slices).
+    Xz,
+    /// Y right, Z up — look along ±X.
+    Yz,
+}
+
+impl PrincipalPlane {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Xy => "xy",
+            Self::Xz => "xz",
+            Self::Yz => "yz",
+        }
+    }
+
+    /// Face-on Axis view for this plane.
+    pub fn face_on_view(self) -> ViewSpec {
+        match self {
+            Self::Xy => ViewSpec::Axis {
+                axis: LookAxis::Z,
+                positive: true,
+            },
+            Self::Xz => ViewSpec::Axis {
+                axis: LookAxis::Y,
+                positive: true,
+            },
+            Self::Yz => ViewSpec::Axis {
+                axis: LookAxis::X,
+                positive: true,
+            },
+        }
+    }
+}
+
 /// Screen projection of world (X, Y, Z).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ViewSpec {
@@ -103,6 +142,9 @@ impl ViewSpec {
     }
 
     /// Convert an axis-aligned button into matching free angles (for drag handoff).
+    ///
+    /// Angles are chosen so [`Self::project`] matches the Axis projection
+    /// (same screen (u,v)), not the geometric eye-sphere mnemonic alone.
     pub fn to_free_angles(self) -> (f64, f64) {
         match self {
             Self::Auto | Self::Axis {
@@ -113,26 +155,44 @@ impl ViewSpec {
                 axis: LookAxis::Z,
                 positive: false,
             } => (180.0, -90.0),
+            // +Y Axis → (x,z); Free(-90,0) matches that (Free(90,0) mirrors X).
             Self::Axis {
                 axis: LookAxis::Y,
                 positive: true,
-            } => (90.0, 0.0),
-            Self::Axis {
-                axis: LookAxis::Y,
-                positive: false,
             } => (-90.0, 0.0),
             Self::Axis {
+                axis: LookAxis::Y,
+                positive: false,
+            } => (90.0, 0.0),
+            // +X Axis → (-y,z); Free(180,0) matches (Free(0,0) is -X).
+            Self::Axis {
                 axis: LookAxis::X,
                 positive: true,
-            } => (0.0, 0.0),
+            } => (180.0, 0.0),
             Self::Axis {
                 axis: LookAxis::X,
                 positive: false,
-            } => (180.0, 0.0),
+            } => (0.0, 0.0),
             Self::Free {
                 azimuth_deg,
                 elevation_deg,
             } => (azimuth_deg, elevation_deg),
+        }
+    }
+
+    /// Which world plane this view is (near) face-on to.
+    pub fn principal_plane(self) -> PrincipalPlane {
+        match self {
+            Self::Auto => PrincipalPlane::Xy,
+            Self::Axis { axis, .. } => match axis {
+                LookAxis::Z => PrincipalPlane::Xy,
+                LookAxis::Y => PrincipalPlane::Xz,
+                LookAxis::X => PrincipalPlane::Yz,
+            },
+            Self::Free {
+                azimuth_deg,
+                elevation_deg,
+            } => principal_plane_from_angles(azimuth_deg, elevation_deg),
         }
     }
 
@@ -213,6 +273,59 @@ fn parse_free(s: &str) -> Result<ViewSpec> {
         _ => Err(Error::plot(format!(
             "invalid --view '{s}' (expected auto|+x|-x|+y|-y|+z|-z|az=…,el=…)"
         ))),
+    }
+}
+
+/// Classify a free camera by which plane it faces (for edge-on clamps).
+pub fn principal_plane_from_angles(azimuth_deg: f64, elevation_deg: f64) -> PrincipalPlane {
+    let el = elevation_deg.abs();
+    if el > 45.0 {
+        return PrincipalPlane::Xy;
+    }
+    // Near the equator: az near ±90 → looking along ±Y → XZ plane.
+    let az = ((azimuth_deg % 360.0) + 360.0) % 360.0;
+    let dist_y = (az - 90.0).abs().min((az - 270.0).abs());
+    let dist_x = az.min((az - 180.0).abs()).min((360.0 - az).abs());
+    if dist_y <= dist_x {
+        PrincipalPlane::Xz
+    } else {
+        PrincipalPlane::Yz
+    }
+}
+
+/// Keep a planar surface readable — never true edge-on.
+///
+/// XY data: avoid elevation ≈ 0. XZ/YZ (meridian) data: face-on is elevation ≈ 0,
+/// so clamp away from the poles instead.
+pub fn clamp_planar_elevation(
+    elevation_deg: f64,
+    plane: PrincipalPlane,
+    min_tilt_deg: f64,
+) -> f64 {
+    let el = elevation_deg.clamp(-90.0, 90.0);
+    let min_tilt = min_tilt_deg.clamp(0.0, 45.0);
+    match plane {
+        PrincipalPlane::Xy => {
+            if el.abs() < min_tilt {
+                if el >= 0.0 {
+                    min_tilt
+                } else {
+                    -min_tilt
+                }
+            } else {
+                el
+            }
+        }
+        PrincipalPlane::Xz | PrincipalPlane::Yz => {
+            let max_el = 90.0 - min_tilt;
+            if el > max_el {
+                max_el
+            } else if el < -max_el {
+                -max_el
+            } else {
+                el
+            }
+        }
     }
 }
 
@@ -311,11 +424,42 @@ mod tests {
             elevation_deg: 90.0,
         }
         .project(1.0, 2.0, 0.0);
-        // At +Z pole we fall back to world_up=+Y; expect roughly X right-ish.
-        assert!(u.is_finite() && v.is_finite());
         let (u2, v2) = ViewSpec::parse("+z").unwrap().project(1.0, 2.0, 0.0);
-        // Axis +Z is exact XY; free pole uses different up — just ensure nonzero span.
         assert!((u2 - 1.0).abs() < 1e-12 && (v2 - 2.0).abs() < 1e-12);
-        let _ = (u, v);
+        assert!((u - u2).abs() < 1e-9 && (v - v2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn free_angles_match_axis_projections() {
+        for tag in ["+x", "-x", "+y", "-y", "+z", "-z"] {
+            let axis = ViewSpec::parse(tag).unwrap();
+            let (az, el) = axis.to_free_angles();
+            let free = ViewSpec::Free {
+                azimuth_deg: az,
+                elevation_deg: el,
+            };
+            for (x, y, z) in [(1.0, 2.0, 3.0), (-4.0, 0.5, -1.0), (0.0, 0.0, 1.0)] {
+                let (u0, v0) = axis.project(x, y, z);
+                let (u1, v1) = free.project(x, y, z);
+                assert!(
+                    (u0 - u1).abs() < 1e-9 && (v0 - v1).abs() < 1e-9,
+                    "{tag} at ({x},{y},{z}): axis=({u0},{v0}) free=({u1},{v1})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn planar_clamp_xy_avoids_edge_on() {
+        assert!((clamp_planar_elevation(0.0, PrincipalPlane::Xy, 18.0) - 18.0).abs() < 1e-12);
+        assert!((clamp_planar_elevation(5.0, PrincipalPlane::Xy, 18.0) - 18.0).abs() < 1e-12);
+        assert!((clamp_planar_elevation(40.0, PrincipalPlane::Xy, 18.0) - 40.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn planar_clamp_xz_keeps_face_on() {
+        // Meridian face-on is el=0 — must not be forced to 18°.
+        assert!((clamp_planar_elevation(0.0, PrincipalPlane::Xz, 18.0) - 0.0).abs() < 1e-12);
+        assert!((clamp_planar_elevation(90.0, PrincipalPlane::Xz, 18.0) - 72.0).abs() < 1e-12);
     }
 }

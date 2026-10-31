@@ -2,7 +2,7 @@
 
 use crate::dataset::{Dataset, Location, OrderedDims, Topology, Zone};
 use crate::error::{Error, Result};
-use crate::view::ViewSpec;
+use crate::view::{LookAxis, PrincipalPlane, ViewSpec};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Axis {
@@ -277,6 +277,69 @@ pub fn extract_scalar_grid(
     extract_scalar_grid_view(ds, zone_idx, var_idx, plane, ViewSpec::Auto)
 }
 
+/// Suggest a face-on camera for the zone/plane (matches Auto plot-axis pick).
+///
+/// Meridian / RZ slices (X+Z vary, Y thin) → look along ±Y so orbit starts on the
+/// real domain instead of jumping to a collapsed XY edge-on view.
+pub fn suggest_default_view(ds: &Dataset, zone_idx: usize, plane: PlaneSpec) -> Result<ViewSpec> {
+    let zone = ds
+        .zones
+        .get(zone_idx)
+        .ok_or_else(|| Error::plot(format!("zone index {zone_idx} out of range")))?;
+    let Topology::Ordered(dims) = &zone.topology else {
+        return Ok(ViewSpec::Axis {
+            axis: LookAxis::Z,
+            positive: true,
+        });
+    };
+    let (x_i, y_i, z_i) = guess_coord_vars(ds);
+    let (_ni, _nj, node_indices) = plane_nodes(*dims, plane)?;
+    let (plot_u, plot_v) = pick_plot_coord_indices(zone, &node_indices, x_i, y_i, z_i);
+    Ok(view_for_plot_axes(plot_u, plot_v, x_i, y_i, z_i))
+}
+
+/// Resolve `Auto` into a concrete Axis/Free camera so mesh geometry and orbit share one path.
+pub fn resolve_view(
+    ds: &Dataset,
+    zone_idx: usize,
+    plane: PlaneSpec,
+    view: ViewSpec,
+) -> Result<ViewSpec> {
+    if matches!(view, ViewSpec::Auto) {
+        suggest_default_view(ds, zone_idx, plane)
+    } else {
+        Ok(view)
+    }
+}
+
+fn view_for_plot_axes(
+    plot_u: Option<usize>,
+    plot_v: Option<usize>,
+    x_i: Option<usize>,
+    y_i: Option<usize>,
+    z_i: Option<usize>,
+) -> ViewSpec {
+    let is_x = |i: Option<usize>| i.is_some() && i == x_i;
+    let is_y = |i: Option<usize>| i.is_some() && i == y_i;
+    let is_z = |i: Option<usize>| i.is_some() && i == z_i;
+    let plane = if is_x(plot_u) && is_y(plot_v) {
+        PrincipalPlane::Xy
+    } else if is_x(plot_u) && is_z(plot_v) {
+        PrincipalPlane::Xz
+    } else if is_y(plot_u) && is_z(plot_v) {
+        PrincipalPlane::Yz
+    } else if is_y(plot_u) && is_x(plot_v) {
+        PrincipalPlane::Xy
+    } else if is_z(plot_u) && is_x(plot_v) {
+        PrincipalPlane::Xz
+    } else if is_z(plot_u) && is_y(plot_v) {
+        PrincipalPlane::Yz
+    } else {
+        PrincipalPlane::Xy
+    };
+    plane.face_on_view()
+}
+
 /// Extract a nodal 2D grid and project world XYZ with `view`.
 pub fn extract_scalar_grid_view(
     ds: &Dataset,
@@ -312,27 +375,18 @@ pub fn extract_scalar_grid_view(
     let mut x = Vec::with_capacity(n);
     let mut y = Vec::with_capacity(n);
 
-    if matches!(view, ViewSpec::Auto) {
-        let (plot_x, plot_y) = pick_plot_coord_indices(zone, &node_indices, x_i, y_i, z_i);
-        for (local, &node) in node_indices.iter().enumerate() {
-            let i = local % ni;
-            let j = local / ni;
-            values.push(*field.values.get(node).unwrap_or(&f64::NAN));
-            x.push(coord_at(zone, plot_x, node, i));
-            y.push(coord_at(zone, plot_y, node, j));
-        }
-    } else {
-        for (local, &node) in node_indices.iter().enumerate() {
-            let i = local % ni;
-            let j = local / ni;
-            values.push(*field.values.get(node).unwrap_or(&f64::NAN));
-            let wx = coord_at(zone, x_i, node, i);
-            let wy = coord_at(zone, y_i, node, j);
-            let wz = coord_at(zone, z_i, node, 0);
-            let (u, v) = view.project(wx, wy, wz);
-            x.push(u);
-            y.push(v);
-        }
+    // Always project through a concrete camera so Auto and Free share geometry.
+    let camera = resolve_view(ds, zone_idx, plane, view)?;
+    for (local, &node) in node_indices.iter().enumerate() {
+        let i = local % ni;
+        let j = local / ni;
+        values.push(*field.values.get(node).unwrap_or(&f64::NAN));
+        let wx = coord_at(zone, x_i, node, i);
+        let wy = coord_at(zone, y_i, node, j);
+        let wz = coord_at(zone, z_i, node, 0);
+        let (u, v) = camera.project(wx, wy, wz);
+        x.push(u);
+        y.push(v);
     }
 
     Ok(Grid2D {

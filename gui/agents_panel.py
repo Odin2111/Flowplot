@@ -1,7 +1,8 @@
-"""Interactive Agents panel — browse postprocess-menu.yaml and run against the loaded file.
+"""Analyze panel — validation / correction agents with side charts (not raw JSON).
 
-Invokes `flowplot menu run <id> -- <args…> --json` so agents share the same
-dataset path / CLI model as Mesh, Contour, and Pathlines.
+Invokes `flowplot menu run <id>` against the loaded dataset. Field sanity,
+positivity, and profile extracts render Tk/matplotlib charts; shock polar draws
+an analytic θ–β–M curve (see docs). Raw JSON stays behind a Details toggle.
 """
 
 from __future__ import annotations
@@ -15,7 +16,9 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any, Callable
 
-# Match main GUI palette.
+from shock_polar import plot_polar_on_axes, plot_polar_png
+from windowing import stay_above
+
 BG = "#eceef0"
 PANEL = "#e2e5e8"
 MENU_BG = "#d5d9de"
@@ -79,7 +82,7 @@ def menu_yaml_path(repo_root: Path) -> Path:
 
 
 class AgentsPanel(tk.Toplevel):
-    """Browse the post-process menu and run selected actions on the loaded dataset."""
+    """Browse Analyze actions and show charts for validation / polar / profiles."""
 
     def __init__(
         self,
@@ -93,11 +96,13 @@ class AgentsPanel(tk.Toplevel):
         plot_style: str = "jfm",
         on_png: Callable[[Path], None] | None = None,
         repo_root: Path | None = None,
+        title: str = "Analyze",
+        focus_group: str | None = None,
     ) -> None:
         super().__init__(master)
-        self.title("Flowplot Agents")
-        self.geometry("920x620")
-        self.minsize(720, 480)
+        self.title(title)
+        self.geometry("980x680")
+        self.minsize(760, 520)
         self.configure(bg=BG)
 
         self.flowplot = flowplot_bin
@@ -108,13 +113,18 @@ class AgentsPanel(tk.Toplevel):
         self.plot_style = plot_style
         self.on_png = on_png
         self.repo_root = repo_root or Path(__file__).resolve().parent.parent
+        self.focus_group = focus_group
         self._items: dict[str, dict[str, Any]] = {}
         self._selected_id: str | None = None
+        self._last_payload: dict[str, Any] | None = None
+        self._fig_canvas = None
+        self._mpl_fig = None
 
         self._style()
         self._build()
         self._load_menu()
         self.protocol("WM_DELETE_WINDOW", self.destroy)
+        stay_above(self, master, modal=False)
 
     def _style(self) -> None:
         style = ttk.Style(self)
@@ -138,7 +148,7 @@ class AgentsPanel(tk.Toplevel):
         header.pack(side=tk.TOP, fill=tk.X, padx=8, pady=8)
         ttk.Label(
             header,
-            text="Post-process agents",
+            text="Analyze — validation & correction",
             style="Agents.TLabel",
             font=("Helvetica", 12, "bold"),
         ).pack(side=tk.LEFT)
@@ -149,11 +159,11 @@ class AgentsPanel(tk.Toplevel):
         body = ttk.Frame(self)
         body.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
 
-        left = ttk.Frame(body, style="Agents.TFrame", width=320)
+        left = ttk.Frame(body, style="Agents.TFrame", width=300)
         left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
         left.pack_propagate(False)
 
-        ttk.Label(left, text="Menu", style="Agents.TLabel", font=("Helvetica", 10, "bold")).pack(
+        ttk.Label(left, text="Actions", style="Agents.TLabel", font=("Helvetica", 10, "bold")).pack(
             anchor="w", padx=10, pady=(10, 4)
         )
         tree_wrap = ttk.Frame(left, style="Agents.TFrame")
@@ -166,7 +176,7 @@ class AgentsPanel(tk.Toplevel):
         )
         self.tree.heading("#0", text="Action")
         self.tree.heading("status", text="Status")
-        self.tree.column("#0", width=200, stretch=True)
+        self.tree.column("#0", width=190, stretch=True)
         self.tree.column("status", width=70, stretch=False, anchor="center")
         scroll = ttk.Scrollbar(tree_wrap, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
@@ -184,7 +194,7 @@ class AgentsPanel(tk.Toplevel):
         ).pack(anchor="w", padx=10, pady=(10, 2))
         self.detail = tk.Text(
             detail,
-            height=8,
+            height=5,
             wrap=tk.WORD,
             bg="#fafbfc",
             fg=FG,
@@ -209,30 +219,52 @@ class AgentsPanel(tk.Toplevel):
             width=18,
         )
         self.var_combo.pack(side=tk.LEFT, padx=(0, 8), pady=8)
-        ttk.Button(opts, text="Run selected", style="Agents.TButton", command=self.run_selected).pack(
+        ttk.Button(opts, text="Run", style="Agents.TButton", command=self.run_selected).pack(
             side=tk.LEFT, padx=4, pady=8
         )
-        ttk.Button(opts, text="Refresh menu", style="Agents.TButton", command=self._load_menu).pack(
+        ttk.Button(opts, text="Refresh", style="Agents.TButton", command=self._load_menu).pack(
             side=tk.LEFT, padx=4, pady=8
         )
+        ttk.Button(
+            opts, text="JSON details", style="Agents.TButton", command=self._toggle_json
+        ).pack(side=tk.LEFT, padx=4, pady=8)
 
-        ttk.Label(
-            right, text="Results", style="Agents.TLabel", font=("Helvetica", 10, "bold")
-        ).pack(anchor="w")
+        # Chart + summary (main UX)
+        self.chart_frame = ttk.Frame(right, style="Agents.TFrame")
+        self.chart_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
+        self.summary = ttk.Label(
+            self.chart_frame,
+            text="Select Field sanity, Positivity, Extract profile, or Shock polar → Run.",
+            style="AgentsMuted.TLabel",
+            wraplength=520,
+            justify=tk.LEFT,
+        )
+        self.summary.pack(anchor="w", padx=10, pady=(8, 4))
+        self.plot_host = tk.Frame(self.chart_frame, bg=VIEWPORT_BG, height=320)
+        self.plot_host.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        self.json_frame = ttk.Frame(right)
         self.results = tk.Text(
-            right,
+            self.json_frame,
+            height=8,
             wrap=tk.WORD,
             bg=VIEWPORT_BG,
             fg=FG,
             relief=tk.FLAT,
             highlightthickness=1,
             highlightbackground="#9aa3ab",
-            font=("DejaVu Sans Mono", 9),
+            font=("DejaVu Sans Mono", 8),
         )
-        self.results.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
-        self._log("Select a ready action and click Run selected.")
-        if not self.dataset_path:
-            self._log("No dataset loaded — File → Open a CFD file first.")
+        self.results.pack(fill=tk.BOTH, expand=True)
+        self._json_visible = False
+
+    def _toggle_json(self) -> None:
+        if self._json_visible:
+            self.json_frame.pack_forget()
+            self._json_visible = False
+        else:
+            self.json_frame.pack(fill=tk.X, pady=(0, 4))
+            self._json_visible = True
 
     def _set_detail(self, text: str) -> None:
         self.detail.configure(state=tk.NORMAL)
@@ -246,6 +278,35 @@ class AgentsPanel(tk.Toplevel):
 
     def _clear_results(self) -> None:
         self.results.delete("1.0", tk.END)
+
+    def _clear_chart(self) -> None:
+        if self._fig_canvas is not None:
+            try:
+                self._fig_canvas.get_tk_widget().destroy()
+            except tk.TclError:
+                pass
+            self._fig_canvas = None
+            self._mpl_fig = None
+        for child in self.plot_host.winfo_children():
+            child.destroy()
+
+    def _show_mpl(self, draw_fn) -> None:
+        self._clear_chart()
+        try:
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+            from matplotlib.figure import Figure
+        except ImportError:
+            self.summary.configure(text="matplotlib missing — install for Analyze charts.")
+            return
+        fig = Figure(figsize=(5.4, 3.4), dpi=100)
+        ax = fig.add_subplot(111)
+        draw_fn(ax)
+        fig.tight_layout()
+        canvas = FigureCanvasTkAgg(fig, master=self.plot_host)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self._fig_canvas = canvas
+        self._mpl_fig = fig
 
     def _run_cli(self, args: list[str], timeout: int = 180) -> subprocess.CompletedProcess[str]:
         cmd = [self.flowplot, *args]
@@ -271,7 +332,6 @@ class AgentsPanel(tk.Toplevel):
             return
         if proc.returncode != 0:
             self._log((proc.stderr or proc.stdout or "menu list failed").strip())
-            # Fallback: parse YAML if CLI menu fails.
             self._load_menu_yaml_fallback()
             return
         try:
@@ -281,15 +341,18 @@ class AgentsPanel(tk.Toplevel):
             self._load_menu_yaml_fallback()
             return
         groups = payload.get("groups") or []
+        preferred = self.focus_group or "validation"
         for group in groups:
             gid = group.get("id") or "group"
+            # Prefer validation + shocks for Analyze; still list the rest collapsed.
+            open_default = gid in (preferred, "validation", "shocks", "nondim")
             gnode = self.tree.insert(
                 "",
                 tk.END,
                 iid=f"g:{gid}",
                 text=group.get("title") or gid,
                 values=("",),
-                open=True,
+                open=open_default,
             )
             for item in group.get("items") or []:
                 iid = item.get("id") or ""
@@ -330,7 +393,7 @@ class AgentsPanel(tk.Toplevel):
                 iid=f"g:{gid}",
                 text=group.get("title") or gid,
                 values=("",),
-                open=True,
+                open=gid in ("validation", "shocks"),
             )
             for item in group.get("items") or []:
                 iid = item.get("id") or ""
@@ -345,7 +408,6 @@ class AgentsPanel(tk.Toplevel):
                     text=item.get("title") or iid,
                     values=("ready" if status == "ready" else "stub",),
                 )
-        self._log(f"Loaded {len(self._items)} items from {path.name}.")
 
     def _on_select(self, _event: tk.Event | None = None) -> None:
         sel = self.tree.selection()
@@ -369,11 +431,7 @@ class AgentsPanel(tk.Toplevel):
         ]
         if lehar.get("agent"):
             lines.append(f"lehar_agent: {lehar['agent']}")
-        if lehar.get("surface"):
-            lines.append(f"lehar_surface: {lehar['surface']}")
         lines.append(f"flowplot: {fp.get('command', '')}")
-        if fp.get("template"):
-            lines.append(f"template: {fp['template']}")
         if fp.get("notes"):
             lines.append(f"notes: {str(fp['notes']).strip()}")
         self._set_detail("\n".join(lines))
@@ -384,7 +442,7 @@ class AgentsPanel(tk.Toplevel):
         messagebox.showerror(
             "No dataset",
             "Load a CFD file first (File → Open).\n"
-            "Agents run against the currently open path only.",
+            "Analyze runs against the currently open path only.",
             parent=self,
         )
         self._log("error: no dataset loaded — refusing to invent a path.")
@@ -399,7 +457,10 @@ class AgentsPanel(tk.Toplevel):
         command = fp.get("command") or ""
         required = list(fp.get("required_args") or [])
 
-        # Stubs: still invoke menu run so JSON documents the required agent.
+        if item_id == "shock-polar-field":
+            # Handled in run_selected (matplotlib polar); no CLI args needed.
+            return [str(ds)]
+
         if status != "ready":
             return [str(ds)]
 
@@ -441,28 +502,146 @@ class AgentsPanel(tk.Toplevel):
         elif command == "pathlines":
             args.extend(["--style", self.plot_style])
             args.extend(self.nondim_args)
-            if var:
-                # already have --var from needs_var? pathlines uses --var as underlay
-                pass
         elif command == "nondim":
             args.extend(self.nondim_args)
         elif command == "profile":
             args.extend(["--line", "mid-j"])
-            # JSON profile to a sidecar (--json also prints to stdout via menu run).
             json_out = Path(tempfile.gettempdir()) / f"flowplot_agent_{item_id}.json"
             args.extend(["-o", str(json_out)])
 
-        # stash for refresh
         self._last_out = out_path
         return args
 
+    def _render_validation_chart(self, payload: dict[str, Any], *, positivity: bool) -> None:
+        report = payload.get("report") or payload
+        fields = report.get("fields") or []
+        if not fields:
+            self.summary.configure(text=report.get("summary") or payload.get("summary") or "No fields.")
+            self._clear_chart()
+            return
+
+        def draw(ax) -> None:
+            names = []
+            mins = []
+            maxs = []
+            flags = []
+            for f in fields[:24]:
+                name = str(f.get("name") or "?")
+                if name.lower() in COORD_NAMES:
+                    continue
+                names.append(name)
+                mins.append(float(f["min"]) if f.get("min") is not None else 0.0)
+                maxs.append(float(f["max"]) if f.get("max") is not None else 0.0)
+                bad = (not f.get("ok", True)) or (
+                    positivity and int(f.get("negative_count") or 0) > 0
+                )
+                flags.append(bad)
+            if not names:
+                ax.text(0.5, 0.5, "No scalar fields", ha="center", va="center")
+                return
+            y = range(len(names))
+            colors = ["#c00000" if b else "#3d5a6c" for b in flags]
+            ax.barh(list(y), [mx - mn for mn, mx in zip(mins, maxs)], left=mins, color=colors)
+            ax.set_yticks(list(y), labels=names, fontsize=8)
+            ax.set_xlabel("min → max")
+            ax.set_title("Positivity fields" if positivity else "Field extrema")
+            ax.grid(True, axis="x", alpha=0.3)
+
+        ok = report.get("ok", payload.get("ok"))
+        summary = report.get("summary") or payload.get("summary") or ""
+        issues = report.get("issue_count", payload.get("issue_count", 0))
+        self.summary.configure(
+            text=f"{'OK' if ok else 'ISSUES'} — {summary}  (issues={issues})"
+        )
+        self._show_mpl(draw)
+
+    def _render_profile_chart(self, payload: dict[str, Any]) -> None:
+        profile = payload.get("profile") or payload
+        samples = profile.get("samples") or []
+        if not samples:
+            # try nested under result
+            for key in ("result", "data"):
+                nested = payload.get(key) or {}
+                if isinstance(nested, dict) and nested.get("samples"):
+                    samples = nested["samples"]
+                    profile = nested
+                    break
+        if not samples:
+            self.summary.configure(text="Profile returned no samples.")
+            self._clear_chart()
+            return
+        s_vals = [float(p.get("s", i)) for i, p in enumerate(samples)]
+        v_vals = [float(p.get("value", 0.0)) for p in samples]
+        var = profile.get("variable") or self.var_name.get()
+
+        def draw(ax) -> None:
+            ax.plot(s_vals, v_vals, color="#c00000", lw=1.8)
+            ax.set_xlabel("s (arc / index)")
+            ax.set_ylabel(str(var))
+            ax.set_title(f"Profile · {var}")
+            ax.grid(True, alpha=0.35)
+
+        self.summary.configure(
+            text=f"Extracted {len(samples)} samples of {var} along mid-j."
+        )
+        self._show_mpl(draw)
+
+    def _run_shock_polar(self) -> None:
+        self._clear_results()
+        self._log("Analyze shock polar — analytic θ–β–M (γ-law)")
+        mach = 2.0
+        gamma = 1.4
+        # Prefer a Mach variable name as freestream guess if present.
+        for name in self.variables:
+            if name.lower() in ("mach", "m", "mach_number"):
+                # Still analytic — document that CFD Mach is not auto-fit here.
+                break
+
+        def draw(ax) -> None:
+            plot_polar_on_axes(ax, mach=mach, gamma=gamma)
+
+        out = Path(tempfile.gettempdir()) / "flowplot_shock_polar.png"
+        curve = plot_polar_png(str(out), mach=mach, gamma=gamma)
+        self.summary.configure(
+            text=(
+                f"Shock polar M∞={curve.mach:g}, γ={curve.gamma:g}, "
+                f"θ_max≈{curve.theta_max_deg:.2f}°. "
+                "Analytic ideal-gas curve in Flowplot; CFD-coupled polars → lehar shock_polar."
+            )
+        )
+        self._show_mpl(draw)
+        self._log(
+            json.dumps(
+                {
+                    "status": "ok",
+                    "command": "shock-polar",
+                    "mach": curve.mach,
+                    "gamma": curve.gamma,
+                    "theta_max_deg": curve.theta_max_deg,
+                    "out": str(out),
+                    "note": "analytic θ–β–M; lehar shock_polar for CFD-coupled",
+                },
+                indent=2,
+            )
+        )
+        if self.on_png is not None and out.is_file():
+            try:
+                self.on_png(out)
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"viewport refresh failed: {exc}")
+
     def run_selected(self) -> None:
         if not self._selected_id:
-            messagebox.showinfo("Agents", "Select a menu action first.", parent=self)
+            messagebox.showinfo("Analyze", "Select a menu action first.", parent=self)
             return
         item = self._items.get(self._selected_id)
         if not item:
             return
+
+        if self._selected_id == "shock-polar-field":
+            self._run_shock_polar()
+            return
+
         args = self._build_args(self._selected_id, item)
         if args is None:
             return
@@ -482,22 +661,42 @@ class AgentsPanel(tk.Toplevel):
 
         out = (proc.stdout or "").strip()
         err = (proc.stderr or "").strip()
+        payload: dict[str, Any] | None = None
         if out:
             try:
-                # pretty-print last JSON object if possible
                 payload = json.loads(out.splitlines()[-1])
+                self._last_payload = payload
                 self._log(json.dumps(payload, indent=2))
-                status = payload.get("status")
-                if status == "stub":
-                    self._log(
-                        "\n(stub) This action still needs fuller lehar wiring; "
-                        "template and planned flags are shown above."
+                if payload.get("status") == "stub":
+                    self.summary.configure(
+                        text="Stub — needs fuller lehar wiring; see JSON details."
                     )
+                    self._clear_chart()
             except json.JSONDecodeError:
                 self._log(out if len(out) < 8000 else out[:8000] + "…")
         if err:
             self._log("stderr:\n" + err)
         self._log(f"\nexit {proc.returncode}")
+
+        if payload and proc.returncode == 0:
+            iid = self._selected_id
+            if iid in ("field-sanity", "positivity-check"):
+                # menu run may nest under "result" / "report"
+                body = payload.get("result") or payload.get("report") or payload
+                if isinstance(body, dict):
+                    self._render_validation_chart(
+                        body if "fields" in body else payload,
+                        positivity=(iid == "positivity-check"),
+                    )
+            elif iid == "extract-profile":
+                self._render_profile_chart(payload.get("result") or payload)
+            elif iid in ("plot-agent-scales", "nondim-suggest"):
+                sugg = payload.get("suggestions") or payload.get("result") or payload
+                self.summary.configure(
+                    text="Nondim suggestions ready — apply scales in the left Plot panel."
+                )
+                self._clear_chart()
+                self._log(json.dumps(sugg, indent=2) if not isinstance(sugg, str) else sugg)
 
         out_png = getattr(self, "_last_out", None)
         if (
@@ -509,5 +708,5 @@ class AgentsPanel(tk.Toplevel):
             self._log(f"Refreshing viewport with {out_png}")
             try:
                 self.on_png(Path(out_png))
-            except Exception as exc:  # noqa: BLE001 — show in panel
+            except Exception as exc:  # noqa: BLE001
                 self._log(f"viewport refresh failed: {exc}")
