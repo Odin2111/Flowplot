@@ -131,6 +131,7 @@ class AgentsPanel(tk.Toplevel):
         nondim_args: list[str],
         plot_style: str = "jfm",
         on_png: Callable[[Path], None] | None = None,
+        on_optical: Callable[[str, str], None] | None = None,
         repo_root: Path | None = None,
         title: str = "Agents",
         focus_group: str | None = None,
@@ -148,6 +149,7 @@ class AgentsPanel(tk.Toplevel):
         self.nondim_args = list(nondim_args)
         self.plot_style = plot_style
         self.on_png = on_png
+        self.on_optical = on_optical
         self.repo_root = repo_root or Path(__file__).resolve().parent.parent
         self.focus_group = focus_group
         self._items: dict[str, dict[str, Any]] = {}
@@ -161,7 +163,8 @@ class AgentsPanel(tk.Toplevel):
         self._build()
         self._load_menu()
         self.protocol("WM_DELETE_WINDOW", self.destroy)
-        stay_above(self, master, modal=False)
+        # Agents stays above the Viewport while open (user request: always-on-top).
+        stay_above(self, master, modal=False, always_on_top=True)
 
     def _style(self) -> None:
         style = ttk.Style(self)
@@ -196,7 +199,7 @@ class AgentsPanel(tk.Toplevel):
         body = ttk.Frame(self)
         body.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
 
-        left = ttk.Frame(body, style="Agents.TFrame", width=310)
+        left = ttk.Frame(body, style="Agents.TFrame", width=340)
         left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
         left.pack_propagate(False)
 
@@ -213,7 +216,8 @@ class AgentsPanel(tk.Toplevel):
         )
         self.tree.heading("#0", text="Agent")
         self.tree.heading("status", text="Status")
-        self.tree.column("#0", width=200, stretch=True)
+        # Wider name column so Grid titles (e.g. Mesh–solution QoI contour) fit.
+        self.tree.column("#0", width=240, stretch=True, minwidth=180)
         self.tree.column("status", width=70, stretch=False, anchor="center")
         scroll = ttk.Scrollbar(tree_wrap, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
@@ -1015,6 +1019,31 @@ class AgentsPanel(tk.Toplevel):
                 self._render_nondim_chart(payload.get("result") or payload)
             elif iid in ("mesh-inventory", "info", "load", "zone-boundary-inventory"):
                 self._render_info_chart(payload.get("result") or payload)
+
+        optical_kind_by_id = {
+            "schlieren-primary": "schlieren",
+            "schlieren-chamarthi": "schlieren-chamarthi",
+            "shadowgraph": "shadowgraph",
+        }
+        if (
+            proc.returncode == 0
+            and self._selected_id in optical_kind_by_id
+            and self.on_optical is not None
+        ):
+            kind = optical_kind_by_id[self._selected_id]
+            dens = self.var_name.get().strip()
+            self._log(
+                f"Applying live optical mode kind={kind} var={dens or '(guess Density)'} "
+                "(data gradients — not a static PNG paste)"
+            )
+            try:
+                self.on_optical(kind, dens)
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"optical apply failed: {exc}")
+            self.summary.configure(
+                text=f"Optical {kind} from |∇|/∇² of {dens or 'Density'} — live redraw."
+            )
+            return
 
         out_png = getattr(self, "_last_out", None)
         if (
