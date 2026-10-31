@@ -122,16 +122,31 @@ class ContourDetailsDialog(tk.Toplevel):
     def set_variables(self, variables: list[str], variable: str = "") -> None:
         """Refresh scalar list after File → Open (keep dialog open)."""
         self._variables = list(variables or [])
-        if self._var_combo is not None:
-            self._var_combo.configure(
-                values=self._variables,
-                state="readonly" if self._variables else "disabled",
-            )
         chosen = (variable or self.variable_var.get() or "").strip()
         if chosen and chosen in self._variables:
             self.variable_var.set(chosen)
-        elif self._variables and self.variable_var.get() not in self._variables:
-            self.variable_var.set(self._variables[0])
+        elif self._variables:
+            # Prefer first non-empty entry; keep current only if still valid.
+            cur = (self.variable_var.get() or "").strip()
+            if cur not in self._variables:
+                self.variable_var.set(self._variables[0])
+        self._sync_var_combo_state()
+
+    def _sync_var_combo_state(self) -> None:
+        """Enable Contour variable for every zone scalar after Open (ttk sticky-disable fix)."""
+        combo = getattr(self, "_var_combo", None)
+        if combo is None:
+            return
+        # Some ttk themes leave Combobox greyed if it was created disabled; bounce via normal.
+        try:
+            combo.configure(values=self._variables)
+            if self._variables:
+                combo.configure(state="normal")
+                combo.configure(state="readonly")
+            else:
+                combo.configure(state="disabled")
+        except tk.TclError:
+            pass
 
     def _build(self) -> None:
         hdr = tk.Frame(self, bg=HEADER_BG)
@@ -198,6 +213,7 @@ class ContourDetailsDialog(tk.Toplevel):
             width=28,
         )
         self._var_combo.pack(anchor="w", padx=12)
+        self._sync_var_combo_state()
         tk.Label(
             parent,
             text="All zone scalars (Mach, Pressure, Temperature, …). Apply redraws.",

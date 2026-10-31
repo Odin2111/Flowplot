@@ -1504,16 +1504,73 @@ class FlowplotGui(tk.Tk):
             )
 
     def _set_variables(self, variables: list[str]) -> None:
-        self.variables = list(variables)
-        self.var_combo.configure(values=self.variables, state="readonly" if self.variables else "disabled")
+        """Publish zone scalars to Plot Contour variable + Contour Details."""
+        # Preserve order, drop empties, keep all zone field names (coords + scalars).
+        seen: set[str] = set()
+        cleaned: list[str] = []
+        for raw in variables or []:
+            name = str(raw).strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            cleaned.append(name)
+        self.variables = cleaned
         default = first_scalar(self.variables)
-        if default:
+        current = (self.var_name.get() or "").strip()
+        if current and current in self.variables:
+            pass
+        elif default:
             self.var_name.set(default)
-        dlg = self._contour_details_dialog
-        if dlg is not None and dlg.winfo_exists():
-            dlg.set_variables(list(self.variables), self.var_name.get())
+        elif self.variables:
+            self.var_name.set(self.variables[0])
+        else:
+            self.var_name.set("")
+        self._sync_contour_variable_widgets()
         self._log(f"variables: {', '.join(self.variables) if self.variables else '(none)'}")
-        self._log(f"default contour var: {default or '(none)'} (Contour layer still off)")
+        self._log(
+            f"default contour var: {self.var_name.get() or '(none)'} (Contour layer still off)"
+        )
+
+    def _sync_contour_variable_widgets(self) -> None:
+        """Enable Contour variable dropdowns for all zone scalars after Open.
+
+        ttk Combobox can stay greyed if it was created disabled and later only
+        received values=… — bounce state via normal → readonly.
+        """
+        try:
+            self.var_combo.configure(values=self.variables)
+            if self.variables:
+                self.var_combo.configure(state="normal")
+                self.var_combo.configure(state="readonly")
+            else:
+                self.var_combo.configure(state="disabled")
+        except tk.TclError:
+            pass
+        dlg = self._contour_details_dialog
+        if dlg is not None:
+            try:
+                alive = bool(dlg.winfo_exists())
+            except tk.TclError:
+                alive = False
+            if alive:
+                dlg.set_variables(list(self.variables), self.var_name.get())
+        agents = getattr(self, "_agents_panel", None)
+        if agents is not None:
+            try:
+                alive = bool(agents.winfo_exists())
+            except tk.TclError:
+                alive = False
+            if alive and hasattr(agents, "var_combo"):
+                agents.variables = list(self.variables)
+                try:
+                    agents.var_combo.configure(values=self.variables)
+                    if self.variables:
+                        agents.var_combo.configure(state="normal")
+                        agents.var_combo.configure(state="readonly")
+                    else:
+                        agents.var_combo.configure(state="disabled")
+                except tk.TclError:
+                    pass
 
     def _on_plot_type(self) -> None:
         pt = self.plot_type.get()
@@ -1691,7 +1748,35 @@ class FlowplotGui(tk.Tk):
         self.layer_contour.set(False)
         self._refresh_zone_list()
         self._ensure_toolbar_visible()
+        # Contour variable must list every zone scalar after Open (even with Contour off).
+        self._sync_contour_variable_widgets()
+        if not self.variables:
+            self.after(50, self._retry_variables_after_open)
         self._set_status(f"{chosen.name} · Mesh on · Rotate tool")
+
+    def _retry_variables_after_open(self) -> None:
+        """Second chance: if Mesh Open left Contour variable empty, re-query info."""
+        if self.dataset_path is None or not self.dataset_path.is_file():
+            return
+        if self.variables:
+            self._sync_contour_variable_widgets()
+            return
+        proc = self._run_cli(["--json", "info", str(self.dataset_path)])
+        if not (proc and proc.returncode == 0 and proc.stdout):
+            self._log("Contour variable still empty — info retry failed")
+            self._sync_contour_variable_widgets()
+            return
+        try:
+            payload = json.loads(proc.stdout.strip().splitlines()[-1])
+            vars_ = payload.get("variables") or []
+            if isinstance(vars_, list) and vars_:
+                self._set_variables([str(v) for v in vars_])
+                self._log("Contour variable list recovered after Open retry")
+            else:
+                self._sync_contour_variable_widgets()
+        except json.JSONDecodeError:
+            self._log("Contour variable retry: bad info JSON")
+            self._sync_contour_variable_widgets()
 
     def _post_load_mesh_settle(self) -> None:
         """First Viewport after Open: Mesh wireframe + visible toolbar tools."""
@@ -1700,6 +1785,7 @@ class FlowplotGui(tk.Tk):
         self.layer_mesh.set(True)
         self._ensure_toolbar_visible()
         self._set_tool_mode("rotate")
+        self._sync_contour_variable_widgets()
         # Clear placeholder immediately so a slow CLI does not look like "no data".
         if self.last_png is None:
             self.viewport.delete("placeholder")
@@ -2162,7 +2248,10 @@ class FlowplotGui(tk.Tk):
 
     def action_contour_details(self) -> None:
         """Plot → Contour… / toolbar Details — Contour Details."""
-        self.action_enable_contour()
+        # Re-assert zone scalars so Contour variable is never stuck disabled after Open.
+        self._sync_contour_variable_widgets()
+        if self.variables:
+            self.action_enable_contour()
         existing = self._contour_details_dialog
         if existing is not None and existing.winfo_exists():
             existing.set_variables(list(self.variables), self.var_name.get())
