@@ -1,18 +1,23 @@
-# Flowplot CFD post-processing menu (machine-readable).
-# Humans: see docs/postprocess-menu.md
+# Fieldplot Agents menu (machine-readable).
+# Humans: see docs/agents-top-menu.md (project store) / docs/postprocess-menu.md
 # CLI:    flowplot menu | flowplot menu run <id> ...
 # MCP:    flowplot_menu / flowplot_menu_run
+#
+# Categories follow CFD applicability (physics / numerics checks on whatever
+# .plt/.dat is loaded). Ideas originated in lehar-agents but agents here are
+# solver-agnostic — no Lehar-only APIs or naming in the user surface.
 version: 1
-title: Flowplot CFD post-processing
+title: Fieldplot Agents
 description: >
-  Menu of useful lehar-agent CFD post-processing workflows mapped onto
-  Flowplot CLI/MCP actions. status=ready items dispatch today; stubs document
-  the lehar agent plus the Flowplot flags they will need.
+  Tecplot Analyze–style Agents menu: calculate / integrate / reference /
+  field / geometry actions implemented as functional CFD validation agents.
+  status=ready items dispatch today against the loaded dataset; stubs document
+  planned flags for fuller boundary / jump / suite workflows.
 
 groups:
   - id: load-inspect
     title: Load & inspect
-    summary: Inventory public Tecplot/VTK ASCII before plotting.
+    summary: Inventory zones and variables before analysis (any CFD export).
     items:
       - id: load
         title: Load dataset
@@ -40,7 +45,7 @@ groups:
 
       - id: output-integrity
         title: Output integrity inventory
-        summary: Discover run ASCII outputs, then load each with Flowplot.
+        summary: Discover sibling run outputs, then load each with Fieldplot.
         status: stub
         lehar:
           agent: output_integrity
@@ -49,15 +54,15 @@ groups:
           template: "flowplot load {path} --json"
           planned_flags: ["--json"]
           notes: >
-            requires agent output_integrity to discover paths under the run;
-            then call flowplot load on each public ASCII file.
+            Discover paths under a run directory, then call flowplot load on
+            each public ASCII / PLT file. Solver-agnostic inventory pattern.
         mcp: flowplot_load
 
-  - id: validation
-    title: Validation & correction
+  - id: positivity-sanity
+    title: Positivity & sanity
     summary: >
-      Field sanity, positivity, and profile extracts against the loaded
-      dataset (lehar validation ideas that operate on a single field file).
+      Fundamental numerics health — NaN/Inf, extrema, and thermo positivity
+      (ρ / p / T by name) on the loaded field.
     items:
       - id: field-sanity
         title: Field sanity (NaN / Inf / extrema)
@@ -87,62 +92,6 @@ groups:
           planned_flags: ["--positivity"]
         mcp: flowplot_validate
 
-      - id: extract-profile
-        title: Extract centerline / profile
-        summary: Sample a scalar along mid-j (or i=N / j=N); optional RMSE vs ref CSV.
-        status: ready
-        lehar:
-          surface: data extract-line / plot-velocity-profile
-        flowplot:
-          command: profile
-          template: "flowplot profile {path} --var {var} [--line mid-j] [--ref ref.csv] --json"
-          required_args: [path, var]
-          optional_flags: ["--line", "--zone", "--plane", "--ref", "-o"]
-        mcp: flowplot_profile
-
-  - id: contours
-    title: Contours
-    summary: Scalar pseudocolor PNGs from named field variables.
-    items:
-      - id: contour
-        title: Contour scalar
-        summary: Pseudocolor any named scalar to PNG.
-        status: ready
-        lehar:
-          surface: research_figures / observability_plots
-        flowplot:
-          command: contour
-          template: "flowplot contour {path} --var {var} -o {out} [--plane k=0] [--vmin V] [--vmax V] --json"
-          required_args: [path, var, out]
-          optional_flags: ["--plane", "--vmin", "--vmax", "--zone", "--width", "--height", "--u-ref", "--lx", "--ly", "--lz", "--t-ref", "--pathlines"]
-        mcp: flowplot_contour
-
-      - id: wall-physics-field
-        title: Wall-physics near-wall field
-        summary: Optional near-wall scalar contour after wall_physics samples.
-        status: stub
-        lehar:
-          agent: wall_physics
-        flowplot:
-          command: contour
-          template: "flowplot contour {path} --var {var} -o {out} --json"
-          planned_flags: ["--var", "-o", "--plane", "--json"]
-          notes: "requires agent wall_physics; contour τw / y+ / Cf proxy fields when exported as ASCII."
-        mcp: flowplot_contour
-
-      - id: turbulence-field
-        title: Turbulence field contour
-        summary: Contour k / ω / νt (or model scalars) for health checks.
-        status: stub
-        lehar:
-          agent: turbulence_health
-        flowplot:
-          command: contour
-          template: "flowplot contour {path} --var {var} -o {out} --json"
-          planned_flags: ["--var", "-o", "--json"]
-          notes: "requires agent turbulence_health (or turbulence_model_adequacy)."
-        mcp: flowplot_contour
-
       - id: positivity-field
         title: Positivity scalar contour
         summary: Contour ρ / p / T after a positivity scan (GUI picks the scalar).
@@ -157,22 +106,55 @@ groups:
           notes: "Run positivity-check first; contour the named thermo/density scalar."
         mcp: flowplot_contour
 
-      - id: mesh-solution-field
-        title: Mesh–solution QoI contour
-        summary: Contour a QoI used in mesh↔solution correlation.
-        status: stub
+  - id: profiles
+    title: Profiles
+    summary: Line / centerline extracts and near-wall profile evidence.
+    items:
+      - id: extract-profile
+        title: Extract centerline / profile
+        summary: Sample a scalar along mid-j (or i=N / j=N); optional RMSE vs ref CSV.
+        status: ready
         lehar:
-          agent: mesh_solution_correlation
+          surface: data extract-line / plot-velocity-profile
+        flowplot:
+          command: profile
+          template: "flowplot profile {path} --var {var} [--line mid-j] [--ref ref.csv] --json"
+          required_args: [path, var]
+          optional_flags: ["--line", "--zone", "--plane", "--ref", "-o"]
+        mcp: flowplot_profile
+
+      - id: wall-physics-field
+        title: Near-wall field contour
+        summary: Contour a near-wall scalar (τw / y+ / Cf proxy when present).
+        status: ready
+        lehar:
+          agent: wall_physics
         flowplot:
           command: contour
           template: "flowplot contour {path} --var {var} -o {out} --json"
-          planned_flags: ["--var", "-o", "--json"]
-          notes: "requires agent mesh_solution_correlation."
+          required_args: [path, var, out]
+          optional_flags: ["--plane", "--zone", "--json"]
+          notes: >
+            Solver-agnostic: pick any wall-ish scalar by name (yplus, tau, cf,
+            nut, …). No solver API required.
         mcp: flowplot_contour
 
-  - id: nondim
-    title: Nondim
-    summary: Name-based scale suggestions; apply user/case refs only.
+      - id: boundary-layer-scales
+        title: Boundary-layer reference scales
+        summary: Use BL edge velocity / δ* as nondim refs before profiles.
+        status: stub
+        lehar:
+          agent: boundary_layer
+        flowplot:
+          command: nondim
+          template: "flowplot nondim {path} --u-ref {U_e} --lx {delta_star} --json"
+          planned_flags: ["--u-ref", "--lx", "--t-ref", "--json"]
+          notes: "Supply U_e / δ* from a profile extract or case notes."
+        mcp: flowplot_nondim
+
+  - id: reference-values
+    title: Reference values
+    summary: Freestream / length / time refs for nondimensional charts (any code).
     items:
       - id: nondim-suggest
         title: Suggest / apply scales
@@ -187,21 +169,8 @@ groups:
           optional_flags: ["--u-ref", "--lx", "--ly", "--lz", "--t-ref", "--x-var", "--y-var", "--z-var"]
         mcp: flowplot_nondim
 
-      - id: boundary-layer-scales
-        title: Boundary-layer reference scales
-        summary: Use BL edge velocity / δ* as nondim refs before profiles.
-        status: stub
-        lehar:
-          agent: boundary_layer
-        flowplot:
-          command: nondim
-          template: "flowplot nondim {path} --u-ref {U_e} --lx {delta_star} --json"
-          planned_flags: ["--u-ref", "--lx", "--t-ref", "--json"]
-          notes: "requires agent boundary_layer for U_e / δ*; profile PNGs stay matplotlib."
-        mcp: flowplot_nondim
-
       - id: plot-agent-scales
-        title: Plot-agent / ERCOFTAC scales
+        title: Archival / ERCOFTAC scales
         summary: Nondim suggestions for JFM / ERCOFTAC-style audits on the loaded file.
         status: ready
         lehar:
@@ -215,9 +184,262 @@ groups:
           notes: "Name-based suggestions; apply panel nondim scales when set."
         mcp: flowplot_nondim
 
+  - id: calculate-variables
+    title: Calculate variables
+    summary: Field figures from named scalars (Tecplot Calculate Variables analogue).
+    items:
+      - id: contour
+        title: Contour scalar
+        summary: Pseudocolor any named scalar to PNG.
+        status: ready
+        lehar:
+          surface: research_figures / observability_plots
+        flowplot:
+          command: contour
+          template: "flowplot contour {path} --var {var} -o {out} [--plane k=0] [--vmin V] [--vmax V] --json"
+          required_args: [path, var, out]
+          optional_flags: ["--plane", "--vmin", "--vmax", "--zone", "--width", "--height", "--u-ref", "--lx", "--ly", "--lz", "--t-ref", "--pathlines"]
+        mcp: flowplot_contour
+
+      - id: turbulence-field
+        title: Turbulence field contour
+        summary: Contour k / ω / νt (or model scalars) for health checks.
+        status: ready
+        lehar:
+          agent: turbulence_health
+        flowplot:
+          command: contour
+          template: "flowplot contour {path} --var {var} -o {out} --json"
+          required_args: [path, var, out]
+          optional_flags: ["--plane", "--zone", "--json"]
+          notes: "Pick k / omega / nut / mut / tke by name when present in the file."
+        mcp: flowplot_contour
+
+  - id: shocks
+    title: Shocks
+    summary: Shock polars and pressure/density evidence (γ-law physics, any solver).
+    items:
+      - id: shock-polar-field
+        title: Shock polar (θ–β–M)
+        summary: >
+          Analytic ideal-gas shock polar chart under Agents. Freestream M∞ and γ
+          from a dialog; CFD Mach/p contours separately for field evidence.
+        status: ready
+        lehar:
+          agent: shock_polar
+        flowplot:
+          command: shock-polar
+          template: "Agents → Shocks → Shock polar (matplotlib θ–β–M); optional contour Mach/p"
+          required_args: [path]
+          optional_flags: ["--mach", "--gamma", "-o"]
+          notes: >
+            GUI runs gui/shock_polar.py (γ-law). Works for any CFD dataset —
+            dialog supplies M∞ / γ; contour Mach or p for field evidence.
+        mcp: flowplot_contour
+
+      - id: shock-tracking-field
+        title: Shock-tracking field evidence
+        summary: Pressure/density contour as shock-location evidence.
+        status: ready
+        lehar:
+          agent: shock_tracking
+        flowplot:
+          command: contour
+          template: "flowplot contour {path} --var {var} -o {out} --json"
+          required_args: [path, var, out]
+          optional_flags: ["--plane", "--zone", "--json"]
+          notes: "Prefer Pressure / Density / Mach; gradient jump math is optional later."
+        mcp: flowplot_contour
+
+      - id: shock-stability-field
+        title: Shock-sensor / pressure contour
+        summary: Contour shock sensor or pressure for stability health.
+        status: ready
+        lehar:
+          agent: shock_stability
+        flowplot:
+          command: contour
+          template: "flowplot contour {path} --var {var} -o {out} --json"
+          required_args: [path, var, out]
+          optional_flags: ["--plane", "--zone", "--json"]
+        mcp: flowplot_contour
+
+      - id: rankine-hugoniot-field
+        title: Rankine–Hugoniot state contour
+        summary: Pre/post state field contour beside jump relations (chart later).
+        status: stub
+        lehar:
+          agent: rankine_hugoniot
+        flowplot:
+          command: contour
+          template: "flowplot contour {path} --var {var} -o {out} --json"
+          planned_flags: ["--var", "-o", "--json"]
+          notes: "Jump table UI still planned; contour pre/post states when named."
+        mcp: flowplot_contour
+
+  - id: hypersonic
+    title: Hypersonic
+    summary: High-Mach field health — extrema, Mach/p/ρ evidence, bow-shock figures.
+    items:
+      - id: hypersonic-field-extrema
+        title: Hypersonic field extrema
+        summary: Same NaN/Inf/extrema scan focused on high-speed thermo/Mach names.
+        status: ready
+        lehar:
+          agent: hypersonic_physics
+        flowplot:
+          command: validate
+          template: "flowplot validate {path} --json"
+          required_args: [path]
+          optional_flags: ["--zone", "--positivity"]
+          notes: "Physics check on any hypersonic export; chart highlights Mach/p/ρ/T."
+        mcp: flowplot_validate
+
+      - id: hypersonic-mach-contour
+        title: Mach / pressure / density contour
+        summary: Contour Mach (or p / ρ) for hypersonic field evidence.
+        status: ready
+        lehar:
+          agent: hypersonic_euler_suite
+        flowplot:
+          command: contour
+          template: "flowplot contour {path} --var {var} -o {out} [--u-ref Uinf] --json"
+          required_args: [path, var, out]
+          optional_flags: ["--u-ref", "--lx", "--plane", "--zone", "--pathlines"]
+        mcp: flowplot_contour
+
+      - id: bow-shock-field
+        title: Bow-shock field
+        summary: Contour density/Mach for bow-shock shape evidence on the loaded file.
+        status: ready
+        lehar:
+          agent: bow_shock_validation
+        flowplot:
+          command: contour
+          template: "flowplot contour {path} --var {var} -o {out} [--u-ref Uinf] --json"
+          required_args: [path, var, out]
+          optional_flags: ["--u-ref", "--lx", "--pathlines", "--json"]
+          notes: "No solver API — contour Density/Mach on any blunt-body field."
+        mcp: flowplot_contour
+
+      - id: hypersonic-euler-suite
+        title: Hypersonic Euler suite
+        summary: Orchestrated Mach/p/ρ evidence panels (stub orchestration).
+        status: stub
+        lehar:
+          agent: hypersonic_euler_suite
+        flowplot:
+          command: contour
+          template: "flowplot contour {path} --var {var} -o {out} --u-ref {Uinf} --pathlines --json"
+          planned_flags: ["--var", "-o", "--u-ref", "--lx", "--pathlines", "--json"]
+        mcp: flowplot_contour
+
+      - id: hypersonic-viscous-suite
+        title: Hypersonic viscous suite
+        summary: Same as Euler suite plus near-wall contours (stub orchestration).
+        status: stub
+        lehar:
+          agent: hypersonic_viscous_suite
+        flowplot:
+          command: contour
+          template: "flowplot contour {path} --var {var} -o {out} --u-ref {Uinf} --json"
+          planned_flags: ["--var", "-o", "--u-ref", "--t-ref", "--plane", "--json"]
+        mcp: flowplot_contour
+
+  - id: grid-mesh
+    title: Grid & mesh
+    summary: Mesh inventory and wireframe evidence (zone topology, any mesh origin).
+    items:
+      - id: mesh-inventory
+        title: Mesh / zone inventory
+        summary: Report zones, dimensions, and variables for the loaded file.
+        status: ready
+        lehar:
+          agent: mesh_solution_correlation
+          surface: data inspect
+        flowplot:
+          command: info
+          template: "flowplot info {path} --json"
+          required_args: [path]
+        mcp: flowplot_load
+
+      - id: mesh-wireframe
+        title: Mesh wireframe
+        summary: Draw the zone grid / crate as a PNG (green wireframe default).
+        status: ready
+        lehar:
+          surface: research_figures
+        flowplot:
+          command: mesh
+          template: "flowplot mesh {path} -o {out} --json"
+          required_args: [path, out]
+          optional_flags: ["--zone", "--plane", "--width", "--height"]
+        mcp: flowplot_contour
+
+      - id: mesh-solution-field
+        title: Mesh–solution QoI contour
+        summary: Contour a QoI used in mesh↔solution correlation.
+        status: ready
+        lehar:
+          agent: mesh_solution_correlation
+        flowplot:
+          command: contour
+          template: "flowplot contour {path} --var {var} -o {out} --json"
+          required_args: [path, var, out]
+          optional_flags: ["--plane", "--zone", "--json"]
+        mcp: flowplot_contour
+
+  - id: geometry-boundaries
+    title: Geometry & boundaries
+    summary: Zone / boundary inventory and wall-adjacent field checks.
+    items:
+      - id: zone-boundary-inventory
+        title: Zone / boundary inventory
+        summary: List zones and variables (proxy for boundary patch catalogue).
+        status: ready
+        lehar:
+          surface: data inspect
+        flowplot:
+          command: info
+          template: "flowplot info {path} --json"
+          required_args: [path]
+          notes: "Named boundary patches require export metadata; zone list always works."
+        mcp: flowplot_load
+
+      - id: wall-boundary-field
+        title: Wall / boundary field contour
+        summary: Contour a wall-adjacent scalar on the loaded dataset.
+        status: ready
+        lehar:
+          agent: wall_physics
+        flowplot:
+          command: contour
+          template: "flowplot contour {path} --var {var} -o {out} --json"
+          required_args: [path, var, out]
+          optional_flags: ["--plane", "--zone"]
+        mcp: flowplot_contour
+
+  - id: integration
+    title: Integration
+    summary: Field mean / extrema QoI summaries (nodal stats on the loaded file).
+    items:
+      - id: field-integrate-extrema
+        title: Integrate field (mean / extrema)
+        summary: Report min/max/mean per variable as a nodal QoI summary chart.
+        status: ready
+        lehar:
+          surface: validation / data inspect
+        flowplot:
+          command: validate
+          template: "flowplot validate {path} --json"
+          required_args: [path]
+          optional_flags: ["--zone"]
+          notes: "Nodal mean/extrema — true volume integrals need cell volumes later."
+        mcp: flowplot_validate
+
   - id: pathlines
     title: Pathlines
-    summary: Velocity-field particle traces / streamlines.
+    summary: Velocity-field particle traces / streamlines (UI name Pathlines).
     items:
       - id: pathlines
         title: Trace pathlines
@@ -255,90 +477,63 @@ groups:
           command: contour
           template: "flowplot contour {path} --var Density -o {out} --pathlines --json"
           planned_flags: ["--var", "-o", "--pathlines", "--seed", "--json"]
-          notes: "requires agent interface_growth."
         mcp: flowplot_contour
 
-  - id: shocks
-    title: Shocks
-    summary: Shock-aware field figures (ASCII). Jump math stays in lehar.
+  - id: suites
+    title: Suites
+    summary: Orchestrated evidence suites that attach Fieldplot field panels.
     items:
-      - id: bow-shock-field
-        title: Bow-shock field
-        summary: Load → nondim → contour density/Mach; optional pathlines.
+      - id: rans-suite
+        title: RANS evidence suite
+        summary: Orchestrates children; contour field panels when ASCII exists.
         status: stub
         lehar:
-          agent: bow_shock_validation
+          agent: rans_suite
         flowplot:
           command: contour
-          template: "flowplot load {path} --json && flowplot nondim {path} --u-ref {Uinf} --json && flowplot contour {path} --var {var} -o {out} --u-ref {Uinf} --json"
-          planned_flags: ["--var", "-o", "--u-ref", "--lx", "--pathlines", "--json"]
-          notes: "requires agent bow_shock_validation for standoff/shape; Flowplot for ASCII field PNGs."
+          template: "flowplot contour {path} --var {var} -o {out} --json"
+          planned_flags: ["--var", "-o", "--u-ref", "--json"]
         mcp: flowplot_contour
 
-      - id: shock-polar-field
-        title: Shock polar (θ–β–M)
-        summary: >
-          Analytic ideal-gas shock polar chart in Analyze. CFD-coupled polars
-          remain in lehar shock_polar; Flowplot draws the textbook θ–β curve.
-        status: ready
-        lehar:
-          agent: shock_polar
-        flowplot:
-          command: shock-polar
-          template: "Analyze → Shock polar (matplotlib θ–β–M); optional contour Mach/p separately"
-          required_args: [path]
-          optional_flags: ["--mach", "--gamma", "-o"]
-          notes: >
-            GUI runs gui/shock_polar.py (γ-law). For CFD-coupled / multi-shock
-            polars use lehar agent shock_polar; then optionally contour Mach or p.
-        mcp: flowplot_contour
-
-      - id: shock-tracking-field
-        title: Shock-tracking field evidence
-        summary: Optional pressure/density contour beside line/wall shock CSV.
+      - id: les-suite
+        title: LES evidence suite
+        summary: Same pattern as RANS suite for LES evidence.
         status: stub
         lehar:
-          agent: shock_tracking
+          agent: les_suite
         flowplot:
           command: contour
           template: "flowplot contour {path} --var {var} -o {out} --json"
           planned_flags: ["--var", "-o", "--json"]
-          notes: "requires agent shock_tracking."
         mcp: flowplot_contour
 
-      - id: shock-stability-field
-        title: Shock-sensor / pressure contour
-        summary: Contour shock sensor or pressure for stability health.
+      - id: dns-suite
+        title: DNS evidence suite
+        summary: Same pattern as RANS suite for DNS evidence.
         status: stub
         lehar:
-          agent: shock_stability
+          agent: dns_suite
         flowplot:
           command: contour
           template: "flowplot contour {path} --var {var} -o {out} --json"
           planned_flags: ["--var", "-o", "--json"]
-          notes: "requires agent shock_stability."
         mcp: flowplot_contour
 
-      - id: rankine-hugoniot-field
-        title: Rankine–Hugoniot state contour
-        summary: Optional pre/post state field contour beside jump relations.
+      - id: hybrid-rans-les-suite
+        title: Hybrid RANS–LES suite
+        summary: Hybrid suite field panels via contour.
         status: stub
         lehar:
-          agent: rankine_hugoniot
+          agent: hybrid_rans_les_suite
         flowplot:
           command: contour
           template: "flowplot contour {path} --var {var} -o {out} --json"
           planned_flags: ["--var", "-o", "--json"]
-          notes: "requires agent rankine_hugoniot."
         mcp: flowplot_contour
 
-  - id: figures-animation
-    title: Figures / animation
-    summary: Research figures and frame sequences from ASCII fields.
-    items:
       - id: research-figures
         title: Research field figures
-        summary: Catalogue plot-ready ASCII → load → nondim → contour/pathlines.
+        summary: Catalogue plot-ready fields → load → nondim → contour/pathlines.
         status: stub
         lehar:
           agent: research_figures
@@ -346,7 +541,6 @@ groups:
           command: contour
           template: "flowplot load {path} --json; flowplot nondim {path} --json; flowplot contour|pathlines … --json"
           planned_flags: ["--var", "-o", "--u-ref", "--lx", "--pathlines", "--seed", "--json"]
-          notes: "requires agent research_figures to pick artifacts; Flowplot for ASCII field PNGs."
         mcp: flowplot_contour
 
       - id: tecplot-animation-ascii
@@ -359,10 +553,6 @@ groups:
           command: contour
           template: "flowplot contour {frame_path} --var {var} -o {frame_png} --json"
           planned_flags: ["--var", "-o", "--plane", "--vmin", "--vmax", "--json"]
-          notes: >
-            requires agent tecplot_animation. Binary .plt/.szplt stays on lehar
-            native Tecplot111 / PyTecplot / VisIt; only divert when sources are
-            .dat/.tec/.vtk ASCII.
         mcp: flowplot_contour
 
       - id: spod-mode-field
@@ -376,87 +566,4 @@ groups:
           command: contour
           template: "flowplot contour {path} --var {var} -o {out} --json"
           planned_flags: ["--var", "-o", "--json"]
-          notes: "requires agent spod_analysis (or lehar postprocess spod)."
-        mcp: flowplot_contour
-
-  - id: suites
-    title: Suites
-    summary: Orchestrated evidence suites that attach Flowplot field panels.
-    items:
-      - id: rans-suite
-        title: RANS evidence suite
-        summary: Orchestrates children; contour field panels when ASCII exists.
-        status: stub
-        lehar:
-          agent: rans_suite
-        flowplot:
-          command: contour
-          template: "flowplot contour {path} --var {var} -o {out} --json"
-          planned_flags: ["--var", "-o", "--u-ref", "--json"]
-          notes: "requires agent rans_suite."
-        mcp: flowplot_contour
-
-      - id: les-suite
-        title: LES evidence suite
-        summary: Same pattern as RANS suite for LES evidence.
-        status: stub
-        lehar:
-          agent: les_suite
-        flowplot:
-          command: contour
-          template: "flowplot contour {path} --var {var} -o {out} --json"
-          planned_flags: ["--var", "-o", "--json"]
-          notes: "requires agent les_suite."
-        mcp: flowplot_contour
-
-      - id: dns-suite
-        title: DNS evidence suite
-        summary: Same pattern as RANS suite for DNS evidence.
-        status: stub
-        lehar:
-          agent: dns_suite
-        flowplot:
-          command: contour
-          template: "flowplot contour {path} --var {var} -o {out} --json"
-          planned_flags: ["--var", "-o", "--json"]
-          notes: "requires agent dns_suite."
-        mcp: flowplot_contour
-
-      - id: hybrid-rans-les-suite
-        title: Hybrid RANS–LES suite
-        summary: Hybrid suite field panels via contour.
-        status: stub
-        lehar:
-          agent: hybrid_rans_les_suite
-        flowplot:
-          command: contour
-          template: "flowplot contour {path} --var {var} -o {out} --json"
-          planned_flags: ["--var", "-o", "--json"]
-          notes: "requires agent hybrid_rans_les_suite."
-        mcp: flowplot_contour
-
-      - id: hypersonic-euler-suite
-        title: Hypersonic Euler suite
-        summary: Load → nondim → contour Mach/p/ρ; optional pathlines.
-        status: stub
-        lehar:
-          agent: hypersonic_euler_suite
-        flowplot:
-          command: contour
-          template: "flowplot contour {path} --var {var} -o {out} --u-ref {Uinf} --pathlines --json"
-          planned_flags: ["--var", "-o", "--u-ref", "--lx", "--pathlines", "--json"]
-          notes: "requires agent hypersonic_euler_suite."
-        mcp: flowplot_contour
-
-      - id: hypersonic-viscous-suite
-        title: Hypersonic viscous suite
-        summary: Same as Euler suite plus near-wall contours.
-        status: stub
-        lehar:
-          agent: hypersonic_viscous_suite
-        flowplot:
-          command: contour
-          template: "flowplot contour {path} --var {var} -o {out} --u-ref {Uinf} --json"
-          planned_flags: ["--var", "-o", "--u-ref", "--t-ref", "--plane", "--json"]
-          notes: "requires agent hypersonic_viscous_suite."
         mcp: flowplot_contour

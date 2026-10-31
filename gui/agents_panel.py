@@ -1,8 +1,8 @@
-"""Analyze panel — validation / correction agents with side charts (not raw JSON).
+"""Agents panel — categorized CFD validation agents with charts (not raw JSON).
 
-Invokes `flowplot menu run <id>` against the loaded dataset. Field sanity,
-positivity, and profile extracts render Tk/matplotlib charts; shock polar draws
-an analytic θ–β–M curve (see docs). Raw JSON stays behind a Details toggle.
+Tecplot Analyze analogue under the Fieldplot **Agents** menu. Runs
+`flowplot menu run <id>` against the currently loaded dataset. Checks are
+physics/numerics-based and apply to any CFD .plt/.dat — not solver-specific APIs.
 """
 
 from __future__ import annotations
@@ -16,6 +16,12 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any, Callable
 
+from agent_dialogs import (
+    ask_contour_var,
+    ask_profile,
+    ask_reference_values,
+    ask_shock_polar,
+)
 from shock_polar import plot_polar_on_axes, plot_polar_png
 from windowing import stay_above
 
@@ -46,6 +52,23 @@ POSITIVITY_NAMES = {
     "static_temperature",
 }
 
+HYPERSONIC_HINTS = (
+    "mach",
+    "m",
+    "pressure",
+    "p",
+    "density",
+    "rho",
+    "temp",
+    "temperature",
+    "t",
+    "energy",
+    "enthalpy",
+)
+
+TURB_HINTS = ("k", "omega", "nut", "mut", "tke", "epsilon", "nu_t", "mu_t")
+WALL_HINTS = ("yplus", "y+", "tau", "cf", "skin", "wall", "shear", "heat")
+
 
 def first_scalar(variables: list[str]) -> str:
     for name in variables:
@@ -74,6 +97,19 @@ def guess_positivity_var(variables: list[str]) -> str:
     return first_scalar(variables)
 
 
+def guess_named(variables: list[str], hints: tuple[str, ...]) -> str:
+    lower = {v.lower(): v for v in variables}
+    for key in hints:
+        if key in lower:
+            return lower[key]
+    for v in variables:
+        n = v.lower()
+        for key in hints:
+            if key in n:
+                return v
+    return first_scalar(variables)
+
+
 def menu_yaml_path(repo_root: Path) -> Path:
     env = os.environ.get("FLOWPLOT_MENU")
     if env:
@@ -82,7 +118,7 @@ def menu_yaml_path(repo_root: Path) -> Path:
 
 
 class AgentsPanel(tk.Toplevel):
-    """Browse Analyze actions and show charts for validation / polar / profiles."""
+    """Browse Agents by category and show charts for validation / polar / profiles."""
 
     def __init__(
         self,
@@ -96,13 +132,13 @@ class AgentsPanel(tk.Toplevel):
         plot_style: str = "jfm",
         on_png: Callable[[Path], None] | None = None,
         repo_root: Path | None = None,
-        title: str = "Analyze",
+        title: str = "Agents",
         focus_group: str | None = None,
     ) -> None:
         super().__init__(master)
         self.title(title)
-        self.geometry("980x680")
-        self.minsize(760, 520)
+        self.geometry("1000x700")
+        self.minsize(780, 540)
         self.configure(bg=BG)
 
         self.flowplot = flowplot_bin
@@ -117,6 +153,7 @@ class AgentsPanel(tk.Toplevel):
         self._items: dict[str, dict[str, Any]] = {}
         self._selected_id: str | None = None
         self._last_payload: dict[str, Any] | None = None
+        self._profile_line = "mid-j"
         self._fig_canvas = None
         self._mpl_fig = None
 
@@ -148,7 +185,7 @@ class AgentsPanel(tk.Toplevel):
         header.pack(side=tk.TOP, fill=tk.X, padx=8, pady=8)
         ttk.Label(
             header,
-            text="Analyze — validation & correction",
+            text="Agents — physics & numerics checks (any CFD dataset)",
             style="Agents.TLabel",
             font=("Helvetica", 12, "bold"),
         ).pack(side=tk.LEFT)
@@ -159,13 +196,13 @@ class AgentsPanel(tk.Toplevel):
         body = ttk.Frame(self)
         body.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
 
-        left = ttk.Frame(body, style="Agents.TFrame", width=300)
+        left = ttk.Frame(body, style="Agents.TFrame", width=310)
         left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
         left.pack_propagate(False)
 
-        ttk.Label(left, text="Actions", style="Agents.TLabel", font=("Helvetica", 10, "bold")).pack(
-            anchor="w", padx=10, pady=(10, 4)
-        )
+        ttk.Label(
+            left, text="Categories", style="Agents.TLabel", font=("Helvetica", 10, "bold")
+        ).pack(anchor="w", padx=10, pady=(10, 4))
         tree_wrap = ttk.Frame(left, style="Agents.TFrame")
         tree_wrap.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
         self.tree = ttk.Treeview(
@@ -174,9 +211,9 @@ class AgentsPanel(tk.Toplevel):
             show="tree headings",
             selectmode="browse",
         )
-        self.tree.heading("#0", text="Action")
+        self.tree.heading("#0", text="Agent")
         self.tree.heading("status", text="Status")
-        self.tree.column("#0", width=190, stretch=True)
+        self.tree.column("#0", width=200, stretch=True)
         self.tree.column("status", width=70, stretch=False, anchor="center")
         scroll = ttk.Scrollbar(tree_wrap, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
@@ -229,18 +266,17 @@ class AgentsPanel(tk.Toplevel):
             opts, text="JSON details", style="Agents.TButton", command=self._toggle_json
         ).pack(side=tk.LEFT, padx=4, pady=8)
 
-        # Chart + summary (main UX)
         self.chart_frame = ttk.Frame(right, style="Agents.TFrame")
         self.chart_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
         self.summary = ttk.Label(
             self.chart_frame,
-            text="Select Field sanity, Positivity, Extract profile, or Shock polar → Run.",
+            text="Pick a category agent → Run. Charts show results (JSON optional).",
             style="AgentsMuted.TLabel",
-            wraplength=520,
+            wraplength=540,
             justify=tk.LEFT,
         )
         self.summary.pack(anchor="w", padx=10, pady=(8, 4))
-        self.plot_host = tk.Frame(self.chart_frame, bg=VIEWPORT_BG, height=320)
+        self.plot_host = tk.Frame(self.chart_frame, bg=VIEWPORT_BG, height=340)
         self.plot_host.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
 
         self.json_frame = ttk.Frame(right)
@@ -296,7 +332,7 @@ class AgentsPanel(tk.Toplevel):
             from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
             from matplotlib.figure import Figure
         except ImportError:
-            self.summary.configure(text="matplotlib missing — install for Analyze charts.")
+            self.summary.configure(text="matplotlib missing — install for Agents charts.")
             return
         fig = Figure(figsize=(5.4, 3.4), dpi=100)
         ax = fig.add_subplot(111)
@@ -341,11 +377,19 @@ class AgentsPanel(tk.Toplevel):
             self._load_menu_yaml_fallback()
             return
         groups = payload.get("groups") or []
-        preferred = self.focus_group or "validation"
+        preferred = self.focus_group or "positivity-sanity"
+        open_defaults = {
+            preferred,
+            "positivity-sanity",
+            "shocks",
+            "hypersonic",
+            "profiles",
+            "grid-mesh",
+            "reference-values",
+        }
         for group in groups:
             gid = group.get("id") or "group"
-            # Prefer validation + shocks for Analyze; still list the rest collapsed.
-            open_default = gid in (preferred, "validation", "shocks", "nondim")
+            open_default = gid in open_defaults
             gnode = self.tree.insert(
                 "",
                 tk.END,
@@ -368,7 +412,7 @@ class AgentsPanel(tk.Toplevel):
                     text=f"{item.get('title') or iid}",
                     values=(mark,),
                 )
-        self._log(f"Loaded {len(self._items)} menu items.")
+        self._log(f"Loaded {len(self._items)} agents across {len(groups)} categories.")
 
     def _load_menu_yaml_fallback(self) -> None:
         path = menu_yaml_path(self.repo_root)
@@ -393,7 +437,14 @@ class AgentsPanel(tk.Toplevel):
                 iid=f"g:{gid}",
                 text=group.get("title") or gid,
                 values=("",),
-                open=gid in ("validation", "shocks"),
+                open=gid
+                in (
+                    "positivity-sanity",
+                    "shocks",
+                    "hypersonic",
+                    "profiles",
+                    "grid-mesh",
+                ),
             )
             for item in group.get("items") or []:
                 iid = item.get("id") or ""
@@ -416,22 +467,20 @@ class AgentsPanel(tk.Toplevel):
         nid = sel[0]
         if not nid.startswith("i:"):
             self._selected_id = None
-            self._set_detail("Select an action (leaf), not a group.")
+            self._set_detail("Select an agent (leaf), not a category.")
             return
         iid = nid[2:]
         self._selected_id = iid
         item = self._items.get(iid, {})
-        lehar = item.get("lehar") or {}
         fp = item.get("flowplot") or {}
         lines = [
             f"id: {iid}",
             f"title: {item.get('title', '')}",
             f"status: {item.get('status', '')}",
             f"summary: {item.get('summary', '')}",
+            f"command: {fp.get('command', '')}",
+            "scope: any loaded CFD dataset (physics/numerics)",
         ]
-        if lehar.get("agent"):
-            lines.append(f"lehar_agent: {lehar['agent']}")
-        lines.append(f"flowplot: {fp.get('command', '')}")
         if fp.get("notes"):
             lines.append(f"notes: {str(fp['notes']).strip()}")
         self._set_detail("\n".join(lines))
@@ -442,11 +491,100 @@ class AgentsPanel(tk.Toplevel):
         messagebox.showerror(
             "No dataset",
             "Load a CFD file first (File → Open).\n"
-            "Analyze runs against the currently open path only.",
+            "Agents run against the currently open path only.",
             parent=self,
         )
         self._log("error: no dataset loaded — refusing to invent a path.")
         return None
+
+    def _prompt_for_item(self, item_id: str) -> bool:
+        """Tecplot-like dialogs for refs / vars / freestream. Returns False if cancelled."""
+        if item_id == "shock-polar-field":
+            ans = ask_shock_polar(self, mach=2.0, gamma=1.4)
+            if not ans:
+                return False
+            self._polar_mach = float(ans["mach"])
+            self._polar_gamma = float(ans["gamma"])
+            return True
+
+        if item_id == "extract-profile":
+            ans = ask_profile(
+                self,
+                variables=self.variables,
+                initial_var=self.var_name.get(),
+                initial_line=self._profile_line,
+            )
+            if not ans:
+                return False
+            self.var_name.set(ans["var"])
+            self._profile_line = ans.get("line") or "mid-j"
+            return True
+
+        if item_id in ("nondim-suggest", "plot-agent-scales"):
+            ans = ask_reference_values(self)
+            if ans is None:
+                return False
+            args: list[str] = []
+            mapping = {
+                "u_ref": "--u-ref",
+                "lx": "--lx",
+                "ly": "--ly",
+                "lz": "--lz",
+                "t_ref": "--t-ref",
+            }
+            for key, flag in mapping.items():
+                if key in ans:
+                    args.extend([flag, ans[key]])
+            # Merge into nondim_args for this run (replace prior refs of same flags).
+            self.nondim_args = args
+            return True
+
+        contour_ids = {
+            "contour",
+            "positivity-field",
+            "turbulence-field",
+            "shock-tracking-field",
+            "shock-stability-field",
+            "hypersonic-mach-contour",
+            "bow-shock-field",
+            "mesh-solution-field",
+            "wall-physics-field",
+            "wall-boundary-field",
+            "contour-pathlines",
+        }
+        if item_id in contour_ids:
+            hint = ""
+            initial = self.var_name.get()
+            if item_id == "positivity-field":
+                initial = guess_positivity_var(self.variables)
+                hint = "Prefer Density / Pressure / Temperature by name."
+            elif item_id == "turbulence-field":
+                initial = guess_named(self.variables, TURB_HINTS)
+                hint = "Prefer k / ω / νt when present."
+            elif item_id in ("wall-physics-field", "wall-boundary-field"):
+                initial = guess_named(self.variables, WALL_HINTS)
+                hint = "Prefer wall / y+ / τ / Cf scalars when present."
+            elif item_id in (
+                "hypersonic-mach-contour",
+                "bow-shock-field",
+                "shock-tracking-field",
+                "shock-stability-field",
+            ):
+                initial = guess_named(self.variables, HYPERSONIC_HINTS)
+                hint = "Prefer Mach / Pressure / Density for shock evidence."
+            chosen = ask_contour_var(
+                self,
+                variables=self.variables,
+                initial=initial,
+                title=self._items.get(item_id, {}).get("title") or "Contour",
+                hint=hint,
+            )
+            if not chosen:
+                return False
+            self.var_name.set(chosen)
+            return True
+
+        return True
 
     def _build_args(self, item_id: str, item: dict[str, Any]) -> list[str] | None:
         ds = self._require_dataset()
@@ -458,7 +596,6 @@ class AgentsPanel(tk.Toplevel):
         required = list(fp.get("required_args") or [])
 
         if item_id == "shock-polar-field":
-            # Handled in run_selected (matplotlib polar); no CLI args needed.
             return [str(ds)]
 
         if status != "ready":
@@ -483,7 +620,7 @@ class AgentsPanel(tk.Toplevel):
             if not var:
                 messagebox.showwarning(
                     "Variable",
-                    "Select a variable for this action.",
+                    "Select a variable for this agent.",
                     parent=self,
                 )
                 return None
@@ -505,18 +642,29 @@ class AgentsPanel(tk.Toplevel):
         elif command == "nondim":
             args.extend(self.nondim_args)
         elif command == "profile":
-            args.extend(["--line", "mid-j"])
+            args.extend(["--line", self._profile_line])
             json_out = Path(tempfile.gettempdir()) / f"flowplot_agent_{item_id}.json"
             args.extend(["-o", str(json_out)])
+        elif command == "mesh":
+            pass
 
         self._last_out = out_path
         return args
 
-    def _render_validation_chart(self, payload: dict[str, Any], *, positivity: bool) -> None:
+    def _render_validation_chart(
+        self,
+        payload: dict[str, Any],
+        *,
+        positivity: bool,
+        hypersonic: bool = False,
+        title: str | None = None,
+    ) -> None:
         report = payload.get("report") or payload
         fields = report.get("fields") or []
         if not fields:
-            self.summary.configure(text=report.get("summary") or payload.get("summary") or "No fields.")
+            self.summary.configure(
+                text=report.get("summary") or payload.get("summary") or "No fields."
+            )
             self._clear_chart()
             return
 
@@ -525,10 +673,16 @@ class AgentsPanel(tk.Toplevel):
             mins = []
             maxs = []
             flags = []
-            for f in fields[:24]:
+            for f in fields[:36]:
                 name = str(f.get("name") or "?")
                 if name.lower() in COORD_NAMES:
                     continue
+                if hypersonic:
+                    nl = name.lower()
+                    if not any(h in nl for h in HYPERSONIC_HINTS):
+                        # Still include flagged fields.
+                        if f.get("ok", True) and int(f.get("negative_count") or 0) == 0:
+                            continue
                 names.append(name)
                 mins.append(float(f["min"]) if f.get("min") is not None else 0.0)
                 maxs.append(float(f["max"]) if f.get("max") is not None else 0.0)
@@ -537,6 +691,16 @@ class AgentsPanel(tk.Toplevel):
                 )
                 flags.append(bad)
             if not names:
+                # Fall back to all scalars if hypersonic filter emptied the list.
+                for f in fields[:24]:
+                    name = str(f.get("name") or "?")
+                    if name.lower() in COORD_NAMES:
+                        continue
+                    names.append(name)
+                    mins.append(float(f["min"]) if f.get("min") is not None else 0.0)
+                    maxs.append(float(f["max"]) if f.get("max") is not None else 0.0)
+                    flags.append(not f.get("ok", True))
+            if not names:
                 ax.text(0.5, 0.5, "No scalar fields", ha="center", va="center")
                 return
             y = range(len(names))
@@ -544,7 +708,14 @@ class AgentsPanel(tk.Toplevel):
             ax.barh(list(y), [mx - mn for mn, mx in zip(mins, maxs)], left=mins, color=colors)
             ax.set_yticks(list(y), labels=names, fontsize=8)
             ax.set_xlabel("min → max")
-            ax.set_title("Positivity fields" if positivity else "Field extrema")
+            ax.set_title(
+                title
+                or (
+                    "Positivity fields"
+                    if positivity
+                    else ("Hypersonic extrema" if hypersonic else "Field extrema")
+                )
+            )
             ax.grid(True, axis="x", alpha=0.3)
 
         ok = report.get("ok", payload.get("ok"))
@@ -559,7 +730,6 @@ class AgentsPanel(tk.Toplevel):
         profile = payload.get("profile") or payload
         samples = profile.get("samples") or []
         if not samples:
-            # try nested under result
             for key in ("result", "data"):
                 nested = payload.get(key) or {}
                 if isinstance(nested, dict) and nested.get("samples"):
@@ -578,24 +748,94 @@ class AgentsPanel(tk.Toplevel):
             ax.plot(s_vals, v_vals, color="#c00000", lw=1.8)
             ax.set_xlabel("s (arc / index)")
             ax.set_ylabel(str(var))
-            ax.set_title(f"Profile · {var}")
+            ax.set_title(f"Profile · {var} · {self._profile_line}")
             ax.grid(True, alpha=0.35)
 
         self.summary.configure(
-            text=f"Extracted {len(samples)} samples of {var} along mid-j."
+            text=f"Extracted {len(samples)} samples of {var} along {self._profile_line}."
+        )
+        self._show_mpl(draw)
+
+    def _render_info_chart(self, payload: dict[str, Any]) -> None:
+        zones = payload.get("zones") or payload.get("zone_count") or []
+        variables = payload.get("variables") or []
+        if isinstance(zones, int):
+            zone_n = zones
+            zone_labels = [f"zone {i}" for i in range(zone_n)]
+        elif isinstance(zones, list):
+            zone_n = len(zones)
+            zone_labels = []
+            for i, z in enumerate(zones[:16]):
+                if isinstance(z, dict):
+                    name = z.get("name") or f"zone {i}"
+                    dims = z.get("dimensions") or z.get("size") or ""
+                    zone_labels.append(f"{name} {dims}".strip())
+                else:
+                    zone_labels.append(str(z))
+        else:
+            zone_n = 0
+            zone_labels = []
+
+        def draw(ax) -> None:
+            ax.axis("off")
+            lines = [
+                f"zones: {zone_n}",
+                f"variables ({len(variables)}):",
+                ", ".join(str(v) for v in variables[:24])
+                + ("…" if len(variables) > 24 else ""),
+            ]
+            if zone_labels:
+                lines.append("zone detail:")
+                lines.extend(zone_labels[:8])
+            ax.text(
+                0.02,
+                0.98,
+                "\n".join(lines),
+                va="top",
+                ha="left",
+                family="DejaVu Sans Mono",
+                fontsize=9,
+                transform=ax.transAxes,
+                wrap=True,
+            )
+
+        self.summary.configure(
+            text=f"Inventory — {zone_n} zone(s), {len(variables)} variable(s)."
+        )
+        self._show_mpl(draw)
+
+    def _render_nondim_chart(self, payload: dict[str, Any]) -> None:
+        sugg = payload.get("suggestions") or payload.get("result") or payload
+        if not isinstance(sugg, dict):
+            self.summary.configure(text="Nondim suggestions ready.")
+            self._clear_chart()
+            return
+
+        def draw(ax) -> None:
+            ax.axis("off")
+            keys = sorted(str(k) for k in sugg.keys())[:20]
+            text = "\n".join(f"{k}: {sugg[k]}" for k in keys) or "(empty)"
+            ax.text(
+                0.02,
+                0.98,
+                text,
+                va="top",
+                ha="left",
+                family="DejaVu Sans Mono",
+                fontsize=9,
+                transform=ax.transAxes,
+            )
+
+        self.summary.configure(
+            text="Reference-value suggestions — apply in Plot / Agents dialog when set."
         )
         self._show_mpl(draw)
 
     def _run_shock_polar(self) -> None:
         self._clear_results()
-        self._log("Analyze shock polar — analytic θ–β–M (γ-law)")
-        mach = 2.0
-        gamma = 1.4
-        # Prefer a Mach variable name as freestream guess if present.
-        for name in self.variables:
-            if name.lower() in ("mach", "m", "mach_number"):
-                # Still analytic — document that CFD Mach is not auto-fit here.
-                break
+        mach = float(getattr(self, "_polar_mach", 2.0))
+        gamma = float(getattr(self, "_polar_gamma", 1.4))
+        self._log(f"Agents shock polar — analytic θ–β–M M∞={mach:g} γ={gamma:g}")
 
         def draw(ax) -> None:
             plot_polar_on_axes(ax, mach=mach, gamma=gamma)
@@ -606,7 +846,7 @@ class AgentsPanel(tk.Toplevel):
             text=(
                 f"Shock polar M∞={curve.mach:g}, γ={curve.gamma:g}, "
                 f"θ_max≈{curve.theta_max_deg:.2f}°. "
-                "Analytic ideal-gas curve in Flowplot; CFD-coupled polars → lehar shock_polar."
+                "Ideal-gas θ–β–M — applies to any CFD freestream (dialog refs)."
             )
         )
         self._show_mpl(draw)
@@ -619,7 +859,7 @@ class AgentsPanel(tk.Toplevel):
                     "gamma": curve.gamma,
                     "theta_max_deg": curve.theta_max_deg,
                     "out": str(out),
-                    "note": "analytic θ–β–M; lehar shock_polar for CFD-coupled",
+                    "note": "analytic θ–β–M; contour Mach/p for field evidence",
                 },
                 indent=2,
             )
@@ -632,10 +872,14 @@ class AgentsPanel(tk.Toplevel):
 
     def run_selected(self) -> None:
         if not self._selected_id:
-            messagebox.showinfo("Analyze", "Select a menu action first.", parent=self)
+            messagebox.showinfo("Agents", "Select a menu agent first.", parent=self)
             return
         item = self._items.get(self._selected_id)
         if not item:
+            return
+
+        if not self._prompt_for_item(self._selected_id):
+            self._log("cancelled dialog")
             return
 
         if self._selected_id == "shock-polar-field":
@@ -669,7 +913,7 @@ class AgentsPanel(tk.Toplevel):
                 self._log(json.dumps(payload, indent=2))
                 if payload.get("status") == "stub":
                     self.summary.configure(
-                        text="Stub — needs fuller lehar wiring; see JSON details."
+                        text="Stub — planned flags only; see JSON details."
                     )
                     self._clear_chart()
             except json.JSONDecodeError:
@@ -680,23 +924,30 @@ class AgentsPanel(tk.Toplevel):
 
         if payload and proc.returncode == 0:
             iid = self._selected_id
-            if iid in ("field-sanity", "positivity-check"):
-                # menu run may nest under "result" / "report"
-                body = payload.get("result") or payload.get("report") or payload
+            body = payload.get("result") or payload.get("report") or payload
+            if iid in (
+                "field-sanity",
+                "positivity-check",
+                "hypersonic-field-extrema",
+                "field-integrate-extrema",
+            ):
                 if isinstance(body, dict):
                     self._render_validation_chart(
                         body if "fields" in body else payload,
                         positivity=(iid == "positivity-check"),
+                        hypersonic=(iid == "hypersonic-field-extrema"),
+                        title=(
+                            "Field mean / extrema"
+                            if iid == "field-integrate-extrema"
+                            else None
+                        ),
                     )
             elif iid == "extract-profile":
                 self._render_profile_chart(payload.get("result") or payload)
             elif iid in ("plot-agent-scales", "nondim-suggest"):
-                sugg = payload.get("suggestions") or payload.get("result") or payload
-                self.summary.configure(
-                    text="Nondim suggestions ready — apply scales in the left Plot panel."
-                )
-                self._clear_chart()
-                self._log(json.dumps(sugg, indent=2) if not isinstance(sugg, str) else sugg)
+                self._render_nondim_chart(payload.get("result") or payload)
+            elif iid in ("mesh-inventory", "info", "load", "zone-boundary-inventory"):
+                self._render_info_chart(payload.get("result") or payload)
 
         out_png = getattr(self, "_last_out", None)
         if (
@@ -710,3 +961,14 @@ class AgentsPanel(tk.Toplevel):
                 self.on_png(Path(out_png))
             except Exception as exc:  # noqa: BLE001
                 self._log(f"viewport refresh failed: {exc}")
+            chart_ids = {
+                "field-sanity",
+                "positivity-check",
+                "extract-profile",
+                "hypersonic-field-extrema",
+                "field-integrate-extrema",
+            }
+            if self._selected_id not in chart_ids:
+                self.summary.configure(
+                    text=f"Wrote {Path(out_png).name} — viewport refreshed."
+                )
