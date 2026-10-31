@@ -1,13 +1,11 @@
 # Fieldplot (WSL GUI) launcher for Windows Desktop / PowerShell.
 # Starts Ubuntu-24.04 WSL with scripts/launch-fieldplot.sh (WSLg DISPLAY).
-# Preference: no MSI / no interactive UI automation.
-# IMPORTANT: call the .sh by absolute path — do not wrap in bash -lc with
-# nested \"$VAR\" quotes (cmd.exe breaks ROOT and cds to /mnt/c/Windows).
+# Absolute .sh path + env vars — never bash -lc with nested Windows quotes.
 
 param(
     [string]$Distro = "Ubuntu-24.04",
     [string]$WslScript = "/home/nasu/software/Flowplot-agents-wt/scripts/launch-fieldplot.sh",
-    [string]$TipBranch = "cursor/desktop-click-blank-load-8052",
+    [string]$TipBranch = "cursor/contour-var-desktop-launch-207d",
     [string]$FallbackScript = "/home/nasu/software/Flowplot/scripts/launch-fieldplot.sh",
     [switch]$ShowConsole
 )
@@ -19,21 +17,27 @@ if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
-# Absolute-path exec only — no bash -lc string interpolation.
 $script = $WslScript
-$probe = & wsl.exe -d $Distro -- bash -c "test -x '$script' && echo OK || echo MISSING"
+$probe = & wsl.exe -d $Distro -- bash -c "test -f '$script' && echo OK || echo MISSING"
 if ($probe -notmatch 'OK') {
     $script = $FallbackScript
 }
 
-$envPrefix = if ($TipBranch) { "FIELDPLOT_TIP_BRANCH='$TipBranch' " } else { "" }
-# Use env + absolute script; bash reads the file (no nested Windows quoting).
-$wslArgs = @("-d", $Distro, "--", "bash", "-c", "${envPrefix}exec bash '$script'")
+# env VAR=… bash /abs/script — no bash -lc string (Start-Process-safe).
+$wslArgs = @(
+    "-d", $Distro,
+    "--",
+    "env",
+    "FIELDPLOT_SKIP_GIT_SYNC=1",
+    "FIELDPLOT_TIP_BRANCH=$TipBranch",
+    "bash",
+    $script
+)
 
 if ($ShowConsole) {
     & wsl.exe @wslArgs
     exit $LASTEXITCODE
 }
 
-Start-Process -FilePath "wsl.exe" -ArgumentList $wslArgs -WindowStyle Minimized
+Start-Process -FilePath "wsl.exe" -ArgumentList $wslArgs -WindowStyle Hidden
 exit 0
