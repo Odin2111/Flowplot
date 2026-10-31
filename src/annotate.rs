@@ -1,7 +1,13 @@
 //! VisIt-style plot annotations: title / time / cycle, variable name, colorbar.
 //!
 //! Text uses native fontdue coverage AA at the destination pixel size (no
-//! bitmap stretch / supersample mismatch). Pair with a 1:1 Viewport raster.
+//! bitmap stretch / supersample mismatch), DejaVu Sans (VisIt/Silo-like HUD).
+//! Pair with a 1:1 Viewport raster.
+//!
+//! Glyph placement: fontdue `Metrics::ymin` is the **bottom** edge of the
+//! bitmap relative to the baseline (often ≤ 0). For y-down images the top of
+//! the bitmap is `baseline - height - ymin`. Using `baseline + ymin` hung
+//! glyphs below the baseline — periods looked like ticks and `i` like `j`.
 
 use std::sync::OnceLock;
 
@@ -148,20 +154,20 @@ pub fn draw_annotations(img: &mut ContourImage, info: &AnnotationInfo) {
         return;
     }
     let lines = info_lines(info);
-    // Larger HUD readable at 1:1 Viewport pixels (no post-scale stretch).
+    // VisIt-like HUD sizes at 1:1 Viewport pixels (DejaVu Sans AA).
     let title_px = if img.width >= 1000 {
-        18.0
+        20.0
     } else if img.width >= 700 {
-        16.0
+        17.0
     } else {
-        14.0
+        15.0
     };
     let body_px = if img.width >= 1000 {
-        14.0
+        15.0
     } else if img.width >= 700 {
-        13.0
+        14.0
     } else {
-        12.0
+        13.0
     };
     let pad = 10i32;
     let line_gap = 3i32;
@@ -529,29 +535,61 @@ fn measure_text(text: &str, px: f32) -> (i32, i32) {
     (w.max(1), h.max(1))
 }
 
-/// Anti-aliased TrueType text at exact destination size (coverage blend).
+/// Anti-aliased TrueType text (VisIt / Silo HUD quality).
 ///
 /// `y` is the top of the line box. Pen and baseline are integers so every glyph
 /// shares one alignment line — no float floor/round jitter in the Viewport.
+///
+/// Rasterize at 2× size, place with fontdue hi-res metrics (`ymin` = bitmap
+/// **bottom** vs baseline), then 2×2 box-filter into destination pixels.
 fn draw_text_aa(img: &mut ContourImage, x: f32, y: f32, text: &str, px: f32, rgba: [u8; 4]) {
     let font = annotation_font();
     let px = px.round().clamp(8.0, 48.0);
     let (ascent, _descent) = line_metrics(px);
     let baseline = y.round() as i32 + ascent.round() as i32;
     let mut pen_x = x.round() as i32;
+    const SS: i32 = 2;
     for ch in text.chars() {
         let draw_ch = if font.lookup_glyph_index(ch) == 0 && ch != ' ' {
             '?'
         } else {
             ch
         };
-        let (metrics, bitmap) = font.rasterize(draw_ch, px);
-        // Integer glyph origin from shared baseline (fontdue ymin is relative to baseline).
-        let glyph_x = pen_x + metrics.xmin;
-        let glyph_y = baseline + metrics.ymin;
-        for row in 0..metrics.height {
-            for col in 0..metrics.width {
-                let cover = bitmap[row * metrics.width + col];
+        let (metrics, bitmap) = font.rasterize(draw_ch, px * SS as f32);
+        if metrics.width == 0 || metrics.height == 0 {
+            pen_x += font
+                .metrics(draw_ch, px)
+                .advance_width
+                .round()
+                .max(1.0) as i32;
+            continue;
+        }
+        // Hi-res top-left: ymin is the bottom edge in y-up font space.
+        let gx_hi = pen_x * SS + metrics.xmin;
+        let gy_hi = baseline * SS - metrics.height as i32 - metrics.ymin;
+        let x0 = gx_hi.div_euclid(SS);
+        let y0 = gy_hi.div_euclid(SS);
+        let x1 = (gx_hi + metrics.width as i32 + SS - 1).div_euclid(SS);
+        let y1 = (gy_hi + metrics.height as i32 + SS - 1).div_euclid(SS);
+        for dy in y0..y1 {
+            for dx in x0..x1 {
+                let mut sum = 0u32;
+                for sy in 0..SS {
+                    for sx in 0..SS {
+                        let hx = dx * SS + sx;
+                        let hy = dy * SS + sy;
+                        let bx = hx - gx_hi;
+                        let by = hy - gy_hi;
+                        if bx >= 0
+                            && by >= 0
+                            && (bx as usize) < metrics.width
+                            && (by as usize) < metrics.height
+                        {
+                            sum += bitmap[by as usize * metrics.width + bx as usize] as u32;
+                        }
+                    }
+                }
+                let cover = (sum / (SS * SS) as u32) as u8;
                 if cover == 0 {
                     continue;
                 }
@@ -559,15 +597,14 @@ fn draw_text_aa(img: &mut ContourImage, x: f32, y: f32, text: &str, px: f32, rgb
                 if a == 0 {
                     continue;
                 }
-                blend_pixel(
-                    img,
-                    glyph_x + col as i32,
-                    glyph_y + row as i32,
-                    [rgba[0], rgba[1], rgba[2], a],
-                );
+                blend_pixel(img, dx, dy, [rgba[0], rgba[1], rgba[2], a]);
             }
         }
-        pen_x += metrics.advance_width.round().max(1.0) as i32;
+        pen_x += font
+            .metrics(draw_ch, px)
+            .advance_width
+            .round()
+            .max(1.0) as i32;
     }
 }
 
@@ -652,6 +689,69 @@ mod tests {
         let f = annotation_font();
         let (m, bmp) = f.rasterize('A', 16.0);
         assert!(m.width > 0 && !bmp.is_empty());
+    }
+
+    #[test]
+    fn glyph_baseline_places_period_near_bottom() {
+        // Regression: wrong fontdue ymin (bottom vs top) made '.' look like a
+        // mid-line tick and 'i' like 'j'. Period ink must sit in the lower
+        // half of the line box.
+        let w = 80u32;
+        let h = 40u32;
+        let mut img = ContourImage {
+            width: w,
+            height: h,
+            rgba: vec![255u8; (w * h * 4) as usize],
+            vmin: 0.0,
+            vmax: 1.0,
+            grid: Grid2D {
+                ni: 2,
+                nj: 2,
+                x: vec![0.0, 1.0, 0.0, 1.0],
+                y: vec![0.0, 0.0, 1.0, 1.0],
+                values: vec![0.0, 1.0, 1.0, 2.0],
+            },
+            pan_x: 0.0,
+            pan_y: 0.0,
+        };
+        let px = 16.0;
+        let (_tw, th) = measure_text("0.5", px);
+        draw_text_aa(&mut img, 4.0, 4.0, "0.5", px, FG);
+        let mut ink_rows = Vec::new();
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                let i = ((y as u32 * w + x as u32) * 4) as usize;
+                if img.rgba[i] < 200 {
+                    ink_rows.push(y);
+                    break;
+                }
+            }
+        }
+        assert!(!ink_rows.is_empty(), "expected drawn ink");
+        let mid = 4 + th / 2;
+        let below_mid = ink_rows.iter().filter(|&&y| y >= mid).count();
+        assert!(
+            below_mid >= ink_rows.len() / 3,
+            "period/digits should occupy lower line box (mid={mid}, rows={ink_rows:?})"
+        );
+        // Title-like 'i' must not hang mostly below the line box into the next row.
+        let mut img2 = img;
+        img2.rgba.fill(255);
+        draw_text_aa(&mut img2, 4.0, 4.0, "Density", px, FG);
+        let mut max_ink_y = 0i32;
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                let i = ((y as u32 * w + x as u32) * 4) as usize;
+                if img2.rgba[i] < 200 {
+                    max_ink_y = max_ink_y.max(y);
+                }
+            }
+        }
+        assert!(
+            max_ink_y <= 4 + th + 2,
+            "glyph ink must stay inside line box (max_y={max_ink_y}, box_bottom={})",
+            4 + th
+        );
     }
 
     #[test]
