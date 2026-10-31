@@ -11,6 +11,7 @@ use flowplot::contour::{
     pixel_to_world, render_contour, write_png, ColorMapName, ContourColoring, ContourOptions,
     PlotStyle,
 };
+use flowplot::optical::{write_optical_png, OpticalKind, OpticalOptions};
 use flowplot::field::{extract_scalar_grid_view, find_var, PlaneSpec};
 use flowplot::menu::{
     format_item_text, format_menu_text, format_stub_run, MenuItem, PostprocessMenu,
@@ -33,7 +34,7 @@ use flowplot::{load_path, Dataset};
 #[derive(Parser, Debug)]
 #[command(
     name = "flowplot",
-    about = "CFD post-processor: load Tecplot/VTK, mesh, contour, nondim, pathlines, validate, profile, menu",
+    about = "CFD post-processor: load Tecplot/VTK, mesh, contour, optical, nondim, pathlines, validate, profile, menu",
     arg_required_else_help = true
 )]
 struct Cli {
@@ -269,6 +270,37 @@ enum Commands {
         #[arg(long)]
         vmax: Option<f64>,
     },
+    /// Numerical Schlieren / Shadowgraph from a density field (any CFD dataset).
+    Optical {
+        path: PathBuf,
+        /// `schlieren` | `schlieren-chamarthi` | `shadowgraph`
+        #[arg(long, default_value = "schlieren")]
+        kind: String,
+        /// Density variable (default: guess Density/rho by name).
+        #[arg(long = "var")]
+        variable: Option<String>,
+        #[arg(long, short = 'o')]
+        out: PathBuf,
+        #[arg(long, default_value_t = 0)]
+        zone: usize,
+        #[arg(long)]
+        plane: Option<String>,
+        #[arg(long)]
+        view: Option<String>,
+        #[arg(long, default_value_t = 700)]
+        width: u32,
+        #[arg(long, default_value_t = 525)]
+        height: u32,
+        #[arg(long, default_value = "jfm", value_parser = parse_plot_style)]
+        style: PlotStyle,
+        #[arg(long)]
+        vmin: Option<f64>,
+        #[arg(long)]
+        vmax: Option<f64>,
+        /// Show colorbar (off by default for optical figures).
+        #[arg(long, default_value_t = false)]
+        legend: bool,
+    },
     /// Field sanity / positivity checks (NaN, Inf, extrema; optional ρ/p/T ≥ 0).
     Validate {
         path: PathBuf,
@@ -418,7 +450,7 @@ fn dispatch(
         None => {
             let Some(path) = bare_path else {
                 return Err(flowplot::Error::plot(
-                    "usage: flowplot [--json] <path> | flowplot [--json] <load|info|mesh|contour|nondim|pathlines|validate|profile|menu> ...",
+                    "usage: flowplot [--json] <path> | flowplot [--json] <load|info|mesh|contour|optical|nondim|pathlines|validate|profile|menu> ...",
                 ));
             };
             run_info(&path, json)
@@ -592,6 +624,36 @@ fn dispatch(
             vmax,
             json,
         ),
+        Some(Commands::Optical {
+            path,
+            kind,
+            variable,
+            out,
+            zone,
+            plane,
+            view,
+            width,
+            height,
+            style,
+            vmin,
+            vmax,
+            legend,
+        }) => run_optical(
+            &path,
+            &kind,
+            variable.as_deref(),
+            &out,
+            zone,
+            plane.as_deref(),
+            view.as_deref(),
+            width,
+            height,
+            style,
+            vmin,
+            vmax,
+            legend,
+            json,
+        ),
         Some(Commands::Validate {
             path,
             positivity,
@@ -617,6 +679,71 @@ fn dispatch(
         ),
         Some(Commands::Menu { menu_file, action }) => run_menu(menu_file.as_ref(), action, json),
     }
+}
+
+fn run_optical(
+    path: &PathBuf,
+    kind: &str,
+    variable: Option<&str>,
+    out: &PathBuf,
+    zone: usize,
+    plane: Option<&str>,
+    view: Option<&str>,
+    width: u32,
+    height: u32,
+    style: PlotStyle,
+    vmin: Option<f64>,
+    vmax: Option<f64>,
+    legend: bool,
+    json: bool,
+) -> flowplot::Result<()> {
+    let ds = load_path(path)?;
+    let kind = OpticalKind::parse(kind)?;
+    let plane = match plane {
+        Some(s) => PlaneSpec::parse(s)?,
+        None => PlaneSpec::Auto,
+    };
+    let view = match view {
+        Some(s) => ViewSpec::parse(s)?,
+        None => ViewSpec::Auto,
+    };
+    let opts = OpticalOptions {
+        kind,
+        density_var: variable.map(|s| s.to_string()),
+        zone,
+        plane,
+        view,
+        width,
+        height,
+        style,
+        annotate: true,
+        path_hint: Some(path.display().to_string()),
+        legend,
+        vmin,
+        vmax,
+    };
+    let img = write_optical_png(&ds, &opts, out)?;
+    if json {
+        println!(
+            "{{\"status\":\"ok\",\"command\":\"optical\",\"kind\":{},\"path\":{},\"out\":{},\"vmin\":{},\"vmax\":{},\"zone\":{}}}",
+            json_string(kind.as_str()),
+            json_string(&path.display().to_string()),
+            json_string(&out.display().to_string()),
+            img.vmin,
+            img.vmax,
+            zone
+        );
+    } else {
+        println!(
+            "wrote optical {} ({}) → {}  range=[{}, {}]",
+            kind.as_str(),
+            path.display(),
+            out.display(),
+            img.vmin,
+            img.vmax
+        );
+    }
+    Ok(())
 }
 
 fn run_validate(
@@ -886,6 +1013,24 @@ fn dispatch_ready_item(item: &MenuItem, args: Vec<String>, json: bool) -> flowpl
     // positivity-check always enables the positivity scan.
     if item.id == "positivity-check" && !forwarded.iter().any(|a| a == "--positivity") {
         forwarded.push("--positivity".into());
+    }
+    // Optical Agents pin --kind from the menu id when not already provided.
+    if item.flowplot.command == "optical"
+        && !forwarded.iter().any(|a| a == "--kind")
+    {
+        let kind = match item.id.as_str() {
+            "schlieren-chamarthi" => "schlieren-chamarthi",
+            "shadowgraph" => "shadowgraph",
+            _ => "schlieren",
+        };
+        forwarded.push("--kind".into());
+        forwarded.push(kind.into());
+    }
+    if item.id == "entropy-sensor-field"
+        && !forwarded.iter().any(|a| a == "--colormap")
+    {
+        forwarded.push("--colormap".into());
+        forwarded.push("elmar".into());
     }
     if json && !forwarded.iter().any(|a| a == "--json") {
         forwarded.push("--json".into());
@@ -1473,13 +1618,7 @@ fn run_contour(
                 ContourColoring::Banded => "banded",
             }),
             levels,
-            json_string(match colormap {
-                ColorMapName::StyleDefault => "default",
-                ColorMapName::Turbo => "turbo",
-                ColorMapName::Jfm => "jfm",
-                ColorMapName::Coolwarm => "coolwarm",
-                ColorMapName::Grayscale => "grayscale",
-            }),
+            json_string(colormap.as_cli()),
             if legend { "true" } else { "false" },
             if show_labels { "true" } else { "false" },
             n_traces,

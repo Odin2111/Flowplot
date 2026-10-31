@@ -24,7 +24,17 @@ HEADER_BG = "#d5d9de"
 BTN_BG = "#f4f5f6"
 
 COLORINGS = ("Continuous", "Banded")
-COLORMAPS = ("Default", "Turbo", "JFM", "Coolwarm", "Grayscale")
+COLORMAPS = (
+    "Default",
+    "Turbo",
+    "JFM",
+    "Coolwarm",
+    "Grayscale",
+    "Grayscale Reverse",
+    "Schlieren Crisp",
+    "Schlieren Crisp Reverse",
+    "ELMAR / Mach6 BlueAbove",
+)
 DETAIL_TABS = ("Levels and Color", "Bands", "Lines", "Labels", "Legend")
 
 
@@ -54,6 +64,10 @@ class ContourDetailsState:
             "JFM": "jfm",
             "Coolwarm": "coolwarm",
             "Grayscale": "grayscale",
+            "Grayscale Reverse": "grayscale-reverse",
+            "Schlieren Crisp": "schlieren-crisp",
+            "Schlieren Crisp Reverse": "schlieren-crisp-reverse",
+            "ELMAR / Mach6 BlueAbove": "elmar",
         }
         return m.get(self.colormap, "default")
 

@@ -66,6 +66,14 @@ pub enum ColorMapName {
     Jfm,
     Coolwarm,
     Grayscale,
+    /// Reversed grayscale (Chamarthi Schlieren: shocks dark on light).
+    GrayscaleReverse,
+    /// LEHAR Schlieren Crisp — white → pale lavender → deep navy (nonlinear).
+    SchlierenCrisp,
+    /// Reverse of Schlieren Crisp (low values → navy).
+    SchlierenCrispReverse,
+    /// LEHAR ELMAR / Mach-6 “blue above” — warm below mid, cyan→navy above.
+    Elmar,
 }
 
 impl FromStr for ColorMapName {
@@ -78,9 +86,34 @@ impl FromStr for ColorMapName {
             "jfm" => Ok(Self::Jfm),
             "coolwarm" | "cool-warm" => Ok(Self::Coolwarm),
             "gray" | "grey" | "grayscale" | "greyscale" => Ok(Self::Grayscale),
+            "gray-reverse" | "grayscale-reverse" | "greyscale-reverse" | "gray_rev" => {
+                Ok(Self::GrayscaleReverse)
+            }
+            "schlieren" | "schlieren-crisp" | "schlieren_crisp" => Ok(Self::SchlierenCrisp),
+            "schlieren-reverse" | "schlieren-crisp-reverse" | "schlieren_crisp_reverse" => {
+                Ok(Self::SchlierenCrispReverse)
+            }
+            "elmar" | "mach6" | "mach6-blue" | "blue-above" | "elmar-autorange" => Ok(Self::Elmar),
             other => Err(format!(
-                "unknown colormap '{other}' (expected default|turbo|jfm|coolwarm|grayscale)"
+                "unknown colormap '{other}' (expected default|turbo|jfm|coolwarm|grayscale|\
+                 grayscale-reverse|schlieren-crisp|schlieren-crisp-reverse|elmar)"
             )),
+        }
+    }
+}
+
+impl ColorMapName {
+    pub fn as_cli(self) -> &'static str {
+        match self {
+            Self::StyleDefault => "default",
+            Self::Turbo => "turbo",
+            Self::Jfm => "jfm",
+            Self::Coolwarm => "coolwarm",
+            Self::Grayscale => "grayscale",
+            Self::GrayscaleReverse => "grayscale-reverse",
+            Self::SchlierenCrisp => "schlieren-crisp",
+            Self::SchlierenCrispReverse => "schlieren-crisp-reverse",
+            Self::Elmar => "elmar",
         }
     }
 }
@@ -104,6 +137,12 @@ impl PlotStyle {
             ColorMapName::Jfm => colormap_jfm(t),
             ColorMapName::Coolwarm => colormap_coolwarm(t),
             ColorMapName::Grayscale => colormap_gray(t),
+            ColorMapName::GrayscaleReverse => colormap_gray(1.0 - t.clamp(0.0, 1.0)),
+            ColorMapName::SchlierenCrisp => colormap_schlieren_crisp(t),
+            ColorMapName::SchlierenCrispReverse => {
+                colormap_schlieren_crisp(1.0 - t.clamp(0.0, 1.0))
+            }
+            ColorMapName::Elmar => colormap_elmar(t),
         }
     }
 
@@ -257,6 +296,21 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
     }
     let var_idx = find_var(ds, &opts.variable)?;
     let grid = extract_scalar_grid_view(ds, opts.zone, var_idx, opts.plane, opts.view)?;
+    render_contour_grid(ds, &grid, opts, &opts.variable)
+}
+
+/// Contour a precomputed [`Grid2D`] (optical fields, derived scalars).
+///
+/// `label` is used for HUD / colorbar text; it need not exist in the dataset.
+pub fn render_contour_grid(
+    ds: &Dataset,
+    grid: &Grid2D,
+    opts: &ContourOptions,
+    label: &str,
+) -> Result<ContourImage> {
+    if opts.width == 0 || opts.height == 0 {
+        return Err(Error::plot("contour width/height must be > 0"));
+    }
     let (mut vmin, mut vmax) = data_range(&grid.values);
     if let Some(v) = opts.vmin {
         vmin = v;
@@ -273,22 +327,18 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
 
     let (xmin, xmax, ymin, ymax) = grid.bounds();
     let nan = opts.style.nan_rgba();
-    // Reserve a right strip for the legend so the flood fills the plot area
-    // without large unused letterbox margins (Tecplot Contour Details layout).
-    // Slim legend strip — flood fills almost the whole Viewport.
     let legend_reserve = if opts.annotate && opts.legend {
         ((opts.width as f64) * 0.10).round().clamp(48.0, 88.0) as u32
     } else {
         0
     };
     let plot_w = opts.width.saturating_sub(legend_reserve).max(32);
-    // Cell-driven raster: O(cells × pixels/cell) ≈ O(image).
     let mut rgba = vec![0u8; (opts.width as usize) * (opts.height as usize) * 4];
     for px in rgba.chunks_exact_mut(4) {
         px.copy_from_slice(&nan);
     }
     rasterize_cells(
-        &grid,
+        grid,
         &mut rgba,
         opts.width,
         opts.height,
@@ -315,7 +365,7 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
         rgba,
         vmin,
         vmax,
-        grid,
+        grid: grid.clone(),
         pan_x: opts.pan_x,
         pan_y: opts.pan_y,
     };
@@ -326,7 +376,7 @@ pub fn render_contour(ds: &Dataset, opts: &ContourOptions) -> Result<ContourImag
         let mut info = AnnotationInfo::from_dataset(
             ds,
             opts.zone,
-            Some(&opts.variable),
+            Some(label),
             opts.path_hint.as_deref(),
         );
         info.colorbar = opts.legend;
@@ -566,6 +616,60 @@ fn colormap_turbo(t: f64) -> (u8, u8, u8) {
 fn colormap_gray(t: f64) -> (u8, u8, u8) {
     let g = (t.clamp(0.0, 1.0) * 255.0).round() as u8;
     (g, g, g)
+}
+
+/// LEHAR Schlieren Crisp control points (white → pale lavender → deep navy).
+fn colormap_schlieren_crisp(t: f64) -> (u8, u8, u8) {
+    const STOPS: [(f64, (f64, f64, f64)); 11] = [
+        (0.000, (255.0, 255.0, 255.0)),
+        (0.120, (249.0, 250.0, 254.0)),
+        (0.300, (230.0, 232.0, 245.0)),
+        (0.470, (215.0, 217.0, 234.0)),
+        (0.620, (195.0, 197.0, 219.0)),
+        (0.740, (175.0, 177.0, 201.0)),
+        (0.840, (151.0, 152.0, 180.0)),
+        (0.910, (124.0, 125.0, 155.0)),
+        (0.960, (93.0, 94.0, 124.0)),
+        (0.985, (56.0, 57.0, 88.0)),
+        (1.000, (15.0, 16.0, 48.0)),
+    ];
+    lerp_stops(t, &STOPS)
+}
+
+/// LEHAR ELMAR / Mach-6 blue-above: warm ramp then hard jump to cyan→navy at ~0.6.
+fn colormap_elmar(t: f64) -> (u8, u8, u8) {
+    const STOPS: [(f64, (f64, f64, f64)); 8] = [
+        (0.000, (90.0, 0.0, 33.0)),
+        (0.150, (176.0, 24.0, 24.0)),
+        (0.300, (224.0, 98.0, 30.0)),
+        (0.450, (244.0, 184.0, 62.0)),
+        (0.599, (250.0, 224.0, 112.0)),
+        (0.600, (55.0, 210.0, 226.0)),
+        (0.780, (15.0, 119.0, 190.0)),
+        (1.000, (26.0, 20.0, 102.0)),
+    ];
+    lerp_stops(t, &STOPS)
+}
+
+fn lerp_stops(t: f64, stops: &[(f64, (f64, f64, f64))]) -> (u8, u8, u8) {
+    let t = t.clamp(0.0, 1.0);
+    for w in stops.windows(2) {
+        let (t0, c0) = w[0];
+        let (t1, c1) = w[1];
+        if t <= t1 || (t1 - t0).abs() < 1e-12 {
+            let u = if (t1 - t0).abs() < 1e-12 {
+                0.0
+            } else {
+                ((t - t0) / (t1 - t0)).clamp(0.0, 1.0)
+            };
+            let r = c0.0 + u * (c1.0 - c0.0);
+            let g = c0.1 + u * (c1.1 - c0.1);
+            let b = c0.2 + u * (c1.2 - c0.2);
+            return (r as u8, g as u8, b as u8);
+        }
+    }
+    let last = stops[stops.len() - 1].1;
+    (last.0 as u8, last.1 as u8, last.2 as u8)
 }
 
 fn colormap_coolwarm(t: f64) -> (u8, u8, u8) {
