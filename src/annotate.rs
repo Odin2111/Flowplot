@@ -44,7 +44,7 @@ pub struct AnnotationInfo {
     pub show_triad: bool,
 }
 
-/// Colorbar side (Tecplot Contour Details → Legend).
+/// Colorbar side (Contour Details → Legend).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LegendAlign {
     #[default]
@@ -400,7 +400,7 @@ fn draw_level_labels(img: &mut ContourImage, vmin: f64, vmax: f64, nlevels: u32)
         let (px, py) = crate::contour::world_to_pixel_plot(img, wx, wy, plot_w, margin);
         stamps.push((px, py, text));
     }
-    // Sort left→right and keep only stamps with a comfortable gap (Tecplot-like).
+    // Sort left→right and keep only stamps with a comfortable gap.
     stamps.sort_by_key(|(px, _, _)| *px);
     let min_gap = ((img.width as f32) * 0.07).clamp(48.0, 96.0);
     let mut placed: Vec<(i32, i32, String)> = Vec::new();
@@ -421,7 +421,7 @@ fn draw_level_labels(img: &mut ContourImage, vmin: f64, vmax: f64, nlevels: u32)
     }
 }
 
-/// Cartesian XYZ triad with visible origin (Tecplot-like corner widget).
+/// Cartesian XYZ triad with visible origin (corner widget).
 pub fn draw_axes_triad(img: &mut ContourImage, view: ViewSpec) {
     if img.width < 80 || img.height < 80 {
         return;
@@ -571,7 +571,7 @@ fn draw_text_aa(img: &mut ContourImage, x: f32, y: f32, text: &str, px: f32, rgb
     }
 }
 
-/// Stamp a probe readout near a pixel (Tecplot-like click label).
+/// Stamp a probe readout near a pixel (click label).
 pub fn draw_probe_label(img: &mut ContourImage, px: i32, py: i32, text: &str) {
     if img.width < 32 || img.height < 32 || text.is_empty() {
         return;

@@ -1,10 +1,10 @@
 # flowplot
 
-Rust CFD post-processing library with a Tecplot-like data model:
+Rust CFD post-processing library with a zone/variable data model:
 
 **Dataset → Zone → named Variables**, with ordered (I / IJ / IJK) or finite-element connectivity, and nodal or cell-centered values.
 
-This slice adds **mesh (wireframe) PNGs**, **scalar contour PNGs**, **reference-scale nondimensionalization** (CLI/config), and **pathlines** (streamlines of the velocity field). The **GUI** follows Tecplot’s Plot panel: Mesh on by default, Contour optional (`gui/`).
+This slice adds **mesh (wireframe) PNGs**, **scalar contour PNGs**, **reference-scale nondimensionalization** (CLI/config), and **pathlines** (streamlines of the velocity field). The **GUI** Plot panel defaults to Mesh on, Contour optional (`gui/`).
 
 ## Build
 
@@ -29,7 +29,7 @@ Cross-build a 64-bit MSI (MinGW + [wixl](https://wiki.gnome.org/msitools)):
 
 Installs under `C:\Program Files\Flowplot\`, Start Menu shortcuts, optional PATH via `add-to-path.bat`. See `packaging/windows/README.txt`.
 
-## GUI (Tecplot-like Plot panel)
+## GUI (Plot panel)
 
 ```bash
 cargo build
@@ -61,7 +61,7 @@ flowplot contour <path> --var P -o out.png [--plane k=0] \
   [--mesh] [--pathlines] [--pathlines-out lines.png] [--seed x,y] [--u-var U] [--v-var V] [--dt 0.02] \
   [--json]
 
-# Probe scalar at world or pixel coords (Tecplot-like)
+# Probe scalar at world or pixel coords (Fieldplot)
 flowplot probe <path> --var P --x X --y Y [--json]
 flowplot probe <path> --var P --px PX --py PY --width W --height H [-o stamped.png] [--json]
 
@@ -89,7 +89,7 @@ flowplot menu run bow-shock-field   # stub: requires agent + planned flags
 `--pathlines` overlays traces on the contour PNG; `--pathlines-out` writes a second PNG.
 `--style jfm` uses a restrained coolwarm map, white exterior, black frame, and (if size left at 512×512) a single-column 700×525 raster.
 
-GUI: **Analyze** runs validation/correction (field sanity, positivity, profiles, shock polar) with side charts (`gui/agents_panel.py`). Tecplot-ordered top menus: File … Analyze … Help.
+GUI: **Agents** runs validation/correction (field sanity, positivity, profiles, shock polar) with side charts (`gui/agents_panel.py`). Top menus: File … Agents … Help.
 
 Agents (lehar-agent / MCP): prefer `--json` or `FLOWPLOT_BIN=… python3 agents/flowplot_mcp.py` — see [`docs/agent-bridge.md`](docs/agent-bridge.md) and [`docs/postprocess-menu.md`](docs/postprocess-menu.md).
 
@@ -97,19 +97,19 @@ Agents (lehar-agent / MCP): prefer `--json` or `FLOWPLOT_BIN=… python3 agents/
 
 | Format | Extensions | Status |
 |--------|------------|--------|
-| Tecplot ASCII | `.dat`, `.tp`, ASCII `.plt` | **Working** (minimal: `TITLE` / `VARIABLES` / ordered or FE `ZONE`) |
-| Tecplot binary | `.plt` (`#!TDV111` / `#!TDV112`) | **Working** — public Data Format Guide layout (block packing; ordered + basic FE) |
+| PLT ASCII | `.dat`, `.tp`, ASCII `.plt` | **Working** (minimal: `TITLE` / `VARIABLES` / ordered or FE `ZONE`) |
+| PLT binary | `.plt` (`#!TDV111` / `#!TDV112`) | **Working** — public Data Format Guide layout (block packing; ordered + basic FE) |
 | VTK legacy ASCII | `.vtk` | **Working** (structured grid + unstructured grid subset) |
 | VTK XML | `.vtu`, `.vtp`, … | **Stub** — clear `Unimplemented` error |
 | CGNS | `.cgns`, `.cgz` | **Working** when system `libcgns` is found at build; else clear stub (`apt install libcgns-dev`, `--features cgns`) |
 | Fluent case/data | `.cas`, `.dat` | **Stub** — documents public section layout; binary returns `Unimplemented` |
 
-**Not in scope (no reverse engineering):** Tecplot SZL (`.szplt`) and Fluent binary case/data decoding.
+**Not in scope (no reverse engineering):** PLT SZL (`.szplt`) and Fluent binary case/data decoding.
 
 ## Crate layout
 
 - `src/dataset.rs` — data model
-- `src/readers/` — `Reader` trait + Tecplot / VTK / CGNS / Fluent modules
+- `src/readers/` — `Reader` trait + PLT / VTK / CGNS / Fluent modules
 - `src/mesh.rs` — wireframe zone grid → PNG (equal aspect)
 - `src/contour.rs` — scalar contour → PNG
 - `src/nondim.rs` — reference scales + name suggestions
@@ -123,9 +123,9 @@ Agents (lehar-agent / MCP): prefer `--json` or `FLOWPLOT_BIN=… python3 agents/
 - `agents/flowplot_mcp.py` — stdio MCP wrapper for lehar agents
 - `docs/agent-bridge.md` — lehar ↔ Flowplot contract
 - `docs/postprocess-menu.md` — human-facing menu (groups ↔ lehar ↔ CLI/MCP)
-- `gui/` — Tecplot-like menus + Plot panel (mesh-first) + Analyze charts + SVG wordmark
+- `gui/` — menus + Plot panel (mesh-first) + Analyze charts + SVG wordmark
 - `packaging/windows/` — MSI packaging (MinGW + wixl)
-- `tests/fixtures/` — synthetic Tecplot / VTK ASCII (incl. `flow.dat` for contour/pathlines)
+- `tests/fixtures/` — synthetic PLT / VTK ASCII (incl. `flow.dat` for contour/pathlines)
 
 ## License
 

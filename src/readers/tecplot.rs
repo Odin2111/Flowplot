@@ -1,4 +1,4 @@
-//! Tecplot ASCII (`.dat` / `.tp` / ASCII `.plt`) reader — public ASCII layout.
+//! PLT ASCII (`.dat` / `.tp` / ASCII `.plt`) reader — public ASCII layout.
 //!
 //! Supports a minimal subset: `TITLE`, `VARIABLES`, and `ZONE` with
 //! `I`/`J`/`K` ordered data or `N`/`E`/`ET` finite-element connectivity.
@@ -16,7 +16,7 @@ pub struct TecplotAsciiReader;
 
 impl Reader for TecplotAsciiReader {
     fn format_name(&self) -> &'static str {
-        "Tecplot ASCII"
+        "PLT ASCII"
     }
 
     fn read_path(&self, path: &Path) -> Result<Dataset> {
@@ -76,7 +76,7 @@ pub fn parse_tecplot_ascii(text: &str) -> Result<Dataset> {
 
     if dataset.zones.is_empty() {
         return Err(Error::parse(
-            "Tecplot ASCII",
+            "PLT ASCII",
             "no ZONE records found",
         ));
     }
@@ -98,7 +98,7 @@ pub fn parse_tecplot_ascii(text: &str) -> Result<Dataset> {
 fn preprocess_lines(text: &str) -> Vec<String> {
     text.lines()
         .map(|l| {
-            // Strip Tecplot `#` comments.
+            // Strip `#` comments.
             let cut = l.find('#').map(|i| &l[..i]).unwrap_or(l);
             cut.trim().to_string()
         })
@@ -396,7 +396,7 @@ fn split_zone_tokens(s: &str) -> Vec<String> {
 
 fn parse_usize(s: &str, label: &str) -> Result<usize> {
     s.parse::<usize>()
-        .map_err(|_| Error::parse("Tecplot ASCII", format!("invalid {label}={s}")))
+        .map_err(|_| Error::parse("PLT ASCII", format!("invalid {label}={s}")))
 }
 
 /// Parse `DATASETAUXDATA KEY = "value"` or `AUXDATA KEY = "value"`.
@@ -447,7 +447,7 @@ fn read_zone_payload(
             let (cnums, ccons) = take_floats(&lines[consumed..], need_conn)?;
             consumed += ccons;
             for x in cnums {
-                // Tecplot connectivity is 1-based.
+                // Connectivity is 1-based.
                 let idx = x as usize;
                 conn.push(idx.saturating_sub(1));
             }
@@ -513,7 +513,7 @@ fn take_floats(lines: &[String], need: usize) -> Result<(Vec<f64>, usize)> {
                         return Ok((out, consumed));
                     }
                     return Err(Error::parse(
-                        "Tecplot ASCII",
+                        "PLT ASCII",
                         format!("expected float, got '{t}' (have {} of {need})", out.len()),
                     ));
                 }
@@ -523,7 +523,7 @@ fn take_floats(lines: &[String], need: usize) -> Result<(Vec<f64>, usize)> {
     }
     if out.len() < need {
         return Err(Error::parse(
-            "Tecplot ASCII",
+            "PLT ASCII",
             format!("expected {need} values, got {}", out.len()),
         ));
     }

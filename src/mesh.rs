@@ -1,6 +1,6 @@
 //! Wireframe mesh (zone grid / "crate") render to PNG.
 //!
-//! Default Tecplot-like first view: show the mesh with **equal aspect**
+//! Default first view: show the mesh with **equal aspect**
 //! (no stretch), Contour off. Uses ordered IJ / IJK plane extraction.
 
 use crate::annotate::{draw_annotations, AnnotationInfo};

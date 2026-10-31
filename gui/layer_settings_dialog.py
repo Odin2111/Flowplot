@@ -1,4 +1,4 @@
-"""Tecplot-like Show Zone Layers gear buttons + layer Details dialogs.
+"""Show Zone Layers gear buttons + layer Details dialogs.
 
 Each zone-layer row is checkbox + right-aligned gear (canvas icon). Contour
 opens Contour Details; Mesh opens Zone Style; Shade / Vector / Edge / Scatter
@@ -37,7 +37,7 @@ DEFAULT_VECTOR_COLOR = "#1f4e79"
 
 @dataclass
 class ShadeDetailsState:
-    """Shade layer — continuous flood under mesh (Tecplot Shade Details)."""
+    """Shade layer — continuous flood under mesh."""
 
     color_mode: str = "Use Contour Coloring"
     rgb: str = "#808080"
@@ -143,7 +143,7 @@ def add_layer_row(
     on_toggle: Callable[[], None],
     on_settings: Callable[[], None],
 ) -> tk.Frame:
-    """Checkbox + right-aligned Tecplot-like gear button for one zone layer."""
+    """Checkbox + right-aligned gear button for one zone layer."""
     row = ttk.Frame(parent)
     row.pack(fill=tk.X, pady=1)
     ttk.Checkbutton(row, text=label, variable=variable, command=on_toggle).pack(
@@ -225,7 +225,7 @@ class _LayerDetailsBase(tk.Toplevel):
 
 class ShadeDetailsDialog(_LayerDetailsBase):
     title_text = "Shade Details"
-    subtitle = "Tecplot-like flood under mesh"
+    subtitle = "Flood under mesh"
 
     def __init__(
         self,

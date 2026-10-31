@@ -1,4 +1,4 @@
-"""Keep secondary Fieldplot windows above the primary Viewport (Tecplot-like)."""
+"""Keep secondary Fieldplot windows above the primary Viewport (Fieldplot)."""
 
 from __future__ import annotations
 

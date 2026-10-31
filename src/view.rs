@@ -1,4 +1,4 @@
-//! Orthographic view orientation for mesh / contour planes (Tecplot-like).
+//! Orthographic view orientation for mesh / contour planes.
 //!
 //! Axis buttons look along ±X / ±Y / ±Z. Free rotate uses azimuth + elevation
 //! (degrees) for mouse-drag / rotate-button orbit.
@@ -57,7 +57,7 @@ impl PrincipalPlane {
 pub enum ViewSpec {
     /// Pick the two varying plot axes (legacy / File→Open default).
     Auto,
-    /// Tecplot-style axis view. `positive == true` means the **+Axis** button
+    /// Axis view. `positive == true` means the **+Axis** button
     /// (camera on the + side looking toward the origin).
     Axis {
         axis: LookAxis,

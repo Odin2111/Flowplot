@@ -1,6 +1,6 @@
-"""Tecplot-like Zone Style dialog for Flowplot.
+"""Zone Style dialog for Flowplot.
 
-Tabs mirror Tecplot 360: Mesh, Contour, Vector, Scatter, Shade, Edge, Points,
+Tabs include: Mesh, Contour, Vector, Scatter, Shade, Edge, Points,
 Surfaces, Volume, Effects. Mesh + Contour rows drive redraw; other tabs are
 labeled stubs for now.
 """
@@ -46,7 +46,7 @@ ZONE_STYLE_TABS = (
 
 @dataclass
 class ZoneStyleState:
-    """Per-zone style row (Tecplot Zone Style table)."""
+    """Per-zone style row (Zone Style table)."""
 
     index: int
     name: str
@@ -125,7 +125,7 @@ def rgb_cli(color: str) -> str:
 
 
 class ZoneStyleDialog(tk.Toplevel):
-    """Modal-ish Zone Style window (Apply / Close like Tecplot)."""
+    """Modal-ish Zone Style window (Apply / Close with Apply / Close)."""
 
     def __init__(
         self,
@@ -179,7 +179,7 @@ class ZoneStyleDialog(tk.Toplevel):
                 stub = ttk.Label(
                     page,
                     text=(
-                        f"{name} zone attributes match Tecplot’s Zone Style tab.\n"
+                        f"{name} zone attributes for this Zone Style tab.\n"
                         "Not wired in this slice (stub)."
                     ),
                     foreground=MUTED,

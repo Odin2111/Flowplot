@@ -1,4 +1,4 @@
-"""Export PNG dialog with style presets (JFM Crisp from Tecplot macro pack)."""
+"""Export PNG dialog with style presets (JFM Crisp)."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def ask_export_png(
     ).pack(anchor="w", pady=2)
     ttk.Label(
         body,
-        text="JFM Crisp mirrors the Tecplot JFM_Crisp_2D_Contour macro: clean flood,\n"
+        text="JFM Crisp mirrors the PLT JFM_Crisp_2D_Contour macro: clean flood,\n"
         "no mesh/edge/shade, Times-like paper look via --style jfm.",
         foreground=MUTED,
         justify=tk.LEFT,

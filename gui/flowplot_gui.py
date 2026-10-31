@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Flowplot GUI — Tecplot-like Plot panel (mesh first, contours optional).
+"""Flowplot GUI — Plot panel (mesh first, contours optional).
 
 Thin Python front-end that shells out to the `flowplot` CLI. On File→Open the
 default view is the zone **Mesh** (wireframe crate) with Contour off. Contour
-and Pathlines are optional layers, matching Tecplot’s Show Zone Layers /
-Show Derived Objects order (Tecplot’s “Streamtraces” → Flowplot “Pathlines”).
+and Pathlines are optional layers, matching Show Zone Layers /
+Show Derived Objects order (Pathlines).
 """
 
 from __future__ import annotations
@@ -105,7 +105,7 @@ def find_flowplot_bin() -> str | None:
 
 
 def first_scalar(variables: list[str]) -> str:
-    """Default contour variable: first non-coordinate name (Tecplot-like)."""
+    """Default contour variable: first non-coordinate name (Fieldplot)."""
     for name in variables:
         if name.strip().lower() not in COORD_NAMES:
             return name
@@ -148,7 +148,7 @@ class FlowplotGui(tk.Tk):
         self.vector_details = VectorDetailsState()
         self.edge_details = EdgeDetailsState()
         self.scatter_details = ScatterDetailsState()
-        # Exclusive interaction tools (Tecplot-like): rotate | pan | probe | pathlines.
+        # Exclusive interaction tools (Fieldplot): rotate | pan | probe | pathlines.
         # Default Rotate so left-drag orbits the domain (not pan/translate).
         self.tool_mode = tk.StringVar(value="rotate")
         self.probe_marks: list[tuple[int, int, str]] = []
@@ -168,7 +168,7 @@ class FlowplotGui(tk.Tk):
         self.vector_v = tk.StringVar(value="")
         self.vector_w = tk.StringVar(value="")
 
-        # Tecplot Show Zone Layers — Mesh ON, Contour OFF by default.
+        # Show Zone Layers — Mesh ON, Contour OFF by default.
         self.layer_mesh = tk.BooleanVar(value=True)
         self.layer_contour = tk.BooleanVar(value=False)
         self.layer_shade = tk.BooleanVar(value=False)
@@ -180,7 +180,7 @@ class FlowplotGui(tk.Tk):
         self.layer_slices = tk.BooleanVar(value=False)
         self.layer_pathlines = tk.BooleanVar(value=False)
 
-        # Cut / track plane + Tecplot-like view orientation.
+        # Cut / track plane + view orientation.
         self.plane_axis = tk.StringVar(value="auto")
         self.plane_index = tk.IntVar(value=0)
         self.view_mode = tk.StringVar(value="auto")  # auto|+x|-x|+y|-y|+z|-z|free
@@ -285,7 +285,7 @@ class FlowplotGui(tk.Tk):
         menu.add_radiobutton(label="Style · JFM", variable=self.plot_style, value="jfm")
 
     def _plot_menu_items(self, menu: tk.Menu) -> None:
-        """Tecplot-like Plot menu — only wired actions (no stub placeholders)."""
+        """Plot menu — only wired actions (no stub placeholders)."""
         menu.add_command(label="Zone Style…", command=self.action_zone_style)
         menu.add_separator()
         menu.add_command(label="Contour Details…", command=self.action_contour_details)
@@ -339,7 +339,7 @@ class FlowplotGui(tk.Tk):
         parent.add_cascade(label=title, menu=sub)
 
     def _agents_menu_items(self, menu: tk.Menu) -> None:
-        """Tecplot Analyze analogue — named Agents, categorized by CFD applicability."""
+        """Agents menu — named Agents, categorized by CFD applicability."""
         self._agents_cascade(
             menu,
             "Positivity & sanity",
@@ -460,12 +460,12 @@ class FlowplotGui(tk.Tk):
             menubar.add_cascade(label=label, menu=m)
         self.config(menu=menubar)
         self.bind("<Control-o>", lambda _e: self.action_load())
-        # Tecplot-like Fit (whole domain). Bind both cases; ignore when typing in entries.
+        # Fit (whole domain). Bind both cases; ignore when typing in entries.
         self.bind_all("<KeyPress-f>", self._on_fit_key)
         self.bind_all("<KeyPress-F>", self._on_fit_key)
 
     def _build_toolbar(self) -> None:
-        """Tecplot-like icon strip under the menubar."""
+        """icon strip under the menubar."""
         self._icon_toolbar = build_fieldplot_icon_toolbar(self, self)
         self._icon_toolbar.pack(side=tk.TOP, fill=tk.X)
         # Levels status shares the icon strip's status area when idle.
@@ -620,7 +620,7 @@ class FlowplotGui(tk.Tk):
 
         layers = ttk.LabelFrame(parent, text="Show Zone Layers", padding=(8, 6))
         layers.pack(fill=tk.X, padx=10, pady=(0, 8))
-        # Tecplot-like: checkbox + right-aligned gear → layer Details dialog.
+        # Fieldplot: checkbox + right-aligned gear → layer Details dialog.
         for label, var, toggle, settings in (
             ("Mesh", self.layer_mesh, self.action_redraw, self.action_mesh_settings),
             ("Contour", self.layer_contour, self.action_redraw, self.action_contour_details),
@@ -828,7 +828,7 @@ class FlowplotGui(tk.Tk):
         )
 
     def _on_fit_key(self, event: tk.Event) -> str | None:
-        """Key F = Fit whole domain (Tecplot-like). Skip when focus is an Entry/Text."""
+        """Key F = Fit whole domain (Fieldplot). Skip when focus is an Entry/Text."""
         w = event.widget
         try:
             cls = w.winfo_class()
@@ -969,7 +969,7 @@ class FlowplotGui(tk.Tk):
                 start_new_session=True,
             )
             self._cli_proc = proc
-            # Pump Tk so drag/press can cancel in-flight (Tecplot-like interrupt).
+            # Pump Tk so drag/press can cancel in-flight (interrupt).
             deadline = time.monotonic() + 120.0
             while proc.poll() is None:
                 if time.monotonic() > deadline:
@@ -1239,7 +1239,7 @@ class FlowplotGui(tk.Tk):
             self.viewport.delete("pathline_drag")
             return
         if mode == "pan":
-            # Tecplot Translate: left-drag pans the domain.
+            # Translate: left-drag pans the domain.
             self._on_pan_press(event)
             return
         # Rotate tool (default): left-drag orbits az/el — domain geometry, not PNG slide.
@@ -1485,6 +1485,9 @@ class FlowplotGui(tk.Tk):
         default = first_scalar(self.variables)
         if default:
             self.var_name.set(default)
+        dlg = self._contour_details_dialog
+        if dlg is not None and dlg.winfo_exists():
+            dlg.set_variables(list(self.variables), self.var_name.get())
         self._log(f"variables: {', '.join(self.variables) if self.variables else '(none)'}")
         self._log(f"default contour var: {default or '(none)'} (Contour layer still off)")
 
@@ -1553,7 +1556,7 @@ class FlowplotGui(tk.Tk):
         self.focus_force()
         self.update_idletasks()
 
-        # Reset layers to Tecplot defaults: Mesh on, Contour off.
+        # Reset layers to defaults: Mesh on, Contour off.
         self.layer_mesh.set(True)
         self.layer_contour.set(False)
         self.layer_pathlines.set(False)
@@ -1585,7 +1588,7 @@ class FlowplotGui(tk.Tk):
                 self.effectively_2d = bool(payload.get("effectively_2d", True))
                 self._apply_default_camera(payload)
                 self._update_view_label()
-                # True volumes → 3D Cartesian so Rotate/XYZ feel like Tecplot 3D.
+                # True volumes → 3D Cartesian so Rotate/XYZ feel natural in 3D.
                 if not self.effectively_2d and self.plot_type.get() == "2D Cartesian":
                     self.plot_type.set("3D Cartesian")
                     self._log("Volume dataset — plot type → 3D Cartesian")
@@ -2039,28 +2042,37 @@ class FlowplotGui(tk.Tk):
         self.action_redraw()
 
     def action_contour_details(self) -> None:
-        """Plot → Contour… / toolbar Details — Tecplot Contour Details."""
+        """Plot → Contour… / toolbar Details — Contour Details."""
         self.action_enable_contour()
         existing = self._contour_details_dialog
         if existing is not None and existing.winfo_exists():
+            existing.set_variables(list(self.variables), self.var_name.get())
             stay_above(existing, self, modal=False)
             return
         dlg = ContourDetailsDialog(
             self,
             self.contour_details,
             on_apply=self._apply_contour_details,
+            variables=list(self.variables),
+            variable=self.var_name.get(),
         )
         self._contour_details_dialog = dlg
 
     def _apply_contour_details(self, state: ContourDetailsState) -> None:
         self.contour_details = state
+        picked = (state.variable or "").strip()
+        if picked:
+            self.var_name.set(picked)
+        elif not self.var_name.get().strip() and self.variables:
+            self.var_name.set(first_scalar(self.variables))
         self._refresh_levels_label()
         self.layer_contour.set(True)
+        self._log(f"Contour Details → var={self.var_name.get() or '(none)'}")
         self._render_cache.clear()
         self.action_redraw()
 
     def action_contour_add_level(self) -> None:
-        """Tecplot Contour ＋ Level — bump count, force Banded Contour, redraw."""
+        """Contour ＋ Level — bump count, force Banded Contour, redraw."""
         self.contour_details.nlevels = min(64, int(self.contour_details.nlevels) + 1)
         self.contour_details.coloring = "Banded"
         self.layer_contour.set(True)
@@ -2072,7 +2084,7 @@ class FlowplotGui(tk.Tk):
         self.action_redraw()
 
     def action_contour_remove_level(self) -> None:
-        """Tecplot Contour － Level — drop count, force Banded Contour, redraw."""
+        """Contour － Level — drop count, force Banded Contour, redraw."""
         self.contour_details.nlevels = max(2, int(self.contour_details.nlevels) - 1)
         self.contour_details.coloring = "Banded"
         self.layer_contour.set(True)
@@ -2119,7 +2131,7 @@ class FlowplotGui(tk.Tk):
         self._legend_options_dialog = LegendOptionsDialog(self, state, on_apply=on_apply)
 
     def _set_tool_mode(self, mode: str) -> None:
-        """Exclusive tools: rotate | pan | probe | pathlines (Tecplot Rotate vs Translate)."""
+        """Exclusive tools: rotate | pan | probe | pathlines (Rotate vs Pan)."""
         # Legacy alias from earlier "orbit" naming.
         if mode == "orbit":
             mode = "rotate"
@@ -2210,7 +2222,7 @@ class FlowplotGui(tk.Tk):
             self._set_tool_mode("probe")
 
     def action_pathlines_tool(self) -> None:
-        """Enter Pathlines rake mode (Tecplot-style click-drag seed line)."""
+        """Enter Pathlines rake mode (click-drag seed line)."""
         if not self._ensure_pathline_velocity_vars():
             messagebox.showwarning(
                 "Pathlines",
@@ -2617,7 +2629,7 @@ class FlowplotGui(tk.Tk):
         return u, v, w
 
     def _ask_vector_components(self) -> bool:
-        """Tecplot-like U/V/W (or Ux/Uy/Uz) picker when enabling Vector."""
+        """U/V/W (or Ux/Uy/Uz) picker when enabling Vector."""
         gu, gv, gw = self._guess_velocity_names()
         if not self.vector_u.get().strip():
             self.vector_u.set(gu)
@@ -2632,7 +2644,7 @@ class FlowplotGui(tk.Tk):
         stay_above(dlg, self, modal=True)
         body = ttk.Frame(dlg, padding=12)
         body.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(body, text="Choose velocity components (Tecplot-like):").pack(anchor="w")
+        ttk.Label(body, text="Choose velocity components:").pack(anchor="w")
         vars_ = self.variables or [""]
         rows = [("U / Ux", self.vector_u), ("V / Uy", self.vector_v), ("W / Uz", self.vector_w)]
         for label, var in rows:
@@ -2873,7 +2885,7 @@ class FlowplotGui(tk.Tk):
         self._run_cli(["--json", "info", str(ds)])
 
     def action_zone_style(self) -> None:
-        """Plot → Zone Style… (Tecplot-like per-zone Mesh/Contour table)."""
+        """Plot → Zone Style… (per-zone Mesh/Contour table)."""
         if not self.zone_styles:
             if self.dataset_path and self.dataset_path.is_file():
                 # Lazy fill from a single default row if info lacked zones.
@@ -3066,7 +3078,7 @@ class FlowplotGui(tk.Tk):
         preset = choice.get("preset") or "current"
         if not dest:
             return
-        # Apply JFM Crisp export preset (from JFM_Crisp_2D_Contour Tecplot macro).
+        # Apply JFM Crisp export preset (from JFM Crisp 2D contour preset).
         prev_style = self.plot_style.get()
         prev_cd = replace(self.contour_details) if hasattr(self, "contour_details") else None
         if preset == "jfm-crisp":
@@ -3100,7 +3112,7 @@ class FlowplotGui(tk.Tk):
     def stub_plot(self, name: str) -> None:
         messagebox.showinfo(
             name,
-            f"Plot → {name} matches Tecplot’s menu label.\n"
+            f"Plot → {name} matches menu label.\n"
             "Not implemented in this slice (stub).",
         )
 
@@ -3169,7 +3181,7 @@ class FlowplotGui(tk.Tk):
         messagebox.showinfo(
             "About Fieldplot",
             "Fieldplot — CFD post-processor\n"
-            "Tecplot-like menus + Plot panel (Mesh first).\n"
+            "Fieldplot menus + Plot panel (Mesh first).\n"
             "Agents menu: positivity, profiles, shocks, hypersonic, grid, …\n"
             "Checks apply to any loaded CFD dataset (physics/numerics).\n"
             "CLI binary remains `flowplot` for now.\n"

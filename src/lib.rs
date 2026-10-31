@@ -1,4 +1,4 @@
-//! `flowplot` — CFD post-processing core with a Tecplot-like data model.
+//! `flowplot` — CFD post-processing core with a data model.
 //!
 //! # Data model
 //!
@@ -10,8 +10,8 @@
 //!
 //! | Format | Status |
 //! |--------|--------|
-//! | Tecplot ASCII (`.dat`, `.tp`, ASCII `.plt`) | Minimal working parser |
-//! | Tecplot binary (`.plt`, `#!TDV111`/`#!TDV112`) | Public Data Format Guide reader |
+//! | PLT ASCII (`.dat`, `.tp`, ASCII `.plt`) | Minimal working parser |
+//! | PLT binary (`.plt`, `#!TDV111`/`#!TDV112`) | Public Data Format Guide reader |
 //! | VTK legacy ASCII (`.vtk`) | Minimal working parser |
 //! | VTK XML (`.vtu`, …) | Stub (`Unimplemented`) |
 //! | CGNS (`.cgns` / `.cgz`) | System `libcgns` when present; else clear stub |
@@ -23,7 +23,7 @@
 //!
 //! - [`mesh`] — wireframe zone grid / "crate" PNG (default first view; equal aspect)
 //! - [`contour`] — scalar color-field / contour PNG for any variable
-//! - [`view`] — Tecplot-like ±XYZ / free-rotate orthographic projection
+//! - [`view`] — ±XYZ / free-rotate orthographic projection
 //! - [`nondim`] — reference-scale nondimensionalization (CLI/config; no invented physics)
 //! - [`pathlines`] — particle traces / streamlines of the velocity field
 //! - [`validate`] — field sanity / positivity checks (lehar validation ideas)

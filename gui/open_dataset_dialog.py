@@ -39,7 +39,7 @@ CFD_GLOBS = (
 
 FILTERS: list[tuple[str, tuple[str, ...]]] = [
     ("CFD datasets", CFD_GLOBS),
-    ("Tecplot", ("*.plt", "*.dat", "*.tp")),
+    ("PLT / DAT", ("*.plt", "*.dat", "*.tp")),
     ("CGNS", ("*.cgns", "*.cgz")),
     ("VTK", ("*.vtk", "*.vtu", "*.vtp", "*.vti", "*.vts", "*.vtr")),
     ("Fluent", ("*.cas", "*.dat")),

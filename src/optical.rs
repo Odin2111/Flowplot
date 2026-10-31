@@ -1,6 +1,6 @@
 //! Numerical Schlieren and Shadowgraph (density-gradient optics).
 //!
-//! Solver-agnostic field transforms from Tecplot-style macros:
+//! Solver-agnostic field transforms (optical / style macros):
 //! - Primary / Chamarthi Schlieren: `log(1 + |∇ρ|)`
 //! - Shadowgraph (Zhang–Zhang–Shu style): `sign(∇²ρ) · log(1 + |∇²ρ|)`
 //!

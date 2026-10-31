@@ -1,4 +1,4 @@
-"""Tecplot-like Probe window: Variable Values / Cell Center / Zone info.
+"""Probe window: Variable Values / Cell Center / Zone info.
 
 Markers on the Viewport are owned by the main GUI; this dialog clears them
 on Close or Clear.

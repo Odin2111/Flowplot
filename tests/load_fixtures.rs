@@ -10,7 +10,7 @@ fn fixture(name: &str) -> PathBuf {
 
 #[test]
 fn load_tecplot_ascii_fixture() {
-    let ds = load_path(&fixture("simple.dat")).expect("Tecplot ASCII fixture");
+    let ds = load_path(&fixture("simple.dat")).expect("PLT ASCII fixture");
     assert_eq!(ds.zone_count(), 1);
     assert_eq!(ds.variables, vec!["X", "Y", "P"]);
     assert_eq!(ds.zones[0].node_count(), 4);
@@ -20,7 +20,7 @@ fn load_tecplot_ascii_fixture() {
 
 #[test]
 fn load_tecplot_binary_plt_fixture() {
-    let ds = load_path(&fixture("simple.plt")).expect("Tecplot binary .plt fixture");
+    let ds = load_path(&fixture("simple.plt")).expect("PLT binary .plt fixture");
     assert_eq!(ds.title.as_deref(), Some("demo"));
     assert_eq!(ds.variables, vec!["X", "Y", "P"]);
     assert_eq!(ds.zone_count(), 1);

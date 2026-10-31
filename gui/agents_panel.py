@@ -1,6 +1,6 @@
 """Agents panel — categorized CFD validation agents with charts (not raw JSON).
 
-Tecplot Analyze analogue under the Fieldplot **Agents** menu. Runs
+Fieldplot **Agents** menu panel. Runs
 `flowplot menu run <id>` against the currently loaded dataset. Checks are
 physics/numerics-based and apply to any CFD .plt/.dat — not solver-specific APIs.
 """
@@ -499,7 +499,7 @@ class AgentsPanel(tk.Toplevel):
         return None
 
     def _prompt_for_item(self, item_id: str) -> bool:
-        """Tecplot-like dialogs for refs / vars / freestream. Returns False if cancelled."""
+        """dialogs for refs / vars / freestream. Returns False if cancelled."""
         if item_id == "shock-polar-field":
             ans = ask_shock_polar(self, mach=2.0, gamma=1.4)
             if not ans:

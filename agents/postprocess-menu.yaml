@@ -9,7 +9,7 @@
 version: 1
 title: Fieldplot Agents
 description: >
-  Tecplot Analyze–style Agents menu: calculate / integrate / reference /
+  Fieldplot Agents menu: calculate / integrate / reference /
   field / geometry actions implemented as functional CFD validation agents.
   status=ready items dispatch today against the loaded dataset; stubs document
   planned flags for fuller boundary / jump / suite workflows.
@@ -186,7 +186,7 @@ groups:
 
   - id: calculate-variables
     title: Calculate variables
-    summary: Field figures from named scalars (Tecplot Calculate Variables analogue).
+    summary: Field figures from named scalars (named scalar figures).
     items:
       - id: contour
         title: Contour scalar
@@ -497,7 +497,7 @@ groups:
           template: "flowplot optical {path} --kind schlieren [--var Density] -o {out} --json"
           required_args: [path, out]
           optional_flags: ["--var", "--zone", "--plane", "--vmin", "--vmax", "--legend"]
-          notes: "Guesses Density/rho by name; Tecplot Schlieren Crisp palette."
+          notes: "Guesses Density/rho by name; Schlieren Crisp palette."
         mcp: flowplot_contour
 
       - id: schlieren-chamarthi
@@ -609,12 +609,12 @@ groups:
           planned_flags: ["--var", "-o", "--u-ref", "--lx", "--pathlines", "--seed", "--json"]
         mcp: flowplot_contour
 
-      - id: tecplot-animation-ascii
+      - id: plt-animation-ascii
         title: ASCII frame animation
         summary: Contour each ASCII frame when a series is available.
         status: stub
         lehar:
-          agent: tecplot_animation
+          agent: plt_animation
         flowplot:
           command: contour
           template: "flowplot contour {frame_path} --var {var} -o {frame_png} --json"

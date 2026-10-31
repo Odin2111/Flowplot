@@ -1,6 +1,6 @@
 //! Format readers. Each module implements loading into [`crate::Dataset`].
 //!
-//! Detection is by file extension (case-insensitive). Tecplot binary `.plt`
+//! Detection is by file extension (case-insensitive). PLT binary `.plt`
 //! uses the public Data Format Guide (`#!TDV111` / `#!TDV112`). CGNS uses
 //! system `libcgns` when available at build time.
 
@@ -37,7 +37,7 @@ pub fn load_path(path: &Path) -> Result<Dataset> {
 
     match ext.as_str() {
         "dat" | "tp" => {
-            // `.dat` is shared by Tecplot ASCII and Fluent data. Prefer Tecplot
+            // `.dat` is shared by PLT ASCII and Fluent data. Prefer PLT ASCII
             // when the file starts with TITLE/VARIABLES/ZONE; otherwise try Fluent stub.
             if looks_like_tecplot_ascii(path)? {
                 TecplotAsciiReader.read_path(path)
@@ -47,7 +47,7 @@ pub fn load_path(path: &Path) -> Result<Dataset> {
                 TecplotAsciiReader.read_path(path)
             }
         }
-        // `.plt` may be binary (`#!TDV…`) or Tecplot ASCII (TITLE/VARIABLES).
+        // `.plt` may be binary (`#!TDV…`) or PLT ASCII (TITLE/VARIABLES).
         "plt" => {
             if tecplot_binary::is_tecplot_binary(path)? {
                 TecplotBinaryReader.read_path(path)

@@ -6,7 +6,7 @@ Installed under:
 
 Contents
 --------
-  flowplot.exe          CLI (Tecplot/VTK load, contour PNG, nondim, pathlines)
+  flowplot.exe          CLI (PLT/VTK load, contour PNG, nondim, pathlines)
   flowplot-gui.bat      Launches the Python GUI shell
   gui\flowplot_gui.py   Thin tkinter front-end (shells out to the CLI)
   gui\assets\           Wordmark SVG
