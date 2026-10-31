@@ -33,7 +33,7 @@ class ProbeDialog(tk.Toplevel):
         on_close: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(master)
-        self.title("Probe")
+        self.title("Sample")
         self.geometry("360x480")
         self.minsize(300, 360)
         self.configure(bg=BG)
@@ -46,7 +46,7 @@ class ProbeDialog(tk.Toplevel):
         hdr.pack(side=tk.TOP, fill=tk.X)
         tk.Label(
             hdr,
-            text="Probe",
+            text="Sample",
             bg=HEADER_BG,
             fg=FG,
             font=("Helvetica", 11, "bold"),
@@ -108,7 +108,7 @@ class ProbeDialog(tk.Toplevel):
         widget.configure(state=tk.DISABLED)
 
     def _set_placeholder(self) -> None:
-        tip = "Click the Viewport with Probe mode on to sample all variables."
+        tip = "Click the Viewport with Sample mode on to sample all variables."
         self._write(self.vars_text, tip)
         self._write(self.cell_text, tip)
         self._write(self.zone_text, tip)

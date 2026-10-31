@@ -118,7 +118,7 @@ def ask_reference_values(
     initial: dict[str, str] | None = None,
 ) -> dict[str, str] | None:
     init = initial or {}
-    dlg = _BaseDialog(master, "Reference values")
+    dlg = _BaseDialog(master, "Reference scales")
     body = ttk.Frame(dlg, padding=12)
     body.pack(fill=tk.BOTH, expand=True)
     ttk.Label(
