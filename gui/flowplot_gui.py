@@ -47,6 +47,7 @@ from fieldplot_ops_dialogs import (
 )
 from open_dataset_dialog import ask_open_dataset
 from probe_dialog import ProbeDialog
+from validation_data_dialog import open_validation_data_dialog
 from windowing import release_grabs, stay_above
 from zone_style_dialog import (
     DEFAULT_MESH_COLOR,
@@ -204,6 +205,8 @@ class FlowplotGui(tk.Tk):
         self._cli_proc: subprocess.Popen[str] | None = None
         self._render_cache: dict[str, Path] = {}
         self._render_gen = 0
+        self._validation_dialog = None
+        self._validation_overlay: dict | None = None
         # Last settled frame metadata (geometry redraw on settle — no PNG warp).
         self._settle_image = None  # PIL.Image.Image | None
         self._settle_az = 0.0
@@ -467,6 +470,7 @@ class FlowplotGui(tk.Tk):
             ],
         )
         menu.add_separator()
+        menu.add_command(label="Validation data…", command=self.open_validation_data)
         menu.add_command(label="All Agents…", command=self.open_agents_panel)
 
     def _help_menu_items(self, menu: tk.Menu) -> None:
@@ -2632,6 +2636,7 @@ class FlowplotGui(tk.Tk):
 
     def _draw_probe_overlays(self) -> None:
         self.viewport.delete("probe")
+        self._draw_validation_overlay()
         for cx, cy, text in self.probe_marks:
             short = text if len(text) < 28 else text[:25] + "…"
             self.viewport.create_line(cx - 6, cy, cx + 6, cy, fill="#1f2a33", width=1, tags="probe")
@@ -3924,12 +3929,113 @@ class FlowplotGui(tk.Tk):
         except tk.TclError:
             pass
 
+    def open_validation_data(self) -> None:
+        """Agents → Validation data… — ERCOFTAC / NASA / arXiv cache + compare."""
+        release_grabs(self)
+        existing = getattr(self, "_validation_dialog", None)
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    existing.dataset_path = self.dataset_path
+                    existing.line_sample_csv = self._line_sample_csv
+                    existing.variables = list(self.variables)
+                    stay_above(existing, self, modal=False, always_on_top=True)
+                    existing.lift()
+                    return
+            except tk.TclError:
+                pass
+        self._validation_dialog = open_validation_data_dialog(
+            self,
+            flowplot_bin=self.flowplot,
+            dataset_path=self.dataset_path,
+            line_sample_csv=self._line_sample_csv,
+            variables=list(self.variables),
+            on_log=self._log,
+            on_viewport_overlay=self.apply_validation_overlay,
+        )
+
+    def apply_validation_overlay(self, payload: dict) -> None:
+        """Experiment markers + simulation polyline on the Viewport canvas."""
+        self._validation_overlay = payload
+        self._draw_validation_overlay()
+        self._set_status("Validation overlay (exp symbols, sim lines)")
+
+    def clear_validation_overlay(self) -> None:
+        self._validation_overlay = None
+        self.viewport.delete("validation")
+
+    def _draw_validation_overlay(self) -> None:
+        self.viewport.delete("validation")
+        payload = self._validation_overlay
+        if not payload:
+            return
+        ox, oy = self._preview_offset
+        pw, ph = self._preview_size
+        if pw < 8 or ph < 8:
+            # Fall back to full viewport mapping.
+            pw = max(self.viewport.winfo_width() - 16, 64)
+            ph = max(self.viewport.winfo_height() - 16, 64)
+            ox, oy = 8, 8
+
+        def _series_points(series: dict) -> list[tuple[float, float]]:
+            xs = list(series.get("x") or [])
+            ys = list(series.get("y") or [])
+            n = min(len(xs), len(ys))
+            if n < 2:
+                return []
+            xmin, xmax = min(xs[:n]), max(xs[:n])
+            ymin, ymax = min(ys[:n]), max(ys[:n])
+            dx = (xmax - xmin) or 1.0
+            dy = (ymax - ymin) or 1.0
+            pts: list[tuple[float, float]] = []
+            for i in range(n):
+                fx = (xs[i] - xmin) / dx
+                fy = (ys[i] - ymin) / dy
+                # y up in data → canvas y down
+                pts.append((ox + fx * (pw - 1), oy + (1.0 - fy) * (ph - 1)))
+            return pts
+
+        exp = _series_points(payload.get("experiment") or {})
+        sim = _series_points(payload.get("simulation") or {})
+        # Simulation = lines only
+        if len(sim) >= 2:
+            flat: list[float] = []
+            for x, y in sim:
+                flat.extend([x, y])
+            self.viewport.create_line(
+                *flat, fill="#3d5a6c", width=2, tags="validation"
+            )
+        # Experiment = symbols only
+        for x, y in exp:
+            r = 3.5
+            self.viewport.create_oval(
+                x - r,
+                y - r,
+                x + r,
+                y + r,
+                outline="#1f2a33",
+                fill="",
+                width=1,
+                tags="validation",
+            )
+        label = "Validation: exp ○  sim —"
+        self.viewport.create_text(
+            ox + 8,
+            oy + 12,
+            text=label,
+            anchor="w",
+            fill="#1f2a33",
+            font=("DejaVu Sans", 9),
+            tags="validation",
+        )
+
     def show_about(self) -> None:
         messagebox.showinfo(
             "About Fieldplot",
             "Fieldplot — CFD post-processor\n"
             "Fieldplot menus + Plot panel (Wireframe first).\n"
             "Agents menu: positivity, profiles, shocks, hypersonic, grid, …\n"
+            "Validation data: ERCOFTAC / NASA / arXiv cache + compare.\n"
             "Checks apply to any loaded CFD dataset (physics/numerics).\n"
             "CLI binary remains `flowplot` for now.\n"
             f"CLI: {self.flowplot or '(not found)'}",
