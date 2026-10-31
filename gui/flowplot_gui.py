@@ -1892,10 +1892,11 @@ class FlowplotGui(tk.Tk):
             self._sync_contour_variable_widgets()
 
     def _post_load_mesh_settle(self) -> None:
-        """First Viewport after Open: Mesh wireframe + visible toolbar tools."""
+        """First Viewport after Open: Wireframe mesh redraw (ordered or FE)."""
         if self.dataset_path is None or not self.dataset_path.is_file():
             return
         self.layer_mesh.set(True)
+        self.layer_contour.set(False)
         self._ensure_toolbar_visible()
         self._set_tool_mode("rotate")
         self._sync_contour_variable_widgets()
@@ -1903,6 +1904,12 @@ class FlowplotGui(tk.Tk):
         if self.last_png is None:
             self.viewport.delete("placeholder")
             self._set_status(f"Drawing Wireframe… {self.dataset_path.name}")
+        # Combined / FE .plt: force Wireframe-only first (do not wait on Flood settle).
+        self.action_redraw(interactive=False, mesh_only=True)
+        if self.last_png and self.last_png.is_file():
+            self._show_png_preview(self.last_png)
+            self._ensure_toolbar_visible()
+            return
         self._schedule_settle(delay_ms=10)
         # Second chance if the first settle was cancelled by a configure/select race.
         self.after(250, self._ensure_mesh_preview_after_load)
@@ -2141,6 +2148,28 @@ class FlowplotGui(tk.Tk):
                 else:
                     self._log(f"Pathlines: {n_traces} integrated trace(s) on settle")
             self._set_status(status)
+            return
+
+        # Wireframe/Flood CLI failed — keep Log actionable (blank Viewport looks dead).
+        err = ""
+        if proc is not None:
+            err = (proc.stderr or proc.stdout or "").strip()
+            if err:
+                err = err.splitlines()[-1][:240]
+        if want_mesh and not want_contour:
+            self._log(
+                f"Wireframe redraw failed"
+                + (f": {err}" if err else f" (exit {getattr(proc, 'returncode', '?')})")
+            )
+            self._set_status("Wireframe failed — see Log")
+        elif proc is not None:
+            self._log(
+                f"Redraw failed"
+                + (f": {err}" if err else f" (exit {proc.returncode})")
+            )
+            self._set_status("Redraw failed — see Log")
+        else:
+            self._set_status("Redraw failed — CLI missing")
 
     def _redraw_cli(
         self,
@@ -4070,8 +4099,11 @@ def main() -> int:
                             app.var_name.set(os.environ["FLOWPLOT_GUI_VAR"])
                         elif not app.var_name.get():
                             app.var_name.set(first_scalar(app.variables))
-                    app._ensure_toolbar_visible()
-                    app.action_redraw()
+                        app._ensure_toolbar_visible()
+                        app.action_redraw()
+                    else:
+                        # Same path as File→Open: default Wireframe mesh redraw.
+                        app._post_load_mesh_settle()
                     app.update_idletasks()
                     app.update()
             app.after(500, lambda: _capture_and_quit(app, out))
@@ -4102,7 +4134,7 @@ def _capture_and_quit(app: FlowplotGui, out: Path) -> None:
     shot = Image.new("RGB", (w, h), "#eceef0")
     draw = ImageDraw.Draw(shot)
     draw.rectangle((0, 0, w, 40), fill="#d5d9de")
-    draw.text((12, 12), "Flowplot — Viewport mesh preview", fill="#1f2a33")
+    draw.text((12, 12), "Fieldplot — Viewport Wireframe preview", fill="#1f2a33")
 
     # Left plot panel strip
     draw.rectangle((8, 48, 248, h - 28), fill="#e2e5e8")
