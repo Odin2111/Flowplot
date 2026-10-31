@@ -1,7 +1,7 @@
 //! Numerical Schlieren and Shadowgraph (density-gradient optics).
 //!
 //! Solver-agnostic field transforms (optical / style macros):
-//! - Primary / Chamarthi Schlieren: `log(1 + |∇ρ|)`
+//! - Primary Schlieren / Schlieren (alt): `log(1 + |∇ρ|)`
 //! - Shadowgraph (Zhang–Zhang–Shu style): `sign(∇²ρ) · log(1 + |∇²ρ|)`
 //!
 //! Operates on any loaded CFD density field (`.plt` / `.dat`), not a solver API.
@@ -21,8 +21,8 @@ use std::path::Path;
 pub enum OpticalKind {
     /// Primary numerical Schlieren: log(1+|∇ρ|), Schlieren-Crisp colormap.
     Schlieren,
-    /// Chamarthi-style: same formula, reversed grayscale, default display [0, 5].
-    SchlierenChamarthi,
+    /// Alternate Schlieren: same formula, reversed grayscale, default display [0, 5].
+    SchlierenAlt,
     /// Numerical shadowgraph from density Laplacian.
     Shadowgraph,
 }
@@ -31,7 +31,7 @@ impl OpticalKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Schlieren => "schlieren",
-            Self::SchlierenChamarthi => "schlieren-chamarthi",
+            Self::SchlierenAlt => "schlieren-alt",
             Self::Shadowgraph => "shadowgraph",
         }
     }
@@ -39,10 +39,14 @@ impl OpticalKind {
     pub fn parse(s: &str) -> Result<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "schlieren" | "schlieren-primary" | "primary" => Ok(Self::Schlieren),
-            "chamarthi" | "schlieren-chamarthi" | "chamarthi2" => Ok(Self::SchlierenChamarthi),
+            "schlieren-alt"
+            | "alt"
+            | "chamarthi"
+            | "schlieren-chamarthi"
+            | "chamarthi2" => Ok(Self::SchlierenAlt),
             "shadowgraph" | "shadow" => Ok(Self::Shadowgraph),
             other => Err(Error::plot(format!(
-                "unknown optical kind '{other}' (expected schlieren|schlieren-chamarthi|shadowgraph)"
+                "unknown optical kind '{other}' (expected schlieren|schlieren-alt|shadowgraph)"
             ))),
         }
     }
@@ -211,7 +215,7 @@ pub struct OpticalOptions {
     pub annotate: bool,
     pub path_hint: Option<String>,
     pub legend: bool,
-    /// Override vmin/vmax (Chamarthi defaults to 0..5 when unset).
+    /// Override vmin/vmax (Schlieren alt defaults to 0..5 when unset).
     pub vmin: Option<f64>,
     pub vmax: Option<f64>,
 }
@@ -244,7 +248,7 @@ fn default_maps(kind: OpticalKind) -> (ColorMapName, Option<f64>, Option<f64>, C
             None,
             ContourColoring::Continuous,
         ),
-        OpticalKind::SchlierenChamarthi => (
+        OpticalKind::SchlierenAlt => (
             ColorMapName::GrayscaleReverse,
             Some(0.0),
             Some(5.0),
@@ -273,7 +277,7 @@ pub fn render_optical(ds: &Dataset, opts: &OpticalOptions) -> Result<ContourImag
     let var_idx = find_var(ds, &var_name)?;
     let mut grid = extract_scalar_grid_view(ds, opts.zone, var_idx, opts.plane, opts.view)?;
     let values = match opts.kind {
-        OpticalKind::Schlieren | OpticalKind::SchlierenChamarthi => schlieren_from_grid(&grid),
+        OpticalKind::Schlieren | OpticalKind::SchlierenAlt => schlieren_from_grid(&grid),
         OpticalKind::Shadowgraph => shadowgraph_from_grid(&grid),
     };
     grid.values = values;
@@ -281,7 +285,7 @@ pub fn render_optical(ds: &Dataset, opts: &OpticalOptions) -> Result<ContourImag
     let (cmap, def_vmin, def_vmax, coloring) = default_maps(opts.kind);
     let label = match opts.kind {
         OpticalKind::Schlieren => format!("Schlieren(log|∇{var_name}|)"),
-        OpticalKind::SchlierenChamarthi => format!("ChamarthiSchlieren({var_name})"),
+        OpticalKind::SchlierenAlt => format!("SchlierenAlt({var_name})"),
         OpticalKind::Shadowgraph => format!("Shadowgraph(∇²{var_name})"),
     };
 

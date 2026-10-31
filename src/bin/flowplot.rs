@@ -273,7 +273,7 @@ enum Commands {
     /// Numerical Schlieren / Shadowgraph from a density field (any CFD dataset).
     Optical {
         path: PathBuf,
-        /// `schlieren` | `schlieren-chamarthi` | `shadowgraph`
+        /// `schlieren` | `schlieren-alt` | `shadowgraph` (aliases: schlieren-chamarthi, chamarthi)
         #[arg(long, default_value = "schlieren")]
         kind: String,
         /// Density variable (default: guess Density/rho by name).
@@ -1020,7 +1020,7 @@ fn dispatch_ready_item(item: &MenuItem, args: Vec<String>, json: bool) -> flowpl
         && !forwarded.iter().any(|a| a == "--kind")
     {
         let kind = match item.id.as_str() {
-            "schlieren-chamarthi" => "schlieren-chamarthi",
+            "schlieren-alt" | "schlieren-chamarthi" => "schlieren-alt",
             "shadowgraph" => "shadowgraph",
             _ => "schlieren",
         };

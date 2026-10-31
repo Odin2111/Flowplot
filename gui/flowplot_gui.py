@@ -131,7 +131,7 @@ class FlowplotGui(tk.Tk):
         self.flowplot = find_flowplot_bin()
         self.status_var = tk.StringVar(value=self._status_idle())
         self.var_name = tk.StringVar(value="")
-        # Live numerical optics: schlieren | schlieren-chamarthi | shadowgraph | None.
+        # Live numerical optics: schlieren | schlieren-alt | shadowgraph | None.
         # When set, Contour redraw recomputes density gradients (not a pasted PNG).
         self.optical_kind: str | None = None
         self.plot_style = tk.StringVar(value="jfm")
@@ -433,7 +433,7 @@ class FlowplotGui(tk.Tk):
             "Optical diagnostics",
             [
                 ("Schlieren (primary / Crisp)…", "schlieren-primary", "optical"),
-                ("Schlieren (Chamarthi)…", "schlieren-chamarthi", "optical"),
+                ("Schlieren (alt)…", "schlieren-alt", "optical"),
                 ("Shadowgraph…", "shadowgraph", "optical"),
                 ("Entropy / shock-sensor…", "entropy-sensor-field", "optical"),
             ],
@@ -2286,7 +2286,9 @@ class FlowplotGui(tk.Tk):
         kind_l = (kind or "").strip().lower()
         if kind_l in ("schlieren-primary", "primary"):
             kind_l = "schlieren"
-        if kind_l not in ("schlieren", "schlieren-chamarthi", "shadowgraph"):
+        if kind_l in ("schlieren-chamarthi", "chamarthi", "chamarthi2", "alt"):
+            kind_l = "schlieren-alt"
+        if kind_l not in ("schlieren", "schlieren-alt", "shadowgraph"):
             self._log(f"Unknown optical kind '{kind}' — ignored")
             return
         dens = (density_var or "").strip()
