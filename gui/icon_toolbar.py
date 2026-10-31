@@ -14,7 +14,9 @@ BTN_BORDER = "#9aa3ab"
 FG = "#1f2a33"
 ACCENT = "#3d5a6c"
 MUTED = "#5c6b76"
-ICON = 22
+# Slightly larger hit targets so Rotate / Pan / Probe / Pathlines stay obvious
+# after File→Open (blank-load reports of "no toolbar tools").
+ICON = 24
 
 
 @dataclass
@@ -171,11 +173,12 @@ class IconToolbar(tk.Frame):
 def build_fieldplot_icon_toolbar(parent: tk.Misc, gui) -> IconToolbar:
     """Wire icons to FieldplotGui actions."""
     bar = IconToolbar(parent)
-    logo = tk.Canvas(bar, width=100, height=ICON, bg=MENU_BG, highlightthickness=0, bd=0)
+    logo = tk.Canvas(bar, width=108, height=ICON, bg=MENU_BG, highlightthickness=0, bd=0)
     logo.pack(side=tk.LEFT, padx=(6, 4), pady=2)
-    logo.create_line(2, 16, 7, 6, 12, 6, 17, 16, smooth=True, fill=ACCENT, width=2)
-    logo.create_oval(16, 8, 20, 12, fill=ACCENT, outline=ACCENT)
-    logo.create_text(24, 11, text="Fieldplot", anchor="w", fill=FG, font=("Helvetica", 10, "bold"))
+    mid = ICON // 2
+    logo.create_line(2, ICON - 6, 7, 6, 12, 6, 17, ICON - 6, smooth=True, fill=ACCENT, width=2)
+    logo.create_oval(16, mid - 4, 20, mid + 4, fill=ACCENT, outline=ACCENT)
+    logo.create_text(24, mid, text="Fieldplot", anchor="w", fill=FG, font=("Helvetica", 10, "bold"))
 
     for spec in (
         IconSpec("open", "Open dataset", draw_open, gui.action_load),

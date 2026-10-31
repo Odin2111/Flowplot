@@ -207,6 +207,8 @@ class FlowplotGui(tk.Tk):
         self._settle_plane: tuple[str, int] | None = None
         self._in_redraw = False
         self._settle_running = False
+        # Suppress zone-list select side-effects while File→Open is wiring state.
+        self._loading_dataset = False
 
         self.scale_vars = {
             "U_ref": tk.StringVar(value=""),
@@ -470,13 +472,30 @@ class FlowplotGui(tk.Tk):
     def _build_toolbar(self) -> None:
         """icon strip under the menubar."""
         self._icon_toolbar = build_fieldplot_icon_toolbar(self, self)
+        # Keep the icon strip at the top and always mapped (Open / Rotate / Pan /
+        # Probe / Pathlines / XYZ). Never pack_forget this row after load.
         self._icon_toolbar.pack(side=tk.TOP, fill=tk.X)
+        self._icon_toolbar.lift()
         # Levels status shares the icon strip's status area when idle.
         self.levels_label = self._icon_toolbar.status
         # Default exclusive tool = Rotate (curved arrow highlighted).
         self._icon_toolbar.set_active_tools({"rotate"})
         self._refresh_levels_label()
         tk.Frame(self, bg="#9aa3ab", height=1).pack(side=tk.TOP, fill=tk.X)
+
+    def _ensure_toolbar_visible(self) -> None:
+        """Re-assert icon toolbar packing/highlight after File→Open."""
+        if not hasattr(self, "_icon_toolbar"):
+            return
+        try:
+            if not self._icon_toolbar.winfo_ismapped():
+                self._icon_toolbar.pack(side=tk.TOP, fill=tk.X)
+            self._icon_toolbar.lift()
+            mode = (self.tool_mode.get() or "rotate").strip().lower() or "rotate"
+            self._icon_toolbar.set_active_tools({mode})
+            self._refresh_levels_label()
+        except tk.TclError:
+            pass
 
     def _levels_status_text(self) -> str:
         cd = self.contour_details
@@ -1542,6 +1561,17 @@ class FlowplotGui(tk.Tk):
         if not chosen.is_file():
             messagebox.showerror("Open failed", f"File not found:\n{chosen}", parent=self)
             return
+        self._loading_dataset = True
+        try:
+            self._load_dataset_path(chosen)
+        finally:
+            self._loading_dataset = False
+        # Mesh-first settle after Open dialog dismisses; toolbar stays mapped.
+        self._ensure_toolbar_visible()
+        self.after(1, self._post_load_mesh_settle)
+
+    def _load_dataset_path(self, chosen: Path) -> None:
+        """Wire dataset state for File→Open / screenshot boot (Mesh on)."""
         self.dataset_path = chosen
         try:
             os.environ["FIELDPLOT_LAST_DIR"] = str(chosen.parent)
@@ -1561,7 +1591,7 @@ class FlowplotGui(tk.Tk):
         self.focus_force()
         self.update_idletasks()
 
-        # Reset layers to defaults: Mesh on, Contour off.
+        # Reset layers to defaults: Mesh on, Contour off (Pathlines wording).
         self.layer_mesh.set(True)
         self.layer_contour.set(False)
         self.layer_pathlines.set(False)
@@ -1569,6 +1599,8 @@ class FlowplotGui(tk.Tk):
         self.layer_vector.set(False)
         self.layer_edge.set(False)
         self.layer_scatter.set(False)
+        self.layer_isosurfaces.set(False)
+        self.layer_slices.set(False)
         self.optical_kind = None
         self.pathline_seeds.clear()
         self.clear_probe_marks()
@@ -1582,6 +1614,8 @@ class FlowplotGui(tk.Tk):
         self._cancel_redraw_timers()
         self._kill_cli()
         self._render_cache.clear()
+        self.last_png = None
+        self._settle_image = None
         self._reset_view_state()
 
         proc = self._run_cli(["--json", "info", str(self.dataset_path)])
@@ -1604,6 +1638,10 @@ class FlowplotGui(tk.Tk):
                     self.zone_styles = zone_styles_from_info(
                         [z for z in zones if isinstance(z, dict)]
                     )
+                    # File→Open contract: Mesh crate on for every zone row.
+                    for zs in self.zone_styles:
+                        zs.show_mesh = True
+                        zs.show_contour = False
                     self._log(
                         "zones: "
                         + ", ".join(f"{z.index}:{z.name}" for z in self.zone_styles)
@@ -1631,15 +1669,60 @@ class FlowplotGui(tk.Tk):
                 self.zone_ordered = None
                 self.zone_styles = []
         else:
+            self._log("warning: flowplot info failed — Mesh redraw may still work")
             self._set_variables([])
             self.effectively_2d = True
             self.zone_ordered = None
             self.zone_styles = []
 
+        if not self.zone_styles and self.dataset_path is not None:
+            self.zone_styles = [
+                ZoneStyleState(
+                    index=0,
+                    name=self.dataset_path.stem,
+                    show_mesh=True,
+                    show_contour=False,
+                    mesh_color=self.mesh_color,
+                )
+            ]
+
+        # Re-assert Mesh default after zone table fill (guards Apply sync races).
+        self.layer_mesh.set(True)
+        self.layer_contour.set(False)
         self._refresh_zone_list()
-        self._set_status(str(self.dataset_path))
-        # Defer first mesh redraw so the Open dialog can fully dismiss first.
-        self.after(1, lambda: self._schedule_settle(delay_ms=10))
+        self._ensure_toolbar_visible()
+        self._set_status(f"{chosen.name} · Mesh on · Rotate tool")
+
+    def _post_load_mesh_settle(self) -> None:
+        """First Viewport after Open: Mesh wireframe + visible toolbar tools."""
+        if self.dataset_path is None or not self.dataset_path.is_file():
+            return
+        self.layer_mesh.set(True)
+        self._ensure_toolbar_visible()
+        self._set_tool_mode("rotate")
+        # Clear placeholder immediately so a slow CLI does not look like "no data".
+        if self.last_png is None:
+            self.viewport.delete("placeholder")
+            self._set_status(f"Drawing Mesh… {self.dataset_path.name}")
+        self._schedule_settle(delay_ms=10)
+        # Second chance if the first settle was cancelled by a configure/select race.
+        self.after(250, self._ensure_mesh_preview_after_load)
+
+    def _ensure_mesh_preview_after_load(self) -> None:
+        if self.dataset_path is None or not self.dataset_path.is_file():
+            return
+        if self._dragging or self._panning or self._in_redraw:
+            self.after(200, self._ensure_mesh_preview_after_load)
+            return
+        if self.last_png and self.last_png.is_file():
+            self._show_png_preview(self.last_png)
+            self._ensure_toolbar_visible()
+            return
+        # Still blank — force a Mesh-only redraw once.
+        self._log("Open settle missed Mesh PNG — forcing Mesh redraw")
+        self.layer_mesh.set(True)
+        self.action_redraw(interactive=False, mesh_only=True)
+        self._ensure_toolbar_visible()
 
     def _reset_view_state(self) -> None:
         self.view_mode.set("free")
@@ -3054,6 +3137,8 @@ class FlowplotGui(tk.Tk):
             self.zone_list.see(sel)
 
     def _on_zone_list_select(self, _event: tk.Event | None = None) -> None:
+        if getattr(self, "_loading_dataset", False):
+            return
         if not hasattr(self, "zone_list") or not self.zone_styles:
             return
         sel = self.zone_list.curselection()
@@ -3278,31 +3363,27 @@ def main() -> int:
             if open_path:
                 p = Path(open_path)
                 if p.is_file():
-                    app.dataset_path = p
-                    app.layer_mesh.set(True)
-                    app.layer_contour.set(
-                        os.environ.get("FLOWPLOT_GUI_CONTOUR", "").lower() in ("1", "true", "yes")
+                    app._loading_dataset = True
+                    try:
+                        app._load_dataset_path(p)
+                    finally:
+                        app._loading_dataset = False
+                    want_contour = os.environ.get("FLOWPLOT_GUI_CONTOUR", "").lower() in (
+                        "1",
+                        "true",
+                        "yes",
                     )
-                    if app.layer_contour.get() and os.environ.get("FLOWPLOT_GUI_VAR"):
-                        app.var_name.set(os.environ["FLOWPLOT_GUI_VAR"])
-                    proc = app._run_cli(["--json", "info", str(p)])
-                    if proc and proc.returncode == 0 and proc.stdout:
-                        try:
-                            payload = json.loads(proc.stdout.strip().splitlines()[-1])
-                            vars_ = payload.get("variables") or []
-                            if isinstance(vars_, list):
-                                app._set_variables([str(v) for v in vars_])
-                            app.effectively_2d = bool(payload.get("effectively_2d", True))
-                            app._apply_default_camera(payload)
-                            app._update_view_label()
-                        except json.JSONDecodeError:
-                            pass
-                    if app.layer_contour.get() and not app.var_name.get():
-                        app.var_name.set(first_scalar(app.variables))
+                    if want_contour:
+                        app.layer_contour.set(True)
+                        if os.environ.get("FLOWPLOT_GUI_VAR"):
+                            app.var_name.set(os.environ["FLOWPLOT_GUI_VAR"])
+                        elif not app.var_name.get():
+                            app.var_name.set(first_scalar(app.variables))
+                    app._ensure_toolbar_visible()
                     app.action_redraw()
                     app.update_idletasks()
                     app.update()
-            app.after(400, lambda: _capture_and_quit(app, out))
+            app.after(500, lambda: _capture_and_quit(app, out))
 
         app.after(100, _boot)
         app.mainloop()
