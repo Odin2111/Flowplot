@@ -7,7 +7,7 @@ Native **tkinter** shell under `gui/flowplot_gui.py`. The viewport previews PNGs
 | Region | Contents |
 |--------|----------|
 | Top | Menus + **icon toolbar**: Open / Save(Redraw) / Export PNG · Orbit · Align ±X/Y/Z · Sample · Cut · ± levels / Abc / Pathlines |
-| Left | **Plot** (scrollable): dataset/zones, plot type, zone layers, derived objects, flood var, Cut/Track, Zone Style / Flood Details |
+| Left | **Plot** (scrollable): dataset/zones, Time scrubber, Operator stack, plot type, zone layers, derived objects, flood var, Cut/Track, Zone Style / Flood Details |
 | Center | **Viewport**. CLI raster sized 1:1; mesh `--fill`. **Left-drag = pan**, mid/right = orbit → **settle redraw** (`--pan-x/--pan-y`); **F = fit**; Probe; Pathlines rake; XYZ triad |
 | Right | **View** (scrollable): XYZ snaps, rotate/zoom, Fit · **Nondim scales** · **Log** |
 

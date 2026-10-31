@@ -39,6 +39,12 @@ from layer_settings_dialog import (
     add_layer_row,
 )
 from legend_options_dialog import LegendOptionsDialog, LegendOptionsState
+from fieldplot_ops_dialogs import (
+    ask_block_filter,
+    ask_derived_field,
+    ask_line_sample,
+    ask_operator,
+)
 from open_dataset_dialog import ask_open_dataset
 from probe_dialog import ProbeDialog
 from windowing import release_grabs, stay_above
@@ -210,6 +216,15 @@ class FlowplotGui(tk.Tk):
         # Suppress zone-list select side-effects while File→Open is wiring state.
         self._loading_dataset = False
 
+        # Fieldplot VisIt-like slice state (glossary names only in UI).
+        self.derived_fields: list[dict[str, str]] = []
+        self.operator_stack: list[dict] = []
+        self.time_frames: list[dict] = []
+        self.time_frame_index = tk.IntVar(value=0)
+        self.block_filter: list[int] | None = None  # None = all blocks
+        self._source_dataset_path: Path | None = None  # original before derived rewrite
+        self._line_sample_csv: Path | None = None
+
         self.scale_vars = {
             "U_ref": tk.StringVar(value=""),
             "Lx": tk.StringVar(value=""),
@@ -307,12 +322,26 @@ class FlowplotGui(tk.Tk):
         menu.add_command(label="Dataset info…", command=self.action_dataset_info)
         # Sample… enables Sample tool mode (same as toolbar), not just an empty dialog.
         menu.add_command(label="Sample…", command=self.action_sample_from_menu)
+        menu.add_command(label="Field query…", command=self.action_field_query)
         menu.add_separator()
+        menu.add_command(label="Derived fields…", command=self.action_derived_fields)
+        menu.add_command(label="Line sample…", command=self.action_line_sample)
         menu.add_command(
             label="Extract profile…",
             command=self.action_extract_profile,
         )
+        menu.add_separator()
+        menu.add_command(label="Operators…", command=self.action_operators)
+        menu.add_command(label="Block filter…", command=self.action_block_filter)
         menu.add_command(label="Apply nondim scales", command=self.action_nondim)
+
+    def _operators_menu_items(self, menu: tk.Menu) -> None:
+        menu.add_command(label="Add operator…", command=self.action_operators)
+        menu.add_command(label="Clear operator stack", command=self.action_clear_operators)
+        menu.add_separator()
+        menu.add_command(label="Cut (focus plane)", command=self.action_slices_focus)
+        menu.add_command(label="Threshold…", command=lambda: self.action_operators(prefer="threshold"))
+        menu.add_command(label="Level set…", command=lambda: self.action_operators(prefer="level-set"))
 
     def _frame_menu_items(self, menu: tk.Menu) -> None:
         menu.add_command(label="Fit to Viewport", command=self.action_fit_view, accelerator="F")
@@ -454,6 +483,7 @@ class FlowplotGui(tk.Tk):
             ("View", self._view_menu_items),
             ("Plot", self._plot_menu_items),
             ("Data", self._data_menu_items),
+            ("Operators", self._operators_menu_items),
             ("Frame", self._frame_menu_items),
             ("Options", self._options_menu_items),
             ("Tools", self._tools_menu_items),
@@ -625,6 +655,53 @@ class FlowplotGui(tk.Tk):
         )
         self.zone_list.pack(fill=tk.X, padx=10, pady=(2, 8))
         self.zone_list.bind("<<ListboxSelect>>", self._on_zone_list_select)
+
+        scrub = ttk.LabelFrame(parent, text="Time scrubber", padding=(8, 6))
+        scrub.pack(fill=tk.X, padx=10, pady=(0, 8))
+        self.time_label = ttk.Label(scrub, text="(no frames)", style="Muted.TLabel", wraplength=200)
+        self.time_label.pack(anchor="w")
+        self.time_scale = tk.Scale(
+            scrub,
+            from_=0,
+            to=0,
+            orient=tk.HORIZONTAL,
+            showvalue=0,
+            variable=self.time_frame_index,
+            command=lambda _v: self._on_time_scrub(),
+            bg=PANEL,
+            highlightthickness=0,
+            troughcolor="#cfd5db",
+            activebackground=ACCENT,
+        )
+        self.time_scale.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(
+            scrub,
+            text="Cycle / time / strand",
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(2, 0))
+
+        ops = ttk.LabelFrame(parent, text="Operator stack", padding=(8, 6))
+        ops.pack(fill=tk.X, padx=10, pady=(0, 8))
+        self.ops_list = tk.Listbox(
+            ops,
+            height=3,
+            exportselection=False,
+            bg="#fafbfc",
+            fg=FG,
+            highlightthickness=1,
+            highlightbackground="#b8c0c8",
+            relief=tk.FLAT,
+            font=("Helvetica", 8),
+        )
+        self.ops_list.pack(fill=tk.X)
+        ops_btns = ttk.Frame(ops, style="Panel.TFrame")
+        ops_btns.pack(fill=tk.X, pady=(4, 0))
+        ttk.Button(ops_btns, text="Add…", style="Tool.TButton", command=self.action_operators).pack(
+            side=tk.LEFT, padx=(0, 4)
+        )
+        ttk.Button(
+            ops_btns, text="Clear", style="Tool.TButton", command=self.action_clear_operators
+        ).pack(side=tk.LEFT)
 
         ttk.Label(parent, text="Plot", style="Panel.TLabel", font=("Helvetica", 11, "bold")).pack(
             anchor="w", padx=12, pady=(4, 6)
@@ -1651,6 +1728,7 @@ class FlowplotGui(tk.Tk):
     def _load_dataset_path(self, chosen: Path) -> None:
         """Wire dataset state for File→Open / screenshot boot (Mesh on)."""
         self.dataset_path = chosen
+        self._source_dataset_path = chosen
         try:
             os.environ["FIELDPLOT_LAST_DIR"] = str(chosen.parent)
         except Exception:
@@ -1688,6 +1766,12 @@ class FlowplotGui(tk.Tk):
         self.active_zone = 0
         self.mesh_color = DEFAULT_MESH_COLOR
         self.zone_styles = []
+        self.derived_fields = []
+        self.operator_stack = []
+        self.time_frames = []
+        self.block_filter = None
+        self.time_frame_index.set(0)
+        self._refresh_ops_list()
         self._refresh_zone_list()
         self._cancel_redraw_timers()
         self._kill_cli()
@@ -1740,18 +1824,28 @@ class FlowplotGui(tk.Tk):
                         "Dataset is planar/unit-thickness — 3D Cartesian orbits the surface "
                         "(elevation stays off edge-on)."
                     )
+                frames = payload.get("time_frames") or []
+                if isinstance(frames, list):
+                    self.time_frames = [f for f in frames if isinstance(f, dict)]
+                    self._refresh_time_scrubber()
+                    if len(self.time_frames) > 1:
+                        self._log(f"Time scrubber: {len(self.time_frames)} frames")
             except json.JSONDecodeError:
                 self._log("warning: could not parse info JSON; variable list empty")
                 self._set_variables([])
                 self.effectively_2d = True
                 self.zone_ordered = None
                 self.zone_styles = []
+                self.time_frames = []
+                self._refresh_time_scrubber()
         else:
             self._log("warning: flowplot info failed — Wireframe redraw may still work")
             self._set_variables([])
             self.effectively_2d = True
             self.zone_ordered = None
             self.zone_styles = []
+            self.time_frames = []
+            self._refresh_time_scrubber()
 
         if not self.zone_styles and self.dataset_path is not None:
             self.zone_styles = [
@@ -3215,6 +3309,295 @@ class FlowplotGui(tk.Tk):
         else:
             self.action_open_probe_window()
         self._log("Data → Sample — click Viewport to sample variables")
+
+    def action_field_query(self) -> None:
+        """Data → Field query… — point query; same Sample tool + dialog."""
+        release_grabs(self)
+        if not self._require_dataset():
+            return
+        self.action_sample_from_menu()
+        self._set_status("Field query — click Viewport (Sample)")
+        self._log("Data → Field query — uses Sample at point")
+
+    def action_derived_fields(self) -> None:
+        """Data → Derived fields… — expression scalars → temp dataset."""
+        release_grabs(self)
+        ds = self._require_dataset()
+        if not ds:
+            return
+        src = self._source_dataset_path or ds
+        spec = ask_derived_field(
+            self,
+            variables=list(self.variables),
+            existing=self.derived_fields,
+        )
+        if not spec:
+            return
+        name = str(spec.get("name") or "").strip()
+        expr = str(spec.get("expression") or "").strip()
+        out: Path | None = None
+        args = ["--json", "derived", str(src), "--name", name, "--expr", expr]
+        if spec.get("write", True):
+            out = Path(tempfile.gettempdir()) / f"fieldplot_derived_{os.getpid()}.dat"
+            args.extend(["-o", str(out)])
+        proc = self._run_cli(args)
+        if not proc or proc.returncode != 0:
+            messagebox.showerror(
+                "Derived fields",
+                "flowplot derived failed — see Log.",
+                parent=self,
+            )
+            return
+        try:
+            payload = json.loads(proc.stdout.strip().splitlines()[-1])
+            self._log(
+                f"Derived field '{name}' = {expr}  "
+                f"min={payload.get('min')} max={payload.get('max')}"
+            )
+        except (json.JSONDecodeError, IndexError, TypeError):
+            self._log(f"Derived field '{name}' = {expr}")
+        kept = list(self.derived_fields) + [{"name": name, "expression": expr}]
+        if out is not None and out.is_file():
+            self._loading_dataset = True
+            try:
+                # Keep source path; reload derived PLT as active dataset.
+                keep_src = self._source_dataset_path
+                self._load_dataset_path(out)
+                self._source_dataset_path = keep_src or src
+                self.derived_fields = kept
+            finally:
+                self._loading_dataset = False
+            self.var_name.set(name)
+            self.layer_contour.set(True)
+            self._ensure_toolbar_visible()
+            self.after(1, self._post_load_mesh_settle)
+        else:
+            self.derived_fields = kept
+        self._set_status(f"Derived field: {name}")
+
+    def action_line_sample(self) -> None:
+        """Data → Line sample… — world lineout + CSV."""
+        release_grabs(self)
+        ds = self._require_dataset()
+        if not ds:
+            return
+        bounds = None
+        # Prefer last probe payload bounds if present.
+        if self._probe_dialog is not None and getattr(self._probe_dialog, "_last", None):
+            b = self._probe_dialog._last.get("bounds") or {}
+            if isinstance(b, dict) and all(k in b for k in ("xmin", "xmax", "ymin", "ymax")):
+                try:
+                    bounds = (
+                        float(b["xmin"]),
+                        float(b["xmax"]),
+                        float(b["ymin"]),
+                        float(b["ymax"]),
+                    )
+                except (TypeError, ValueError):
+                    bounds = None
+        spec = ask_line_sample(
+            self,
+            variables=list(self.variables),
+            initial_var=self.var_name.get().strip() or first_scalar(self.variables),
+            bounds=bounds,
+        )
+        if not spec:
+            return
+        args = [
+            "--json",
+            "line-sample",
+            str(ds),
+            "--var",
+            str(spec["var"]),
+            "--from",
+            str(spec["from"]),
+            "--to",
+            str(spec["to"]),
+            "--n",
+            str(int(spec["n"])),
+            "--zone",
+            str(self._active_zone_index()),
+            *self._plane_cli_arg(),
+        ]
+        csv = str(spec.get("csv") or "").strip()
+        if csv:
+            args.extend(["-o", csv])
+            self._line_sample_csv = Path(csv)
+        proc = self._run_cli(args)
+        if not proc or proc.returncode != 0:
+            messagebox.showerror(
+                "Line sample",
+                "flowplot line-sample failed — see Log.",
+                parent=self,
+            )
+            return
+        try:
+            payload = json.loads(proc.stdout.strip().splitlines()[-1])
+            n = len((payload.get("profile") or {}).get("samples") or [])
+            self._log(
+                f"Line sample {spec['var']}  {spec['from']} → {spec['to']}  n={n}"
+                + (f"  CSV={csv}" if csv else "")
+            )
+            messagebox.showinfo(
+                "Line sample",
+                f"Sampled {n} points of {spec['var']}.\n"
+                + (f"Wrote {csv}" if csv else "CSV printed to Log / stdout JSON."),
+                parent=self,
+            )
+        except (json.JSONDecodeError, IndexError, TypeError):
+            self._log(proc.stdout.strip()[:500])
+        self._set_status("Line sample done")
+
+    def action_operators(self, prefer: str | None = None) -> None:
+        """Operators → Add / Data → Operators…"""
+        release_grabs(self)
+        if not self._require_dataset() and prefer is None:
+            # Still allow inspecting empty stack wording when no dataset? require load.
+            return
+        spec = ask_operator(
+            self,
+            variables=list(self.variables),
+            initial_var=self.var_name.get().strip() or first_scalar(self.variables),
+            initial_kind=prefer or "cut",
+        )
+        if not spec:
+            return
+        kind = str(spec.get("kind") or "cut")
+        entry: dict = {"kind": kind, "label": kind}
+        if kind == "cut":
+            plane = str(spec.get("plane") or "auto")
+            entry["plane"] = plane
+            entry["label"] = f"Cut ({plane})"
+            # Wire Cut into the live plane controls.
+            if plane.lower() == "auto":
+                self.plane_axis.set("auto")
+            elif "=" in plane:
+                axis, _, idx = plane.partition("=")
+                axis = axis.strip().lower()
+                if axis in ("i", "j", "k"):
+                    self.plane_axis.set(axis)
+                    try:
+                        self.plane_index.set(int(idx.strip()))
+                    except ValueError:
+                        pass
+            self.layer_slices.set(True)
+            self._schedule_settle(delay_ms=40)
+        elif kind == "threshold":
+            entry["var"] = spec.get("var")
+            entry["min"] = spec.get("min")
+            entry["max"] = spec.get("max")
+            entry["label"] = (
+                f"Threshold ({entry['var']} ∈ [{entry['min'] or '-∞'}, {entry['max'] or '+∞'}])"
+            )
+            self._log(f"Operator stub: {entry['label']}")
+        else:
+            entry["var"] = spec.get("var")
+            entry["value"] = spec.get("value")
+            entry["label"] = f"Level set ({entry['var']} = {entry['value']})"
+            self.layer_isosurfaces.set(True)
+            self._log(f"Operator stub: {entry['label']} (Iso-Surfaces enabled)")
+        self.operator_stack.append(entry)
+        self._refresh_ops_list()
+        # Mirror to CLI for JSON contract / agents.
+        cli = ["--json", "operators", "--add", kind]
+        if kind == "cut":
+            cli.extend(["--plane", str(entry.get("plane") or "auto")])
+        elif kind == "threshold":
+            if entry.get("var"):
+                cli.extend(["--var", str(entry["var"])])
+            if str(entry.get("min") or "").strip():
+                cli.extend(["--min", str(entry["min"])])
+            if str(entry.get("max") or "").strip():
+                cli.extend(["--max", str(entry["max"])])
+        else:
+            if entry.get("var"):
+                cli.extend(["--var", str(entry["var"])])
+            if str(entry.get("value") or "").strip():
+                cli.extend(["--value", str(entry["value"])])
+        self._run_cli(cli)
+        self._set_status(f"Operator: {entry['label']}")
+
+    def action_clear_operators(self) -> None:
+        self.operator_stack.clear()
+        self._refresh_ops_list()
+        self._log("Operator stack cleared")
+        self._set_status("Operator stack cleared")
+
+    def action_block_filter(self) -> None:
+        """Data → Block filter… — zone subset."""
+        release_grabs(self)
+        if not self.zone_styles:
+            messagebox.showwarning("Block filter", "Load a dataset first.", parent=self)
+            return
+        zones = [(z.index, z.name) for z in self.zone_styles]
+        selected = self.block_filter
+        if selected is None:
+            selected = [z.index for z in self.zone_styles]
+        picks = ask_block_filter(self, zones=zones, selected=selected)
+        if picks is None:
+            return
+        self.block_filter = picks
+        if not picks:
+            messagebox.showwarning("Block filter", "Select at least one block.", parent=self)
+            return
+        # Apply: show only first selected as active; mark others hidden.
+        for zs in self.zone_styles:
+            zs.show_zone = zs.index in picks
+        self.active_zone = picks[0]
+        for zs in self.zone_styles:
+            if zs.index == self.active_zone:
+                zs.show_zone = True
+        self._refresh_zone_list()
+        self._schedule_settle(delay_ms=40)
+        self._log("Block filter → zones " + ",".join(str(i) for i in picks))
+        self._set_status(f"Block filter: {len(picks)} zone(s)")
+
+    def _refresh_ops_list(self) -> None:
+        if not hasattr(self, "ops_list"):
+            return
+        self.ops_list.delete(0, tk.END)
+        if not self.operator_stack:
+            self.ops_list.insert(tk.END, "(empty)")
+            return
+        for i, op in enumerate(self.operator_stack):
+            self.ops_list.insert(tk.END, f"{i}: {op.get('label') or op.get('kind')}")
+
+    def _refresh_time_scrubber(self) -> None:
+        if not hasattr(self, "time_scale"):
+            return
+        n = max(0, len(self.time_frames) - 1)
+        self.time_scale.configure(from_=0, to=max(0, n))
+        if not self.time_frames:
+            self.time_label.configure(text="(no frames)")
+            return
+        idx = int(self.time_frame_index.get())
+        idx = max(0, min(idx, len(self.time_frames) - 1))
+        self.time_frame_index.set(idx)
+        label = str(self.time_frames[idx].get("label") or f"frame {idx}")
+        self.time_label.configure(text=label)
+
+    def _on_time_scrub(self) -> None:
+        if getattr(self, "_loading_dataset", False):
+            return
+        if not self.time_frames:
+            return
+        idx = int(self.time_frame_index.get())
+        idx = max(0, min(idx, len(self.time_frames) - 1))
+        frame = self.time_frames[idx]
+        self._refresh_time_scrubber()
+        zones = frame.get("zones") or []
+        if isinstance(zones, list) and zones:
+            try:
+                z0 = int(zones[0])
+            except (TypeError, ValueError):
+                return
+            if self.zone_styles:
+                for zs in self.zone_styles:
+                    zs.show_zone = zs.index == z0
+                self.active_zone = z0
+                self._refresh_zone_list()
+                self._schedule_settle(delay_ms=40)
+            self._log(f"Time scrubber → {frame.get('label')}")
 
     def action_extract_profile(self) -> None:
         """Data → Extract profile… — Agents panel on extract-profile."""

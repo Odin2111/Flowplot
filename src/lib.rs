@@ -16,6 +16,7 @@
 //! | VTK XML (`.vtu`, …) | Stub (`Unimplemented`) |
 //! | CGNS (`.cgns` / `.cgz`) | System `libcgns` when present; else clear stub |
 //! | Fluent (`.cas` / `.dat`) | Layout-documented stub |
+//! | HDF5 / Silo-compatible (`.h5`, `.hdf5`, `.silo`, …) | Stub (`Unimplemented`) |
 //!
 //! SZL (`.szplt`) and Fluent binaries are **not** reverse-engineered.
 //!
@@ -28,21 +29,27 @@
 //! - [`pathlines`] — particle traces / streamlines of the velocity field
 //! - [`validate`] — field sanity / positivity checks (lehar validation ideas)
 //! - [`profile`] — line / centerline extracts (lehar extract-line analogue)
+//! - [`derived`] — Fieldplot derived fields (expression scalars)
+//! - [`operators`] — Cut / Threshold / Level set operator stack stubs
+//! - [`time_index`] — Time scrubber frames (cycle / time / strand)
 //! - [`optical`] — numerical Schlieren / Shadowgraph from density
 
 pub mod annotate;
 pub mod contour;
 pub mod dataset;
+pub mod derived;
 pub mod error;
 pub mod field;
 pub mod menu;
 pub mod mesh;
 pub mod nondim;
+pub mod operators;
 pub mod optical;
 pub mod overlays;
 pub mod pathlines;
 pub mod profile;
 pub mod readers;
+pub mod time_index;
 pub mod validate;
 pub mod view;
 
@@ -85,8 +92,14 @@ pub use pathlines::{
     overlay_pathlines_styled, render_pathlines_png, render_pathlines_png_styled,
     resolve_step_size, suggest_step_size, trace_pathlines, Pathline, PathlineOptions,
 };
+pub use derived::{
+    apply_derived, eval_expression, field_minmax, write_plt_ascii, DerivedField,
+};
+pub use operators::{parse_operator, Operator, OperatorStack};
 pub use profile::{
-    compare_profile_rmse, extract_profile, load_ref_csv, Profile, ProfileLine, ProfileSample,
+    compare_profile_rmse, extract_line_sample, extract_profile, load_ref_csv, profile_to_csv,
+    Profile, ProfileLine, ProfileSample,
 };
 pub use readers::{load_path, Reader};
+pub use time_index::{list_time_frames, time_frames_json, TimeFrame};
 pub use validate::{validate_dataset, FieldReport, ValidationReport};

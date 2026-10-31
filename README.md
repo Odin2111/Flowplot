@@ -79,6 +79,11 @@ flowplot validate <path> [--positivity] [--json]
 # Centerline / profile extract (optional --ref CSV for RMSE)
 flowplot profile <path> --var P [--line mid-j] [--ref ref.csv] [--json]
 
+# Derived fields (expression scalars) + Line sample (world lineout → CSV)
+flowplot derived <path> --name Speed --expr 'hypot(U,V)' [-o out.dat] [--json]
+flowplot line-sample <path> --var P --from 0,0.5 --to 1,0.5 [--n 64] [-o line.csv] [--json]
+flowplot operators --add cut --plane k=0 [--json]
+
 # CFD post-processing menu (lehar agents ↔ Flowplot)
 flowplot menu
 flowplot menu show field-sanity
@@ -103,6 +108,7 @@ Agents (lehar-agent / MCP): prefer `--json` or `FLOWPLOT_BIN=… python3 agents/
 | VTK XML | `.vtu`, `.vtp`, … | **Stub** — clear `Unimplemented` error |
 | CGNS | `.cgns`, `.cgz` | **Working** when system `libcgns` is found at build; else clear stub (`apt install libcgns-dev`, `--features cgns`) |
 | Fluent case/data | `.cas`, `.dat` | **Stub** — documents public section layout; binary returns `Unimplemented` |
+| HDF5 / mesh database | `.h5`, `.hdf5`, `.he5`, `.silo`, `.pdb` | **Stub** — clear `Unimplemented` (Silo-compatible layouts are an internal detail only) |
 
 **Not in scope (no reverse engineering):** PLT SZL (`.szplt`) and Fluent binary case/data decoding.
 
@@ -115,9 +121,12 @@ Agents (lehar-agent / MCP): prefer `--json` or `FLOWPLOT_BIN=… python3 agents/
 - `src/nondim.rs` — reference scales + name suggestions
 - `src/pathlines.rs` — velocity-field particle traces
 - `src/validate.rs` — field sanity / positivity checks
-- `src/profile.rs` — line / centerline extracts (+ optional ref RMSE)
+- `src/profile.rs` — line / centerline extracts + world Line sample CSV
+- `src/derived.rs` — Derived fields (expression scalars)
+- `src/operators.rs` — Cut / Threshold / Level set operator stack stubs
+- `src/time_index.rs` — Time scrubber frames (cycle / time / strand)
 - `src/field.rs` — ordered-plane extract + bilinear sample
-- `src/bin/flowplot.rs` — CLI (`load` / `info` / `mesh` / `contour` / `nondim` / `pathlines` / `validate` / `profile` / `menu`, `--json`, `--style`)
+- `src/bin/flowplot.rs` — CLI (`load` / `info` / `mesh` / `contour` / `nondim` / `pathlines` / `validate` / `profile` / `derived` / `line-sample` / `operators` / `menu`, `--json`, `--style`)
 - `src/menu.rs` — postprocess menu loader (embedded YAML)
 - `agents/postprocess-menu.yaml` — machine-readable CFD postprocess menu
 - `agents/flowplot_mcp.py` — stdio MCP wrapper for lehar agents

@@ -25,8 +25,11 @@ use flowplot::pathlines::{
     default_seeds, guess_velocity_vars, overlay_pathlines_styled, render_pathlines_png_styled,
     trace_pathlines, PathlineOptions,
 };
+use flowplot::derived::{apply_derived, field_minmax, write_plt_ascii};
+use flowplot::operators::{parse_operator, OperatorStack};
 use flowplot::profile::{
-    compare_profile_rmse, extract_profile, load_ref_csv, ProfileLine,
+    compare_profile_rmse, extract_line_sample, extract_profile, load_ref_csv, profile_to_csv,
+    ProfileLine,
 };
 use flowplot::validate::validate_dataset;
 use flowplot::{load_path, Dataset};
@@ -34,7 +37,7 @@ use flowplot::{load_path, Dataset};
 #[derive(Parser, Debug)]
 #[command(
     name = "flowplot",
-    about = "CFD post-processor: load PLT/VTK, mesh, contour, optical, nondim, pathlines, validate, profile, menu",
+    about = "CFD post-processor: load PLT/VTK, mesh, contour, optical, nondim, pathlines, validate, profile, derived, line-sample, operators, menu",
     arg_required_else_help = true
 )]
 struct Cli {
@@ -331,6 +334,57 @@ enum Commands {
         #[arg(long = "ref")]
         reference: Option<PathBuf>,
     },
+    /// Derived fields — evaluate an expression and optionally write PLT ASCII.
+    Derived {
+        path: PathBuf,
+        /// New field name.
+        #[arg(long)]
+        name: String,
+        /// Expression using dataset variables (e.g. `hypot(U,V)` or `P/1.4`).
+        #[arg(long = "expr")]
+        expression: String,
+        /// Optional PLT ASCII output with the new field appended.
+        #[arg(long, short = 'o')]
+        out: Option<PathBuf>,
+    },
+    /// Line sample — world-space lineout with optional CSV export.
+    LineSample {
+        path: PathBuf,
+        #[arg(long = "var", short = 'v')]
+        variable: String,
+        /// Start point `x,y`.
+        #[arg(long = "from", value_name = "X,Y")]
+        from: String,
+        /// End point `x,y`.
+        #[arg(long = "to", value_name = "X,Y")]
+        to: String,
+        /// Number of samples along the segment.
+        #[arg(long, default_value_t = 64)]
+        n: usize,
+        #[arg(long, default_value_t = 0)]
+        zone: usize,
+        #[arg(long)]
+        plane: Option<String>,
+        /// Write CSV (`s,x,y,value`).
+        #[arg(long, short = 'o')]
+        out: Option<PathBuf>,
+    },
+    /// Operator stack stubs (Cut / Threshold / Level set).
+    Operators {
+        /// Operator kind: `cut`, `threshold`, `level-set` (repeatable via JSON list later).
+        #[arg(long)]
+        add: Option<String>,
+        #[arg(long)]
+        plane: Option<String>,
+        #[arg(long = "var")]
+        variable: Option<String>,
+        #[arg(long)]
+        min: Option<f64>,
+        #[arg(long)]
+        max: Option<f64>,
+        #[arg(long)]
+        value: Option<f64>,
+    },
     /// List / show / run CFD post-processing menu items (lehar ↔ Flowplot).
     Menu {
         /// Override path to `agents/postprocess-menu.yaml`.
@@ -451,7 +505,7 @@ fn dispatch(
         None => {
             let Some(path) = bare_path else {
                 return Err(flowplot::Error::plot(
-                    "usage: flowplot [--json] <path> | flowplot [--json] <load|info|mesh|contour|optical|nondim|pathlines|validate|profile|menu> ...",
+                    "usage: flowplot [--json] <path> | flowplot [--json] <load|info|mesh|contour|optical|nondim|pathlines|validate|profile|derived|line-sample|operators|menu> ...",
                 ));
             };
             run_info(&path, json)
@@ -678,6 +732,48 @@ fn dispatch(
             reference.as_ref(),
             json,
         ),
+        Some(Commands::Derived {
+            path,
+            name,
+            expression,
+            out,
+        }) => run_derived(&path, &name, &expression, out.as_ref(), json),
+        Some(Commands::LineSample {
+            path,
+            variable,
+            from,
+            to,
+            n,
+            zone,
+            plane,
+            out,
+        }) => run_line_sample(
+            &path,
+            &variable,
+            &from,
+            &to,
+            n,
+            zone,
+            plane.as_deref(),
+            out.as_ref(),
+            json,
+        ),
+        Some(Commands::Operators {
+            add,
+            plane,
+            variable,
+            min,
+            max,
+            value,
+        }) => run_operators(
+            add.as_deref(),
+            plane.as_deref(),
+            variable.as_deref(),
+            min,
+            max,
+            value,
+            json,
+        ),
         Some(Commands::Menu { menu_file, action }) => run_menu(menu_file.as_ref(), action, json),
     }
 }
@@ -865,6 +961,143 @@ fn run_profile(
     }
     if json {
         println!("{payload}");
+    }
+    Ok(())
+}
+
+fn parse_xy_pair(s: &str, flag: &str) -> flowplot::Result<(f64, f64)> {
+    let parts: Vec<_> = s
+        .split(&[',', ' '][..])
+        .filter(|p| !p.is_empty())
+        .collect();
+    if parts.len() != 2 {
+        return Err(flowplot::Error::plot(format!(
+            "{flag} expects X,Y (got '{s}')"
+        )));
+    }
+    let x: f64 = parts[0]
+        .parse()
+        .map_err(|_| flowplot::Error::plot(format!("{flag}: bad x in '{s}'")))?;
+    let y: f64 = parts[1]
+        .parse()
+        .map_err(|_| flowplot::Error::plot(format!("{flag}: bad y in '{s}'")))?;
+    Ok((x, y))
+}
+
+fn run_derived(
+    path: &PathBuf,
+    name: &str,
+    expression: &str,
+    out: Option<&PathBuf>,
+    json: bool,
+) -> flowplot::Result<()> {
+    let ds = load_path(path)?;
+    let derived = apply_derived(&ds, name, expression)?;
+    let (mn, mx) = field_minmax(&derived, name)?;
+    if let Some(out_path) = out {
+        write_plt_ascii(&derived, out_path)?;
+    }
+    if json {
+        println!(
+            "{{\"status\":\"ok\",\"command\":\"derived\",\"path\":{},\"name\":{},\"expression\":{},\"min\":{mn},\"max\":{mx},\"variables\":{},\"out\":{}}}",
+            json_string(&path.display().to_string()),
+            json_string(name),
+            json_string(expression),
+            json_string_list(&derived.variables),
+            out.map(|p| json_string(&p.display().to_string()))
+                .unwrap_or_else(|| "null".into())
+        );
+    } else {
+        println!(
+            "derived field '{name}' = {expression}  min={mn} max={mx}  vars={}",
+            derived.variables.join(", ")
+        );
+        if let Some(out_path) = out {
+            println!("wrote {}", out_path.display());
+        }
+    }
+    Ok(())
+}
+
+fn run_line_sample(
+    path: &PathBuf,
+    variable: &str,
+    from: &str,
+    to: &str,
+    n: usize,
+    zone: usize,
+    plane: Option<&str>,
+    out: Option<&PathBuf>,
+    json: bool,
+) -> flowplot::Result<()> {
+    let ds = load_path(path)?;
+    let (x0, y0) = parse_xy_pair(from, "--from")?;
+    let (x1, y1) = parse_xy_pair(to, "--to")?;
+    let plane_spec = match plane {
+        Some(p) => PlaneSpec::parse(p)?,
+        None => PlaneSpec::Auto,
+    };
+    let profile = extract_line_sample(&ds, variable, zone, x0, y0, x1, y1, n, plane_spec)?;
+    let csv = profile_to_csv(&profile);
+    if let Some(out_path) = out {
+        std::fs::write(out_path, &csv).map_err(|e| {
+            flowplot::Error::plot(format!("failed to write {}: {e}", out_path.display()))
+        })?;
+    }
+    if json {
+        let payload = serde_json::json!({
+            "status": "ok",
+            "command": "line-sample",
+            "path": path.display().to_string(),
+            "from": [x0, y0],
+            "to": [x1, y1],
+            "n": n,
+            "profile": profile,
+            "out": out.map(|p| p.display().to_string()),
+        });
+        println!("{payload}");
+    } else {
+        println!(
+            "line sample: var={} from=({x0},{y0}) to=({x1},{y1}) n={}",
+            profile.variable,
+            profile.samples.len()
+        );
+        if out.is_none() {
+            print!("{csv}");
+        } else if let Some(out_path) = out {
+            println!("wrote {}", out_path.display());
+        }
+    }
+    Ok(())
+}
+
+fn run_operators(
+    add: Option<&str>,
+    plane: Option<&str>,
+    variable: Option<&str>,
+    min: Option<f64>,
+    max: Option<f64>,
+    value: Option<f64>,
+    json: bool,
+) -> flowplot::Result<()> {
+    let mut stack = OperatorStack::default();
+    if let Some(kind) = add {
+        stack.push(parse_operator(kind, plane, variable, min, max, value)?);
+    }
+    if json {
+        println!(
+            "{{\"status\":\"ok\",\"command\":\"operators\",\"stack\":{}}}",
+            stack.status_json()
+        );
+    } else if stack.ops.is_empty() {
+        println!("operators: empty stack (add with --add cut|threshold|level-set)");
+        println!("  Cut        — structured plane (wired to mesh/contour --plane)");
+        println!("  Threshold  — keep samples in [min,max] (stub)");
+        println!("  Level set  — iso value of a scalar (stub)");
+    } else {
+        for (i, op) in stack.ops.iter().enumerate() {
+            println!("  [{i}] {}", op.label());
+        }
     }
     Ok(())
 }
@@ -1123,8 +1356,21 @@ fn zone_ordered_json(zone: &flowplot::Zone) -> String {
 fn dataset_load_json(path: &PathBuf, ds: &Dataset, suggestions: &[NondimSuggestion]) -> String {
     let mut zones = Vec::new();
     for (i, zone) in ds.zones.iter().enumerate() {
+        let meta = ds.meta(i);
+        let time = meta
+            .time_value()
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "null".into());
+        let cycle = meta
+            .cycle()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "null".into());
+        let strand = meta
+            .strand_id
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "null".into());
         zones.push(format!(
-            "{{\"index\":{i},\"name\":{},\"nodes\":{},\"cells\":{},\"ordered\":{}}}",
+            "{{\"index\":{i},\"name\":{},\"nodes\":{},\"cells\":{},\"ordered\":{},\"time\":{time},\"cycle\":{cycle},\"strand_id\":{strand}}}",
             json_string(&zone.name),
             zone.node_count(),
             zone.cell_count(),
@@ -1144,8 +1390,9 @@ fn dataset_load_json(path: &PathBuf, ds: &Dataset, suggestions: &[NondimSuggesti
         json_string(&default_view.label()),
         json_string(plane)
     );
+    let time_frames = flowplot::time_frames_json(ds);
     format!(
-        "{{\"status\":\"ok\",\"command\":\"load\",\"path\":{},\"title\":{},\"variables\":{},\"zones\":[{}],\"effectively_2d\":{},\"default_view\":{},\"nondim_suggestions\":{}}}",
+        "{{\"status\":\"ok\",\"command\":\"load\",\"path\":{},\"title\":{},\"variables\":{},\"zones\":[{}],\"effectively_2d\":{},\"default_view\":{},\"time_frames\":{},\"nondim_suggestions\":{}}}",
         json_string(&path.display().to_string()),
         ds.title
             .as_ref()
@@ -1155,6 +1402,7 @@ fn dataset_load_json(path: &PathBuf, ds: &Dataset, suggestions: &[NondimSuggesti
         zones.join(","),
         if effectively_2d { "true" } else { "false" },
         default_view_json,
+        time_frames,
         suggestions_json(suggestions)
     )
 }
