@@ -407,10 +407,11 @@ struct PathlineArgs {
     /// Seed point `x,y` (repeatable). If omitted, a mid-height rake is used.
     #[arg(long = "seed", value_name = "X,Y")]
     seeds: Vec<String>,
-    /// Integration step size in coordinate units.
-    #[arg(long = "dt", default_value_t = 0.02)]
+    /// Integration step in coordinate units (`0` = auto from cell size / |U|).
+    /// Auto is required for hypersonic fields where a fixed 0.02 leaves the domain.
+    #[arg(long = "dt", default_value_t = 0.0)]
     dt: f64,
-    #[arg(long = "max-steps", default_value_t = 200)]
+    #[arg(long = "max-steps", default_value_t = 1000)]
     max_steps: usize,
     /// Only integrate forward (+dt), not bidirectional.
     #[arg(long, default_value_t = false)]
@@ -1247,9 +1248,15 @@ fn build_pathline_opts(
     view: ViewSpec,
     args: &PathlineArgs,
 ) -> flowplot::Result<PathlineOptions> {
-    let (gu, gv) = guess_velocity_vars(ds).unwrap_or_else(|_| ("U".into(), "V".into()));
-    let u_var = args.u_var.clone().unwrap_or(gu);
-    let v_var = args.v_var.clone().unwrap_or(gv);
+    let (gu, gv) = match (args.u_var.clone(), args.v_var.clone()) {
+        (Some(u), Some(v)) => (u, v),
+        (u_opt, v_opt) => {
+            let (gu, gv) = guess_velocity_vars(ds)?;
+            (u_opt.unwrap_or(gu), v_opt.unwrap_or(gv))
+        }
+    };
+    let u_var = gu;
+    let v_var = gv;
     let mut seeds = Vec::new();
     for s in &args.seeds {
         seeds.push(parse_seed(s)?);

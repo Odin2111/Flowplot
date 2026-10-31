@@ -155,15 +155,17 @@ impl PlotStyle {
 
     pub fn pathline_rgba(self) -> [u8; 4] {
         match self {
-            Self::Default => [10, 10, 10, 255],
+            // High-contrast red — visible on Turbo dark floods and green mesh.
+            Self::Default => [192, 0, 0, 255],
+            // Journal black on white paper.
             Self::Jfm => [0, 0, 0, 255],
         }
     }
 
     pub fn pathline_width(self) -> u32 {
         match self {
-            Self::Default => 1,
-            Self::Jfm => 1,
+            Self::Default => 2,
+            Self::Jfm => 2,
         }
     }
 

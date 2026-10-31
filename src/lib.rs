@@ -81,8 +81,9 @@ pub use overlays::{
     overlay_boundary_edges, overlay_isolines, overlay_scatter, overlay_vectors,
 };
 pub use pathlines::{
-    default_seeds, guess_velocity_vars, overlay_pathlines, overlay_pathlines_styled,
-    render_pathlines_png, render_pathlines_png_styled, trace_pathlines, Pathline, PathlineOptions,
+    characteristic_cell_size, default_seeds, guess_velocity_vars, overlay_pathlines,
+    overlay_pathlines_styled, render_pathlines_png, render_pathlines_png_styled,
+    resolve_step_size, suggest_step_size, trace_pathlines, Pathline, PathlineOptions,
 };
 pub use profile::{
     compare_profile_rmse, extract_profile, load_ref_csv, Profile, ProfileLine, ProfileSample,
