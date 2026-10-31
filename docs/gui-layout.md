@@ -19,14 +19,14 @@ CLI discovery picks the newest of PATH / `target/release` / `target/debug` (over
 
 - Wireframe **on**, Flood **off** after load
 - Variable combo filled from dataset; default = first non-coordinate scalar (e.g. cone20 → `Pressure`, not `P`)
-- Plot menu: Axis…, Assign XY…, **Zone Style…** (Wireframe + Flood working; other tabs stub), Pathlines…, **Flood Details…**, Glyphs…, Sample points…, Blanking…, Label Points… (stubs where not yet implemented)
+- Plot menu: Axis…, Assign XY…, **Zone Style…** (Wireframe + Flood working; other tabs stub), Pathlines…, **Flood Details…**, Vectors…, Sample points…, Blanking…, Label Points… (stubs where not yet implemented)
 - Zone Style Apply → per-zone Show Zone / Show Wireframe / Flood + wireframe color → CLI `--zone` / `--mesh-color`
 - Flood Details (Levels and Color / Bands / Lines / Labels / Legend): **flood variable** (all zone scalars) + levels, colormap, banded vs continuous, legend; other tabs stub
 - Annotation HUD uses native fontdue AA at 1:1 Viewport size (no stretch); integer baseline snap (no jitter); colorbar labels sized to fit
 - **F** / Frame → Fit to Viewport / View → Fit whole domain clears pan and recenters
 - Pathlines: after enable, click-drag draws a rake/seed line; pathlines emit from that segment (exclusive vs Probe)
 - Product UI name is **Fieldplot** (window title / About / logo); CLI crate binary remains `flowplot`
-- Zone layers: each Show Zone Layers row has a **gear** → Wireframe (Zone Style), Flood (Flood Details), Solid fill / Glyphs / Boundary / Sample points Details; Glyphs also uses U/V/W + `--overlay-skip`, Boundary perimeter, Sample points subsample, Iso-Surfaces (isolines)
+- Zone layers: each Show Zone Layers row has a **gear** → Wireframe (Zone Style), Flood (Flood Details), Solid fill / Vectors / Boundary / Sample points Details; Vectors also uses U/V/W + `--overlay-skip`, Boundary perimeter, Sample points subsample, Iso-Surfaces (isolines)
 - Pathlines rake persists as canvas overlay + PNG traces after drag
 
 ## Run

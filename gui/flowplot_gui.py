@@ -647,7 +647,7 @@ class FlowplotGui(tk.Tk):
             ("Wireframe", self.layer_mesh, self.action_redraw, self.action_mesh_settings),
             ("Flood", self.layer_contour, self.action_redraw, self.action_contour_details),
             ("Solid fill", self.layer_shade, self.action_shade_layer, self.action_shade_settings),
-            ("Glyphs", self.layer_vector, self.action_vector_layer, self.action_vector_settings),
+            ("Vectors", self.layer_vector, self.action_vector_layer, self.action_vector_settings),
             ("Boundary", self.layer_edge, self.action_edge_layer, self.action_edge_settings),
             ("Sample points", self.layer_scatter, self.action_scatter_layer, self.action_scatter_settings),
         ):
@@ -1999,7 +1999,7 @@ class FlowplotGui(tk.Tk):
             if want_pathlines:
                 layers.append("Pathlines")
             if want_vector:
-                layers.append("Glyphs")
+                layers.append("Vectors")
             if want_edge:
                 layers.append("Boundary")
             if want_scatter:
@@ -2171,7 +2171,7 @@ class FlowplotGui(tk.Tk):
         for label, var in (
             ("Flood", self.layer_contour),
             ("Solid fill", self.layer_shade),
-            ("Glyphs", self.layer_vector),
+            ("Vectors", self.layer_vector),
             ("Boundary", self.layer_edge),
             ("Sample points", self.layer_scatter),
             ("Iso-Surfaces", self.layer_isosurfaces),
@@ -2888,7 +2888,7 @@ class FlowplotGui(tk.Tk):
         if not self.vector_w.get().strip():
             self.vector_w.set(gw)
         dlg = tk.Toplevel(self)
-        dlg.title("Glyphs variables")
+        dlg.title("Vectors variables")
         dlg.geometry("340x200")
         dlg.resizable(False, False)
         stay_above(dlg, self, modal=True)
@@ -2907,7 +2907,7 @@ class FlowplotGui(tk.Tk):
 
         def ok() -> None:
             if not self.vector_u.get().strip() or not self.vector_v.get().strip():
-                messagebox.showwarning("Glyphs", "U and V are required.", parent=dlg)
+                messagebox.showwarning("Vectors", "U and V are required.", parent=dlg)
                 return
             result["ok"] = True
             dlg.destroy()
@@ -2980,7 +2980,7 @@ class FlowplotGui(tk.Tk):
             self.layer_vector.set(False)
             return
         self._log(
-            f"Glyphs: U={self.vector_u.get()} V={self.vector_v.get()} W={self.vector_w.get() or '(none)'}"
+            f"Vectors: U={self.vector_u.get()} V={self.vector_v.get()} W={self.vector_w.get() or '(none)'}"
         )
         self._render_cache.clear()
         self.action_redraw()
@@ -3012,11 +3012,11 @@ class FlowplotGui(tk.Tk):
     def _apply_vector_details(self, state: VectorDetailsState) -> None:
         self.vector_details = state
         if not self.vector_u.get().strip() or not self.vector_v.get().strip():
-            messagebox.showwarning("Glyphs", "U and V are required.", parent=self)
+            messagebox.showwarning("Vectors", "U and V are required.", parent=self)
             return
         self.layer_vector.set(True)
         self._log(
-            f"Glyphs Details: U={self.vector_u.get()} V={self.vector_v.get()} "
+            f"Vectors Details: U={self.vector_u.get()} V={self.vector_v.get()} "
             f"skip={state.skip}"
         )
         self._render_cache.clear()
