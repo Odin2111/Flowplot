@@ -128,7 +128,9 @@ class FlowplotGui(tk.Tk):
         self._legend_options_dialog: LegendOptionsDialog | None = None
         self._probe_dialog: ProbeDialog | None = None
         self.contour_details = ContourDetailsState()
-        self.tool_mode = tk.StringVar(value="orbit")  # orbit | probe | pathlines
+        # Exclusive interaction tools (Tecplot-like): rotate | pan | probe | pathlines.
+        # Default Rotate so left-drag orbits the domain (not pan/translate).
+        self.tool_mode = tk.StringVar(value="rotate")
         self.probe_marks: list[tuple[int, int, str]] = []
         self.pathline_seeds: list[tuple[float, float]] = []
         self._pl_drag_start: tuple[int, int] | None = None
@@ -294,7 +296,8 @@ class FlowplotGui(tk.Tk):
         menu.add_radiobutton(label="Plot style · JFM", variable=self.plot_style, value="jfm")
 
     def _tools_menu_items(self, menu: tk.Menu) -> None:
-        menu.add_command(label="Orbit / Pan", command=lambda: self._set_tool_mode("orbit"))
+        menu.add_command(label="Rotate (orbit)", command=self.action_rotate_tool)
+        menu.add_command(label="Pan / translate", command=self.action_pan_tool)
         menu.add_command(label="Probe tool", command=self.action_toggle_probe)
         menu.add_command(label="Pathlines rake", command=self.action_pathlines_tool)
         menu.add_separator()
@@ -345,6 +348,8 @@ class FlowplotGui(tk.Tk):
         self._icon_toolbar.pack(side=tk.TOP, fill=tk.X)
         # Levels status shares the icon strip's status area when idle.
         self.levels_label = self._icon_toolbar.status
+        # Default exclusive tool = Rotate (curved arrow highlighted).
+        self._icon_toolbar.set_active_tools({"rotate"})
         self._refresh_levels_label()
         tk.Frame(self, bg="#9aa3ab", height=1).pack(side=tk.TOP, fill=tk.X)
 
@@ -352,7 +357,7 @@ class FlowplotGui(tk.Tk):
         cd = self.contour_details
         mode = "banded" if cd.cli_coloring() == "banded" else "continuous"
         tool = self.tool_mode.get()
-        tool_tag = f" · {tool}" if tool != "orbit" else ""
+        tool_tag = f" · {tool}" if tool not in ("",) else ""
         labels = " · labels" if cd.show_labels else ""
         seeds = f" · {len(self.pathline_seeds)} seed(s)" if self.pathline_seeds else ""
         return f"{cd.nlevels} levels · {mode} · {cd.colormap}{labels}{tool_tag}{seeds}"
@@ -436,7 +441,7 @@ class FlowplotGui(tk.Tk):
         self.viewport.bind("<ButtonRelease-3>", self._on_orbit_release)
         tip = ttk.Label(
             view_wrap,
-            text="Pan: left-drag · Orbit: mid/right-drag (live mesh camera) · F=fit · settle redraw",
+            text="Rotate tool: left-drag orbits · Pan tool: left-drag translates · mid/right always orbit · F=fit",
             font=("Helvetica", 8),
             foreground=MUTED,
         )
@@ -635,7 +640,7 @@ class FlowplotGui(tk.Tk):
         self.view_label.pack(anchor="w", pady=(6, 0))
         ttk.Label(
             parent,
-            text="Left-drag = pan\nMid/right = orbit\nSettle redraw · F = fit",
+            text="Rotate ON → left-drag orbits\nPan ON → left-drag translates\nMid/right = orbit · F = fit",
             style="Muted.TLabel",
             justify=tk.LEFT,
         ).pack(anchor="w", padx=10, pady=(4, 8))
@@ -716,9 +721,7 @@ class FlowplotGui(tk.Tk):
         self.view_pan_y = 0.0
         self._pan_last = None
         self._panning = False
-        if self.tool_mode.get() not in ("orbit",):
-            # Keep Probe/Pathlines mode; only recenter the frame.
-            pass
+        # Keep current tool (Rotate/Pan/Probe/Pathlines); only recenter the frame.
         self._apply_default_camera()
         self._update_view_label()
         self._render_cache.clear()
@@ -925,9 +928,9 @@ class FlowplotGui(tk.Tk):
 
     def _set_axis_view(self, tag: str) -> None:
         tag = tag.strip().lower()
-        # Leave Probe/Pathlines so left-drag can orbit after an XYZ snap.
-        if self.tool_mode.get() != "orbit":
-            self._set_tool_mode("orbit")
+        # Leave Probe/Pathlines/Pan so left-drag orbits after an XYZ snap.
+        if self.tool_mode.get() != "rotate":
+            self._set_tool_mode("rotate")
         # Free angles matched to Axis projections (see ViewSpec::to_free_angles).
         ortho = {
             "+x": (180.0, 0.0),
@@ -982,8 +985,8 @@ class FlowplotGui(tk.Tk):
         self._schedule_settle(delay_ms=20)
 
     def _reset_view(self) -> None:
-        if self.tool_mode.get() != "orbit":
-            self._set_tool_mode("orbit")
+        if self.tool_mode.get() != "rotate":
+            self._set_tool_mode("rotate")
         self._apply_default_camera()
         self.view_pan_x = 0.0
         self.view_pan_y = 0.0
@@ -1022,8 +1025,8 @@ class FlowplotGui(tk.Tk):
         self.elevation_deg = self._clamp_elevation(self.elevation_deg)
 
     def _nudge_view(self, daz: float, del_: float) -> None:
-        if self.tool_mode.get() != "orbit":
-            self._set_tool_mode("orbit")
+        if self.tool_mode.get() != "rotate":
+            self._set_tool_mode("rotate")
         self.view_mode.set("free")
         self.azimuth_deg = (self.azimuth_deg + daz) % 360.0
         self.elevation_deg = self._clamp_elevation(self.elevation_deg + del_)
@@ -1111,8 +1114,12 @@ class FlowplotGui(tk.Tk):
             self._pl_drag_start = (event.x, event.y)
             self.viewport.delete("pathline_drag")
             return
-        # Orbit tool: left-drag pans the domain (active start→end); mid/right orbit.
-        self._on_pan_press(event)
+        if mode == "pan":
+            # Tecplot Translate: left-drag pans the domain.
+            self._on_pan_press(event)
+            return
+        # Rotate tool (default): left-drag orbits az/el — domain geometry, not PNG slide.
+        self._on_orbit_press(event)
 
     def _on_view_drag(self, event: tk.Event) -> None:
         mode = self.tool_mode.get()
@@ -1124,7 +1131,7 @@ class FlowplotGui(tk.Tk):
             x0, y0 = self._pl_drag_start
             self._draw_pathline_rake_preview(x0, y0, event.x, event.y)
             return
-        if self._panning:
+        if self._panning or mode == "pan":
             self._on_pan_drag(event)
             return
         self._on_orbit_drag(event)
@@ -1136,7 +1143,7 @@ class FlowplotGui(tk.Tk):
         if mode == "pathlines":
             self._finish_pathline_drag(event.x, event.y)
             return
-        if self._panning:
+        if self._panning or mode == "pan":
             self._on_pan_release(event)
             return
         self._on_orbit_release(event)
@@ -1376,8 +1383,8 @@ class FlowplotGui(tk.Tk):
             self.azimuth_deg = 35.0
             self.elevation_deg = self._clamp_elevation(28.0)
             self._update_view_label()
-            if self.tool_mode.get() != "orbit":
-                self._set_tool_mode("orbit")
+            if self.tool_mode.get() != "rotate":
+                self._set_tool_mode("rotate")
         self._render_cache.clear()
         self.action_redraw()
 
@@ -1432,7 +1439,7 @@ class FlowplotGui(tk.Tk):
         self.layer_scatter.set(False)
         self.pathline_seeds.clear()
         self.clear_probe_marks()
-        self._set_tool_mode("orbit")
+        self._set_tool_mode("rotate")
         self.plane_axis.set("auto")
         self.plane_index.set(0)
         self.active_zone = 0
@@ -1454,6 +1461,10 @@ class FlowplotGui(tk.Tk):
                 self.effectively_2d = bool(payload.get("effectively_2d", True))
                 self._apply_default_camera(payload)
                 self._update_view_label()
+                # True volumes → 3D Cartesian so Rotate/XYZ feel like Tecplot 3D.
+                if not self.effectively_2d and self.plot_type.get() == "2D Cartesian":
+                    self.plot_type.set("3D Cartesian")
+                    self._log("Volume dataset — plot type → 3D Cartesian")
                 self.zone_ordered = None
                 zones = payload.get("zones") or []
                 if isinstance(zones, list) and zones:
@@ -1956,26 +1967,52 @@ class FlowplotGui(tk.Tk):
         self._legend_options_dialog = LegendOptionsDialog(self, state, on_apply=on_apply)
 
     def _set_tool_mode(self, mode: str) -> None:
-        """Exclusive tool modes: orbit | probe | pathlines."""
-        mode = mode if mode in ("orbit", "probe", "pathlines") else "orbit"
+        """Exclusive tools: rotate | pan | probe | pathlines (Tecplot Rotate vs Translate)."""
+        # Legacy alias from earlier "orbit" naming.
+        if mode == "orbit":
+            mode = "rotate"
+        mode = mode if mode in ("rotate", "pan", "probe", "pathlines") else "rotate"
         prev = self.tool_mode.get()
         self.tool_mode.set(mode)
         self.viewport.delete("pathline_drag")
         self._pl_drag_start = None
+        self._panning = False
+        self._dragging = False
+        self._pan_last = None
+        self._drag_last = None
         if mode == "probe":
             self.viewport.configure(cursor="crosshair")
-            self._set_status("Probe — click Viewport (Pathlines drag disabled)")
+            self._set_status("Probe — click Viewport")
             self.action_open_probe_window()
         elif mode == "pathlines":
             self.viewport.configure(cursor="pencil")
             self.layer_pathlines.set(True)
-            self._set_status("Pathlines — click-drag a rake/seed line (Probe disabled)")
-        else:
+            self._set_status("Pathlines — click-drag a rake/seed line")
+        elif mode == "pan":
             self.viewport.configure(cursor="fleur")
-            self._set_status("Pan (left-drag) · Orbit (mid/right) · F=fit")
+            self._set_status("Pan / translate — left-drag moves the domain · F=fit")
+        else:
+            # Rotate: exchange-style cursor; left-drag orbits az/el.
+            try:
+                self.viewport.configure(cursor="exchange")
+            except tk.TclError:
+                self.viewport.configure(cursor="cross")
+            self._set_status("Rotate — left-drag orbits az/el · mid/right also orbit · F=fit")
+        if hasattr(self, "_icon_toolbar"):
+            self._icon_toolbar.set_active_tools({mode})
         if prev != mode:
             self._log(f"Tool mode: {prev} → {mode}")
         self._refresh_levels_label()
+
+    def action_rotate_tool(self) -> None:
+        """Curved-arrow Rotate toolbar — exclusive orbit tool (left-drag az/el)."""
+        self._set_tool_mode("rotate")
+        self._log("Rotate tool ON — left-drag orbits the domain")
+
+    def action_pan_tool(self) -> None:
+        """Pan / translate tool — left-drag moves the domain in screen space."""
+        self._set_tool_mode("pan")
+        self._log("Pan tool ON — left-drag translates the domain")
 
     def _on_pathlines_layer(self) -> None:
         """Derived Pathlines checkbox — enable rake tool; do not fight Probe."""
@@ -1987,13 +2024,13 @@ class FlowplotGui(tk.Tk):
                 self.action_redraw()
             return
         if self.tool_mode.get() == "pathlines":
-            self._set_tool_mode("orbit")
+            self._set_tool_mode("rotate")
         self._render_cache.clear()
         self.action_redraw()
 
     def action_toggle_probe(self) -> None:
         if self.tool_mode.get() == "probe":
-            self._set_tool_mode("orbit")
+            self._set_tool_mode("rotate")
         else:
             self._set_tool_mode("probe")
 
@@ -2017,7 +2054,7 @@ class FlowplotGui(tk.Tk):
         self.clear_probe_marks()
         self._probe_dialog = None
         if self.tool_mode.get() == "probe":
-            self._set_tool_mode("orbit")
+            self._set_tool_mode("rotate")
 
     def clear_probe_marks(self) -> None:
         self.probe_marks.clear()

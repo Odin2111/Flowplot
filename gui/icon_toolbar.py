@@ -47,6 +47,12 @@ def draw_rotate(c: tk.Canvas) -> None:
     c.create_polygon(16, 5, 19, 8, 14, 9, fill=ACCENT, outline=ACCENT)
 
 
+def draw_pan(c: tk.Canvas) -> None:
+    # Four-way translate arrows (Tecplot-like Translate / Pan).
+    c.create_line(11, 4, 11, 18, fill=ACCENT, width=2, arrow=tk.BOTH)
+    c.create_line(4, 11, 18, 11, fill=ACCENT, width=2, arrow=tk.BOTH)
+
+
 def make_axis_drawer(text: str) -> Callable[[tk.Canvas], None]:
     def _draw(c: tk.Canvas) -> None:
         c.create_line(4, 18, 17, 5, fill=ACCENT, width=1)
@@ -141,6 +147,26 @@ class IconToolbar(tk.Frame):
     def finish(self) -> None:
         self.status.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 6))
 
+    def set_active_tools(self, active_keys: set[str] | None = None) -> None:
+        """Highlight exclusive interaction tools (rotate / pan / probe / pathlines)."""
+        active = active_keys or set()
+        tool_keys = {"rotate", "pan", "probe", "pathlines"}
+        for key, canvas in self._canvases.items():
+            if key not in tool_keys:
+                continue
+            if key in active:
+                canvas.configure(
+                    bg=BTN_ACTIVE,
+                    highlightbackground=ACCENT,
+                    highlightthickness=2,
+                )
+            else:
+                canvas.configure(
+                    bg=BTN_BG,
+                    highlightbackground=BTN_BORDER,
+                    highlightthickness=1,
+                )
+
 
 def build_fieldplot_icon_toolbar(parent: tk.Misc, gui) -> IconToolbar:
     """Wire Tecplot-like icons to FieldplotGui actions."""
@@ -162,9 +188,17 @@ def build_fieldplot_icon_toolbar(parent: tk.Misc, gui) -> IconToolbar:
     bar.add_icon(
         IconSpec(
             "rotate",
-            "Orbit / rotate (left-pan · mid/right-orbit)",
+            "Rotate — left-drag orbits az/el (Tecplot Rotate)",
             draw_rotate,
-            lambda: gui._set_tool_mode("orbit"),
+            gui.action_rotate_tool,
+        )
+    )
+    bar.add_icon(
+        IconSpec(
+            "pan",
+            "Pan / translate — left-drag moves the domain",
+            draw_pan,
+            gui.action_pan_tool,
         )
     )
     for tag, tip, label in (
